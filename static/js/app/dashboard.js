@@ -1,0 +1,215 @@
+/* ============================================================
+   dashboard.js — Home view: stats, upcoming/overdue events, loadPatients/loadDevices/loadSimCount stubs
+   HOMER Clinical Dashboard
+   ============================================================ */
+
+    // Dashboard Data
+    async function loadDashboard() {
+      try {
+        const response = await fetch('/get_userId', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `search_term=Pluto&LoginId=${currentUser.loginId}&PRIVILEGE=${currentUser.privilege}` });
+        const data = await response.json();
+        if (data.hospital_info) {
+          const patients = data.hospital_info;
+          document.getElementById('stat-total').textContent = patients.length;
+          document.getElementById('stat-experimental').textContent = patients.filter(p => p.role?.toLowerCase() === 'experimental').length;
+          document.getElementById('stat-control').textContent = patients.filter(p => p.role?.toLowerCase() === 'control').length;
+          document.getElementById('stat-unassigned').textContent = patients.filter(p => !p.role || p.role?.toLowerCase() === 'unassigned').length;
+
+          // Count dropped out via patient events — reads discontinued flag + requiresDropout adverse events
+          // Excludes pre-enrolment discontinued (unassigned patients)
+          try {
+            const droppedRes = await fetch('/patient_events/dropped_patients');
+            const droppedData = await droppedRes.json();
+            const allDroppedIds = new Set((droppedData.droppedPatients || []));
+            // Filter out pre-enrolment discontinued (patients with no group assigned)
+            const droppedIds = new Set(
+              [...allDroppedIds].filter(id => {
+                const pt = patients.find(p => p.HospitalID === id || p.homerID === id);
+                if (!pt) return true; // unknown, include by default
+                const role = (pt.role || '').toLowerCase().trim();
+                return role !== '' && role !== 'unassigned';
+              })
+            );
+            droppedOutPatients = droppedIds;
+            document.getElementById('stat-dropped').textContent = droppedIds.size;
+          } catch(e) {
+            document.getElementById('stat-dropped').textContent = '0';
+          }
+
+          // Count trial-completed patients — last timeline event is marked completed
+          try {
+            const completedRes = await fetch('/patient_events/trial_completed_patients');
+            const completedData = await completedRes.json();
+            trialCompletedPatients = new Set(completedData.completedPatients || []);
+            document.getElementById('stat-completed').textContent = trialCompletedPatients.size;
+          } catch(e) {
+            document.getElementById('stat-completed').textContent = '0';
+          }
+        }
+        loadUpcomingOverdueEvents();
+      } catch (error) { console.error('Error loading dashboard:', error); }
+    }
+
+    async function loadUpcomingOverdueEvents() {
+      try {
+        const response = await fetch('/patient_events/get_all_events');
+        const data = await response.json();
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const upcomingEvents = [];
+        const overdueEvents = [];
+        
+        if (data.timelineEvents) {
+          data.timelineEvents.forEach(event => {
+            const eventDate = new Date(event.scheduledDate);
+            eventDate.setHours(0, 0, 0, 0);
+            
+            const diffDays = Math.ceil((eventDate - today) / (1000 * 60 * 60 * 24));
+            
+            if (event.status !== 'completed') {
+              if (diffDays >= 0 && diffDays <= 7) {
+                upcomingEvents.push({ ...event, diffDays });
+              } else if (diffDays < 0) {
+                overdueEvents.push({ ...event, diffDays: Math.abs(diffDays) });
+              }
+            }
+          });
+        }
+        
+        // Sort by date
+        upcomingEvents.sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate));
+        overdueEvents.sort((a, b) => new Date(b.scheduledDate) - new Date(a.scheduledDate));
+        
+        // Display upcoming events
+        const upcomingDiv = document.getElementById('upcoming-events');
+        document.getElementById('upcoming-count').textContent = upcomingEvents.length;
+        
+        if (upcomingEvents.length === 0) {
+          upcomingDiv.innerHTML = '<div class="flex flex-col items-center justify-center py-10 text-slate-400"><i class="fas fa-calendar-check text-3xl mb-2"></i><p class="text-sm">No upcoming events in the next 7 days</p></div>';
+        } else {
+          upcomingDiv.innerHTML = upcomingEvents.map(event => {
+            const whenLabel = event.diffDays === 0 ? 'Today' : event.diffDays === 1 ? 'Tomorrow' : `In ${event.diffDays} days`;
+            const urgency = event.diffDays === 0 ? 'border-red-300 bg-red-50' : event.diffDays <= 2 ? 'border-orange-300 bg-orange-50' : 'border-orange-100 bg-orange-50';
+            const textColor = event.diffDays === 0 ? 'text-red-600' : 'text-orange-600';
+            return `
+              <div class="flex items-center justify-between px-4 py-3 rounded-xl border ${urgency} gap-3">
+                <div class="min-w-0">
+                  <div class="font-medium text-slate-800 text-sm truncate">${event.eventName}</div>
+                  <div class="text-xs text-slate-500 mt-0.5">${event.patientId} · ${new Date(event.scheduledDate).toLocaleDateString('en-GB', {day:'2-digit',month:'short'})}</div>
+                </div>
+                <div class="flex-shrink-0 text-right">
+                  <span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>
+                </div>
+              </div>`;
+          }).join('');
+        }
+        
+        // Display overdue events
+        const overdueDiv = document.getElementById('overdue-events');
+        document.getElementById('overdue-count').textContent = overdueEvents.length;
+        
+        if (overdueEvents.length === 0) {
+          overdueDiv.innerHTML = '<div class="flex flex-col items-center justify-center py-10 text-green-500"><i class="fas fa-check-circle text-3xl mb-2"></i><p class="text-sm font-medium">All clear — no overdue events</p></div>';
+        } else {
+          overdueDiv.innerHTML = overdueEvents.map(event => `
+            <div class="flex items-center justify-between px-4 py-3 rounded-xl border border-red-200 bg-red-50 gap-3">
+              <div class="min-w-0">
+                <div class="font-medium text-slate-800 text-sm truncate">${event.eventName}</div>
+                <div class="text-xs text-slate-500 mt-0.5">${event.patientId} · ${new Date(event.scheduledDate).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div>
+              </div>
+              <div class="flex-shrink-0">
+                <span class="text-xs font-semibold text-red-600 whitespace-nowrap">${event.diffDays}d overdue</span>
+              </div>
+            </div>`).join('');
+        }
+
+        // Append SIM card expiry reminders to upcoming events panel
+        try {
+          const simRes = await fetch('/sim_cards/reminders');
+          const simData = await simRes.json();
+          const expiringSims = (simData.reminders || []).filter(s => !s.isExpired && s.daysUntilExpiry >= 0);
+          if (expiringSims.length > 0) {
+            const simHtml = expiringSims.map(s => {
+              const whenLabel = s.daysUntilExpiry === 0 ? 'Today' : s.daysUntilExpiry === 1 ? 'Tomorrow' : `In ${s.daysUntilExpiry} days`;
+              const urgency = s.daysUntilExpiry <= 1 ? 'border-red-300 bg-red-50' : 'border-orange-100 bg-orange-50';
+              const textColor = s.daysUntilExpiry <= 1 ? 'text-red-600' : 'text-orange-600';
+              const modemLabel = s.modemSerial ? ` · Modem: ${s.modemSerial}` : '';
+              return `
+                <div class="flex items-center justify-between px-4 py-3 rounded-xl border ${urgency} gap-3">
+                  <div class="min-w-0">
+                    <div class="font-medium text-slate-800 text-sm truncate"><i class="fas fa-sim-card mr-1.5 text-green-600"></i>SIM Expiring — ${s.phoneNumber || '—'}</div>
+                    <div class="text-xs text-slate-500 mt-0.5">${s.network || ''}${modemLabel} · Expires ${new Date(s.expiryDate).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div>
+                  </div>
+                  <div class="flex-shrink-0">
+                    <span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>
+                  </div>
+                </div>`;
+            }).join('');
+            const upcomingDiv2 = document.getElementById('upcoming-events');
+            if (upcomingDiv2.querySelector('.flex-col.items-center')) {
+              // Was showing "no events" — replace with sim reminders
+              upcomingDiv2.innerHTML = simHtml;
+            } else {
+              upcomingDiv2.innerHTML += simHtml;
+            }
+            document.getElementById('upcoming-count').textContent = upcomingEvents.length + expiringSims.length;
+          }
+        } catch(e) { /* SIM reminders optional */ }
+        
+      } catch (error) {
+        console.error('Error loading events:', error);
+        document.getElementById('upcoming-events').innerHTML = '<p class="text-sm text-red-500 text-center py-4">Error loading events</p>';
+        document.getElementById('overdue-events').innerHTML = '<p class="text-sm text-red-500 text-center py-4">Error loading events</p>';
+      }
+    }
+
+    // Patients
+    async function loadPatients() {
+      const patientList = document.getElementById('patient-list');
+      patientList.innerHTML = '<div class="text-center py-12 text-slate-500"><i class="fas fa-spinner fa-spin text-2xl"></i></div>';
+      try {
+        const response = await fetch('/get_userId', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `search_term=Pluto&LoginId=${currentUser.loginId}&PRIVILEGE=${currentUser.privilege}` });
+        const data = await response.json();
+        
+        // Handle different response formats
+        if (data.hospital_info && Array.isArray(data.hospital_info)) {
+          allPatients = data.hospital_info;
+        } else if (Array.isArray(data)) {
+          allPatients = data;
+        } else if (data.patients && Array.isArray(data.patients)) {
+          allPatients = data.patients;
+        } else {
+          allPatients = [];
+        }
+        
+        // Reset all filter buttons cleanly
+        currentFilter = 'active';
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+          btn.classList.remove('from-blue-500', 'to-blue-600', 'text-white', 'shadow-md', 'shadow-blue-200',
+            'bg-red-500', 'bg-red-100', 'text-red-700', 'text-red-500',
+            'from-emerald-500', 'to-teal-600', 'shadow-emerald-200',
+            'from-orange-500', 'to-orange-600', 'shadow-orange-200');
+          const isDropped = btn.id === 'filter-dropped';
+          btn.classList.add('bg-white', isDropped ? 'text-red-500' : 'text-slate-600',
+            'border', isDropped ? 'border-red-200' : 'border-slate-200', 'shadow-sm');
+        });
+        // Set "Active" as active
+        const activeBtn = document.querySelector('[data-filter="active"]');
+        if (activeBtn) {
+          activeBtn.classList.remove('bg-white', 'text-slate-600', 'text-red-500', 'text-emerald-600',
+            'border', 'border-slate-200', 'border-red-200', 'border-emerald-200', 'shadow-sm');
+          activeBtn.classList.add('bg-gradient-to-r', 'from-blue-500', 'to-blue-600', 'text-white', 'shadow-md', 'shadow-blue-200');
+        }
+        
+        // Load dropped out patients
+        await loadDroppedOutPatients();
+        
+        updateFilterCounts();
+        renderPatients();
+      } catch (error) { 
+        console.error('Error loading patients:', error);
+        patientList.innerHTML = '<div class="text-center py-12 text-red-500">Error loading patients</div>'; 
+      }
+    }

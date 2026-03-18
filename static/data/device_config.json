@@ -1,0 +1,151 @@
+{
+  "locations": {
+    "Ludhiana": {
+      "deviceSets": [
+        {
+          "setId": "LD-SET-001",
+          "pluto": "LD-PLUTO-001",
+          "mars": "LD-MARS-001",
+          "modem": "LD-MODEM-001",
+          "simCard": "LD-SIM-001",
+          "laptop": "LD-LAPTOP-001",
+          "status": "available"
+        },
+        {
+          "setId": "LD-SET-002",
+          "pluto": "LD-PLUTO-002",
+          "mars": "LD-MARS-002",
+          "modem": "LD-MODEM-002",
+          "simCard": "LD-SIM-002",
+          "laptop": "LD-LAPTOP-002",
+          "status": "available"
+        },
+        {
+          "setId": "LD-SET-003",
+          "pluto": "LD-PLUTO-003",
+          "mars": "LD-MARS-003",
+          "modem": "LD-MODEM-003",
+          "simCard": "LD-SIM-003",
+          "laptop": "LD-LAPTOP-003",
+          "status": "available"
+        },
+        {
+          "setId": "LD-SET-004",
+          "pluto": "LD-PLUTO-004",
+          "mars": "LD-MARS-004",
+          "modem": "LD-MODEM-004",
+          "simCard": "LD-SIM-004",
+          "laptop": "LD-LAPTOP-004",
+          "status": "available"
+        },
+        {
+          "setId": "LD-SET-005",
+          "pluto": "LD-PLUTO-005",
+          "mars": "LD-MARS-005",
+          "modem": "LD-MODEM-005",
+          "simCard": "LD-SIM-005",
+          "laptop": "LD-LAPTOP-005",
+          "status": "available"
+        }
+      ]
+    },
+    "Manipal": {
+      "deviceSets": [
+        {
+          "setId": "MP-SET-001",
+          "pluto": "MP-PLUTO-001",
+          "mars": "MP-MARS-001",
+          "modem": "MP-MODEM-001",
+          "simCard": "MP-SIM-001",
+          "laptop": "MP-LAPTOP-001",
+          "status": "available"
+        },
+        {
+          "setId": "MP-SET-002",
+          "pluto": "MP-PLUTO-002",
+          "mars": "MP-MARS-002",
+          "modem": "MP-MODEM-002",
+          "simCard": "MP-SIM-002",
+          "laptop": "MP-LAPTOP-002",
+          "status": "available"
+        },
+        {
+          "setId": "MP-SET-003",
+          "pluto": "MP-PLUTO-003",
+          "mars": "MP-MARS-003",
+          "modem": "MP-MODEM-003",
+          "simCard": "MP-SIM-003",
+          "laptop": "MP-LAPTOP-003",
+          "status": "available"
+        },
+        {
+          "setId": "MP-SET-004",
+          "pluto": "MP-PLUTO-004",
+          "mars": "MP-MARS-004",
+          "modem": "MP-MODEM-004",
+          "simCard": "MP-SIM-004",
+          "laptop": "MP-LAPTOP-004",
+          "status": "available"
+        },
+        {
+          "setId": "MP-SET-005",
+          "pluto": "MP-PLUTO-005",
+          "mars": "MP-MARS-005",
+          "modem": "MP-MODEM-005",
+          "simCard": "MP-SIM-005",
+          "laptop": "MP-LAPTOP-005",
+          "status": "available"
+        }
+      ]
+    },
+    "Ranipet": {
+      "deviceSets": [
+        {
+          "setId": "RP-SET-001",
+          "pluto": "RP-PLUTO-001",
+          "mars": "RP-MARS-001",
+          "modem": "RP-MODEM-001",
+          "simCard": "RP-SIM-001",
+          "laptop": "RP-LAPTOP-001",
+          "status": "available"
+        },
+        {
+          "setId": "RP-SET-002",
+          "pluto": "RP-PLUTO-002",
+          "mars": "RP-MARS-002",
+          "modem": "RP-MODEM-002",
+          "simCard": "RP-SIM-002",
+          "laptop": "RP-LAPTOP-002",
+          "status": "available"
+        },
+        {
+          "setId": "RP-SET-003",
+          "pluto": "RP-PLUTO-003",
+          "mars": "RP-MARS-003",
+          "modem": "RP-MODEM-003",
+          "simCard": "RP-SIM-003",
+          "laptop": "RP-LAPTOP-003",
+          "status": "available"
+        },
+        {
+          "setId": "RP-SET-004",
+          "pluto": "RP-PLUTO-004",
+          "mars": "RP-MARS-004",
+          "modem": "RP-MODEM-004",
+          "simCard": "RP-SIM-004",
+          "laptop": "RP-LAPTOP-004",
+          "status": "available"
+        },
+        {
+          "setId": "RP-SET-005",
+          "pluto": "RP-PLUTO-005",
+          "mars": "RP-MARS-005",
+          "modem": "RP-MODEM-005",
+          "simCard": "RP-SIM-005",
+          "laptop": "RP-LAPTOP-005",
+          "status": "available"
+        }
+      ]
+    }
+  }
+}

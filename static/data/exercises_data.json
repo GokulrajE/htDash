@@ -1,0 +1,239 @@
+{
+  "adl": {
+    "description": "Activities of Daily Living Exercises",
+    "exercises": [
+      {
+        "id": "adl_1",
+        "name": "Reaching Exercise",
+        "name_hi": "पहुंचने का अभ्यास",
+        "name_ta": "அடைதல் பயிற்சி",
+        "description": "Reach forward to touch target object",
+        "description_hi": "लक्ष्य वस्तु को छूने के लिए आगे बढ़ें",
+        "description_ta": "இலக்கு பொருளைத் தொடுவதற்கு முன் செல்லுங்கள்",
+        "category": "reaching"
+      },
+      {
+        "id": "adl_2",
+        "name": "Grasping Exercise",
+        "name_hi": "पकड़ने का अभ्यास",
+        "name_ta": "பிடித்தல் பயிற்சி",
+        "description": "Grip and release small objects",
+        "description_hi": "छोटी वस्तुओं को पकड़ें और छोड़ें",
+        "description_ta": "சிறிய பொருட்களைப் பிடித்து விடுங்கள்",
+        "category": "grasping"
+      },
+      {
+        "id": "adl_3",
+        "name": "Turning Pages",
+        "name_hi": "पन्ने पलटने का अभ्यास",
+        "name_ta": "பக்கங்களைப் புரட்டுதல் பயிற்சி",
+        "description": "Flip through book pages",
+        "description_hi": "किताब के पन्ने पलटें",
+        "description_ta": "புத்தல் பக்கங்களைப் புரட்சிக்கவும்",
+        "category": "fine_motor"
+      },
+      {
+        "id": "adl_4",
+        "name": "Using Phone",
+        "name_hi": "फोन का उपयोग",
+        "name_ta": "போனைப் பயன்படுத்துதல்",
+        "description": "Operate smartphone touchscreen",
+        "description_hi": "स्मार्टफोन की स्क्रीन का उपयोग करें",
+        "description_ta": "ஸ்மார்ட்ஃபோன் திரை இயக்கவும்",
+        "category": "fine_motor"
+      },
+      {
+        "id": "adl_5",
+        "name": "Drinking Glass",
+        "name_hi": "गिलास पकड़ना",
+        "name_ta": "கண்ணாடியைப் பிடித்தல்",
+        "description": "Lift and hold glass to mouth",
+        "description_hi": "गिलास को उठाकर मुंह तक ले जाएं",
+        "description_ta": "கண்ணாடியைத் தூக்கி வாய்க்குக் கொண்டுவரவும்",
+        "category": "reaching"
+      }
+    ]
+  },
+  "vcg": {
+    "vcg2": {
+      "name": "VCG 2",
+      "description": "Virtual Reality Exercise Set A",
+      "exercises": [
+        {
+          "id": "vcg2_1",
+          "name": "Wrist Flexion",
+          "name_hi": "कलाई मोड़ना",
+          "name_ta": " மணிக்கட்டு வளைத்தல்",
+          "description": "Flex wrist upward",
+          "description_hi": "कलाई को ऊपर की ओर मोड़ें",
+          "description_ta": "மணிக்கட்டை மேல் நோக்கி வளைக்கவும்"
+        },
+        {
+          "id": "vcg2_2",
+          "name": "Wrist Extension",
+          "name_hi": "कलाई फैलाना",
+          "name_ta": "மணிக்கட்டு நீட்டுதல்",
+          "description": "Extend wrist downward",
+          "description_hi": "कलाई को नीचे की ओर फैलाएं",
+          "description_ta": "மணிக்கட்டைக் கீழ் நோக்கி நீட்டவும்"
+        },
+        {
+          "id": "vcg2_3",
+          "name": "Radial Deviation",
+          "name_hi": "रेडियल विचलन",
+          "name_ta": "ரேடியல் விலகல்",
+          "description": "Move wrist toward thumb",
+          "description_hi": "कलाई को अंगूठे की ओर ले जाएं",
+          "description_ta": "மணிக்கட்டை கட்டைவிரல் நோக்கி நகர்த்தவும்"
+        },
+        {
+          "id": "vcg2_4",
+          "name": "Ulnar Deviation",
+          "name_hi": "अल्नार विचलन",
+          "name_ta": "அல்னர் விலகல்",
+          "description": "Move wrist toward pinky",
+          "description_hi": "कलाई को छोटी उंगली की ओर ले जाएं",
+          "description_ta": "மணிக்கட்டைச் சிறியவிரல் நோக்கி நகர்த்தவும்"
+        },
+        {
+          "id": "vcg2_5",
+          "name": "Supination",
+          "name_hi": "सुप्रेशन",
+          "name_ta": "சுபினேஷன்",
+          "description": "Rotate forearm palm up",
+          "description_hi": "बांह को घुमाएं हथेली ऊपर",
+          "description_ta": "முழுக்கைக்கு கீழே உள்ள பகுதியைச் சுற்றி உள்ளங்கை மேல் இருக்கச் சுற்றவும்"
+        },
+        {
+          "id": "vcg2_6",
+          "name": "Pronation",
+          "name_hi": "प्रोनेशन",
+          "name_ta": "ப்ரோனேஷன்",
+          "description": "Rotate forearm palm down",
+          "description_hi": "बांह को घुमाएं हथेली नीचे",
+          "description_ta": "முழுக்கைக்கு கீழே உள்ள பகுதியைச் சுற்றி உள்ளங்கை கீழ் இருக்கச் சுற்றவும்"
+        }
+      ]
+    },
+    "vcg3": {
+      "name": "VCG 3",
+      "description": "Virtual Reality Exercise Set B",
+      "exercises": [
+        {
+          "id": "vcg3_1",
+          "name": "Finger Tap",
+          "name_hi": "उंगली टैप",
+          "name_ta": "விரல் தட்டுதல்",
+          "description": "Tap fingers sequentially",
+          "description_hi": "उंगलियों को क्रम में टैप करें",
+          "description_ta": "விரல்களை வரிசையாகத் தட்டவும்"
+        },
+        {
+          "id": "vcg3_2",
+          "name": "Finger Spread",
+          "name_hi": "उंगली फैलाव",
+          "name_ta": "விரல் பரப்புதல்",
+          "description": "Spread fingers apart",
+          "description_hi": "उंगलियों को अलग करें",
+          "description_ta": "விரல்களைப் பிரித்துக்காட்டவும்"
+        },
+        {
+          "id": "vcg3_3",
+          "name": "Finger Pinch",
+          "name_hi": "उंगली चुटकी",
+          "name_ta": "விரல் கொடுக்கை",
+          "description": "Pinch thumb and finger",
+          "description_hi": "अंगूठे और उंगली से पकड़ें",
+          "description_ta": "கட்டைவிரல் மற்றும் விரலைக் கொடுக்கையாகப் பிடிக்கவும்"
+        },
+        {
+          "id": "vcg3_4",
+          "name": "Finger Wave",
+          "name_hi": "उंगली हिलाव",
+          "name_ta": "விரல் அசைக்க",
+          "description": "Wave fingers side to side",
+          "description_hi": "उंगलियों को आगे पीछे हिलाएं",
+          "description_ta": "விரல்களை பக்கத்துக்கு அசைக்கவும்"
+        },
+        {
+          "id": "vcg3_5",
+          "name": "Finger Circle",
+          "name_hi": "उंगली गोला",
+          "name_ta": "விரல் வட்டம்",
+          "description": "Make circles with finger",
+          "description_hi": "उंगली से गोला बनाएं",
+          "description_ta": "விரலால் வட்டம் வரைக்க"
+        },
+        {
+          "id": "vcg3_6",
+          "name": "Finger Touch",
+          "name_hi": "उंगली स्पर्श",
+          "name_ta": "விரல் தொடு",
+          "description": "Touch thumb to each finger",
+          "description_hi": "अंगूठे को हर उंगली से छुएं",
+          "description_ta": "கட்டைவிரலை ஒவ்வொரு விரலாகத் தொடுக்க"
+        }
+      ]
+    },
+    "vcg4_5": {
+      "name": "VCG 4 & 5",
+      "description": "Virtual Reality Exercise Set C (Combined)",
+      "exercises": [
+        {
+          "id": "vcg4_5_1",
+          "name": "Complex Reach",
+          "name_hi": "जटिल पहुंच",
+          "name_ta": "சிக்கலான அடைதல்",
+          "description": "Reach in multiple directions",
+          "description_hi": "कई दिशाओं में पहुंचें",
+          "description_ta": "பல திசைகளில் அடைய"
+        },
+        {
+          "id": "vcg4_5_2",
+          "name": "Precision Grip",
+          "name_hi": "सटीक पकड़",
+          "name_ta": "துல்லியமான பிடி",
+          "description": "Grip with precision",
+          "description_hi": "सटीकता से पकड़ें",
+          "description_ta": "துல்லியமாகப் பிடிக்க"
+        },
+        {
+          "id": "vcg4_5_3",
+          "name": "Hand Rotation",
+          "name_hi": "हाथ घुमाव",
+          "name_ta": "கை சுற்றல்",
+          "description": "Rotate hand fully",
+          "description_hi": "हाथ को पूरी तरह घुमाएं",
+          "description_ta": "கையை முழுமையாகச் சுற்று"
+        },
+        {
+          "id": "vcg4_5_4",
+          "name": "Object Manipulation",
+          "name_hi": "वस्तु हेरफेर",
+          "name_ta": "பொருள் கையாளல்",
+          "description": "Move objects between hands",
+          "description_hi": "वस्तुओं को हाथों में बदलें",
+          "description_ta": "பொருட்களைக் கைகளுக்கு மாற்றவும்"
+        },
+        {
+          "id": "vcg4_5_5",
+          "name": "Coordinated Movement",
+          "name_hi": "समन्वित गति",
+          "name_ta": "ஒருங்கிணைந்த இயக்கம்",
+          "description": "Multi-joint coordinated movement",
+          "description_hi": "कई जोड़ों के साथ समन्वित गति",
+          "description_ta": "பல மூட்டுகளுடன் ஒருங்கிணைந்த இயக்கம்"
+        },
+        {
+          "id": "vcg4_5_6",
+          "name": "Fine Motor Complex",
+          "name_hi": "सूक्ष्म मोटर जटिल",
+          "name_ta": "சிறிய மோட்டார் சிக்கலான",
+          "description": "Complex fine motor task",
+          "description_hi": "जटिल सूक्ष्म मोटर कार्य",
+          "description_ta": "சிக்கலான சிறிய மோட்டார் பணி"
+        }
+      ]
+    }
+  }
+}

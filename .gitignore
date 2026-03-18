@@ -1,0 +1,36 @@
+# Python-specific files
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Flask instance folder (contains configuration and production data)
+instance/
+
+# Editor/IDE specific files and folders
+.idea/
+.vscode/
+*.swp
+*~
+.cache/
+
+# Test and coverage reports
+.coverage
+htmlcov/
+.tox/
+
+# Environment variables
+.env
+.flaskenv
+
+# OS-specific files
+.DS_Store
+Thumbs.db
