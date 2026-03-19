@@ -7,6 +7,18 @@ class Config:
     META_DATA_PATH = "./META-DATA"
     LOG_DIR = "user_logs"
     DEVICE_CONFIG_PATH = "./static/data/device_config.json"
+
+    # New data folder structure
+    DATA_ROOT = os.environ.get('DATA_ROOT', './data')
+    HOSPITALS = ['manipal', 'ranipet', 'ludhiana']
+    PATIENT_META_FILE = '{patient_id}.json'  # filename matches the patient ID
+
+    # Maps Flask session login_place → data folder name
+    HOSPITAL_FOLDER_MAP = {
+        'Manipal':  'manipal',
+        'Ranipet':  'ranipet',
+        'Ludhiana': 'ludhiana',
+    }
     
     # Device labels
     PLUTO_LABEL = 'Pluto'
@@ -35,6 +47,10 @@ class Config:
     # Security
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'change-this-in-production'
     DEBUG = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+
+    # Set True in development to cache session in browser localStorage (survives server restarts).
+    # Set False in production — server session is the sole source of truth.
+    USE_LOCAL_STORAGE = os.environ.get('USE_LOCAL_STORAGE', 'true').lower() == 'true'
     
     # Login credentials
     LOGIN_CREDENTIALS = {

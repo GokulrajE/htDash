@@ -1,0 +1,11 @@
+:Location: Ranipet
+:ID: RP-HS-ADMIN
+session_id,login_time,logout_time,logout_reason
+1,2026-03-19 10:15:28,2026-03-19 13:04:11,user_initiated
+2,2026-03-19 13:04:16,2026-03-19 13:07:28,user_initiated
+3,2026-03-19 13:07:34,2026-03-19 19:38:38,user_initiated
+4,2026-03-19 19:38:46,2026-03-19 19:40:49,user_initiated
+5,2026-03-19 20:09:11,2026-03-19 21:04:27,user_initiated
+6,2026-03-19 21:04:32,2026-03-19 21:08:49,user_initiated
+7,2026-03-19 21:08:53,2026-03-19 21:16:42,user_initiated
+8,2026-03-19 21:16:48,null,null

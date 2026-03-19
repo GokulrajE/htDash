@@ -1,0 +1,13 @@
+{
+  "homerID": "HOMCMCV001",
+  "hospitalID": "123456G",
+  "group": "experimental",
+  "trainingSide": "Right",
+  "enrollDate": "2026-03-19T21:17",
+  "activationDate": null,
+  "discontinuationDate": null,
+  "trainingCompletionDate": null,
+  "a0CompletionDate": "2026-03-19T21:17",
+  "a1CompletionDate": null,
+  "a2CompletionDate": null
+}

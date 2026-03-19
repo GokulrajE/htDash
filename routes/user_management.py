@@ -1,4 +1,9 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, render_template, redirect, url_for, session as flask_session
+from utils.data_access import (
+    get_patients_for_user, derive_status, get_hospital_folder,
+    read_patient_meta, write_patient_meta, create_patient_folders, generate_homer_id,
+    create_patient_log, write_patient_log,
+)
 import os
 import csv
 import json
@@ -15,6 +20,169 @@ import uuid
 
 bp = Blueprint("user_management", __name__)
 
+
+# ── URL-routed patients page ───────────────────────────────────────────────────
+
+@bp.route('/patients', methods=['GET'])
+def patients_page():
+    if not flask_session.get('login_place'):
+        return redirect(url_for('login'))
+    return render_template('patients.html', active_page='patients')
+
+
+@bp.route('/api/patients', methods=['GET'])
+def api_patients_list():
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    patients = get_patients_for_user(flask_session['login_place'])
+    return jsonify([{**p, 'status': derive_status(p)} for p in patients])
+
+
+@bp.route('/api/patients', methods=['POST'])
+def api_create_patient():
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+    data = request.get_json() or {}
+    hospital_id   = (data.get('hospitalID') or '').strip()
+    training_side = (data.get('trainingSide') or '').strip()
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+    homer_id = generate_homer_id(folder)
+    patient_data = {
+        'homerID':                homer_id,
+        'hospitalID':             hospital_id or None,
+        'group':                  None,
+        'trainingSide':           training_side or None,
+        'enrollDate':             datetime.now().strftime('%Y-%m-%dT%H:%M'),
+        'activationDate':         None,
+        'discontinuationDate':    None,
+        'trainingCompletionDate': None,
+        'a0CompletionDate':       None,
+        'a1CompletionDate':       None,
+        'a2CompletionDate':       None,
+    }
+    write_patient_meta(folder, homer_id, patient_data)
+    create_patient_folders(folder, homer_id, 'unassigned')
+    create_patient_log(folder, homer_id)
+    write_patient_log(
+        folder, homer_id,
+        flask_session.get('loginid', 'unknown'),
+        flask_session.get('session_id', 0),
+        f'Created new patient : {homer_id}.json'
+    )
+    return jsonify({'status': 'success', 'homerID': homer_id}), 201
+
+
+@bp.route('/api/patients/<homer_id>/group', methods=['POST'])
+def api_assign_group(homer_id):
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    data   = request.get_json() or {}
+    group  = (data.get('group') or '').strip().lower()
+    a0_date = (data.get('a0CompletionDate') or '').strip()
+    if group not in ('experimental', 'control'):
+        return jsonify({'error': 'group must be "experimental" or "control"'}), 400
+    if not a0_date:
+        return jsonify({'error': 'a0CompletionDate is required'}), 400
+    try:
+        from datetime import datetime as dt
+        if dt.strptime(a0_date, '%Y-%m-%dT%H:%M') > dt.now():
+            return jsonify({'error': 'a0CompletionDate cannot be in the future'}), 400
+    except ValueError:
+        return jsonify({'error': 'a0CompletionDate format must be YYYY-MM-DDTHH:MM'}), 400
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+    if patient.get('group'):
+        return jsonify({'error': 'Patient is already assigned to a group'}), 409
+
+    patient['group']            = group
+    patient['a0CompletionDate'] = a0_date
+    write_patient_meta(folder, homer_id, patient)
+    create_patient_folders(folder, homer_id, group)
+
+    try:
+        write_patient_log(
+            folder, homer_id,
+            flask_session.get('loginid', 'unknown'),
+            flask_session.get('session_id', 0),
+            f'Assigned group to {group}'
+        )
+    except Exception as e:
+        print(f'Warning: could not write patient log: {e}')
+
+    return jsonify({'status': 'success', 'homerID': homer_id, 'group': group})
+
+
+@bp.route('/api/patients/<homer_id>/discontinue', methods=['POST'])
+def api_discontinue_patient(homer_id):
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+    if patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is already discontinued'}), 409
+
+    data   = request.get_json() or {}
+    reason = (data.get('reason') or '').strip()
+    if not reason:
+        return jsonify({'error': 'A reason is required'}), 400
+
+    now = datetime.now().strftime('%Y-%m-%dT%H:%M')
+    patient['discontinuationDate'] = now
+    write_patient_meta(folder, homer_id, patient)
+
+    # Write prediscontinuation.json to timeline/
+    try:
+        from utils.data_access import get_patients_path
+        import json
+        timeline_dir = get_patients_path(folder) / homer_id / 'timeline'
+        timeline_dir.mkdir(parents=True, exist_ok=True)
+        predc_data = {
+            'homerID':   homer_id,
+            'datetime':  now,
+            'user':      flask_session.get('loginid', 'unknown'),
+            'reason':    reason,
+        }
+        (timeline_dir / 'prediscontinuation.json').write_text(
+            json.dumps(predc_data, indent=2)
+        )
+    except Exception as e:
+        print(f'Warning: could not write prediscontinuation.json: {e}')
+
+    try:
+        write_patient_log(
+            folder, homer_id,
+            flask_session.get('loginid', 'unknown'),
+            flask_session.get('session_id', 0),
+            'Pre-discontinued patient : prediscontinuation.json'
+        )
+    except Exception as e:
+        print(f'Warning: could not write patient log: {e}')
+
+    return jsonify({'status': 'success', 'homerID': homer_id})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _auto_activate_experimental_patient(homer_id, place, device_name=None):
     """Auto-activate experimental patient if not already activated.

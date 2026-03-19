@@ -1,9 +1,10 @@
-from flask import Flask, render_template
+from flask import Flask, render_template, redirect, url_for, session as flask_session
 from config import Config
 import os
 
 # Import blueprints
 from routes.auth import bp as auth_bp
+from routes.dashboard import bp as dashboard_bp
 from routes.user_management import bp as user_management_bp
 from routes.device_data import bp as device_data_bp
 from routes.charts import bp as charts_bp
@@ -25,6 +26,7 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0 if Config.DEBUG else 3600
 app.config['TEMPLATES_AUTO_RELOAD'] = Config.DEBUG
 
 app.register_blueprint(auth_bp)
+app.register_blueprint(dashboard_bp)
 app.register_blueprint(user_management_bp)
 app.register_blueprint(device_data_bp)
 app.register_blueprint(charts_bp)
@@ -37,6 +39,11 @@ app.register_blueprint(patient_events_bp, url_prefix='/patient_events')
 app.register_blueprint(devices_bp, url_prefix='/devices')
 app.register_blueprint(sim_cards_bp, url_prefix='/sim_cards')
 app.register_blueprint(time_records_bp, url_prefix='/time_records')
+
+@app.context_processor
+def inject_globals():
+    return dict(use_local_storage=Config.USE_LOCAL_STORAGE)
+
 
 @app.after_request
 def add_header(response):
@@ -51,23 +58,28 @@ def add_header(response):
 
 @app.route('/')
 def index():
-    return render_template('dashboard.html')
+    if not flask_session.get('login_place'):
+        return redirect(url_for('login'))
+    return render_template('dashboard.html', active_page='dashboard')
 
 @app.route('/login')
 def login():
+    if flask_session.get('login_place'):
+        return redirect(url_for('index'))
     return render_template('login.html')
 
 @app.route('/dashboard')
 def dashboard():
-    return render_template('dashboard.html')
-
-@app.route('/index')
-def old_index():
-    return render_template('index.html')
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     # Ensure necessary directories exist
     os.makedirs(Config.LOG_DIR, exist_ok=True)
     os.makedirs(Config.META_DATA_PATH, exist_ok=True)
+    for hospital in Config.HOSPITALS:
+        os.makedirs(os.path.join(Config.DATA_ROOT, hospital, 'patients'), exist_ok=True)
+        os.makedirs(os.path.join(Config.DATA_ROOT, hospital, 'dashboard'), exist_ok=True)
+        for device in ['pluto', 'mars', 'actigraphs', 'modems', 'sims']:
+            os.makedirs(os.path.join(Config.DATA_ROOT, hospital, 'devices', device), exist_ok=True)
     
     app.run(host="0.0.0.0", port=8080, debug=Config.DEBUG)

@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session as flask_session
 from config import Config
 import json
 import os
@@ -8,6 +8,7 @@ from datetime import datetime
 from models.user import current_session
 
 bp = Blueprint('auth', __name__)
+
 
 # ── In-process login rate limiter ─────────────────────────────────────────────
 # Stores {ip: [timestamp, ...]} for failed attempts within the rolling window.
@@ -116,6 +117,15 @@ def validate_login():
             login_place=user_data["place"],
             privilege=user_data.get("privilege", "user")
         )
+        flask_session['loginid'] = loginid
+        try:
+            from utils.data_access import open_session, get_hospital_folder
+            hospital_folder = get_hospital_folder(user_data['place'])
+            if hospital_folder:
+                session_id = open_session(hospital_folder, loginid)
+                flask_session['session_id'] = session_id
+        except Exception as e:
+            print(f'Warning: could not open session: {e}')
         return jsonify({
             "status": "success",
             "loginid": loginid,
@@ -127,11 +137,40 @@ def validate_login():
         return jsonify({"status": "error", "message": "Invalid Login ID or Password."}), 401
 
 
+@bp.route("/api/me", methods=["GET"])
+def me():
+    from flask import session as flask_session
+    login_place = flask_session.get('login_place')
+    if not login_place:
+        return jsonify({"status": "error", "message": "Not authenticated"}), 401
+    return jsonify({
+        "status": "success",
+        "loginId": flask_session.get('loginid', login_place),
+        "place": login_place,
+        "privilege": flask_session.get('privilege', 'user')
+    })
+
+
+def _do_close_session(reason: str) -> None:
+    """Close the current Flask session's session log entry."""
+    from utils.data_access import close_session, get_hospital_folder
+    hospital_folder = get_hospital_folder(flask_session.get('login_place', ''))
+    session_id = flask_session.get('session_id')
+    loginid    = flask_session.get('loginid')
+    if hospital_folder and session_id and loginid:
+        close_session(hospital_folder, loginid, session_id, reason)
+
+
 @bp.route("/logout", methods=["POST"])
 def logout():
-    from flask import session as flask_session
+    try:
+        _do_close_session('user_initiated')
+    except Exception as e:
+        print(f'Warning: could not close session: {e}')
     flask_session.clear()
     return jsonify({"status": "success"})
+
+
 
 
 @bp.route("/track-activity", methods=["POST"])

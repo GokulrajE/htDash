@@ -3,51 +3,28 @@
    HOMER Clinical Dashboard
    ============================================================ */
 
+    function initPage() {
+      loadDashboard();
+    }
+
     // Dashboard Data
     async function loadDashboard() {
       try {
-        const response = await fetch('/get_userId', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `search_term=Pluto&LoginId=${currentUser.loginId}&PRIVILEGE=${currentUser.privilege}` });
-        const data = await response.json();
-        if (data.hospital_info) {
-          const patients = data.hospital_info;
-          document.getElementById('stat-total').textContent = patients.length;
-          document.getElementById('stat-experimental').textContent = patients.filter(p => p.role?.toLowerCase() === 'experimental').length;
-          document.getElementById('stat-control').textContent = patients.filter(p => p.role?.toLowerCase() === 'control').length;
-          document.getElementById('stat-unassigned').textContent = patients.filter(p => !p.role || p.role?.toLowerCase() === 'unassigned').length;
-
-          // Count dropped out via patient events — reads discontinued flag + requiresDropout adverse events
-          // Excludes pre-enrolment discontinued (unassigned patients)
-          try {
-            const droppedRes = await fetch('/patient_events/dropped_patients');
-            const droppedData = await droppedRes.json();
-            const allDroppedIds = new Set((droppedData.droppedPatients || []));
-            // Filter out pre-enrolment discontinued (patients with no group assigned)
-            const droppedIds = new Set(
-              [...allDroppedIds].filter(id => {
-                const pt = patients.find(p => p.HospitalID === id || p.homerID === id);
-                if (!pt) return true; // unknown, include by default
-                const role = (pt.role || '').toLowerCase().trim();
-                return role !== '' && role !== 'unassigned';
-              })
-            );
-            droppedOutPatients = droppedIds;
-            document.getElementById('stat-dropped').textContent = droppedIds.size;
-          } catch(e) {
-            document.getElementById('stat-dropped').textContent = '0';
-          }
-
-          // Count trial-completed patients — last timeline event is marked completed
-          try {
-            const completedRes = await fetch('/patient_events/trial_completed_patients');
-            const completedData = await completedRes.json();
-            trialCompletedPatients = new Set(completedData.completedPatients || []);
-            document.getElementById('stat-completed').textContent = trialCompletedPatients.size;
-          } catch(e) {
-            document.getElementById('stat-completed').textContent = '0';
-          }
-        }
-        loadUpcomingOverdueEvents();
-      } catch (error) { console.error('Error loading dashboard:', error); }
+        const response = await fetch('/api/dashboard/stats');
+        if (!response.ok) throw new Error('Failed to load stats');
+        const stats = await response.json();
+        document.getElementById('stat-total').textContent              = stats.total;
+        document.getElementById('stat-experimental').textContent       = stats.experimental;
+        document.getElementById('stat-control').textContent            = stats.control;
+        document.getElementById('stat-unassigned').textContent         = stats.unassigned;
+        document.getElementById('stat-inactive').textContent           = stats.inactive;
+        document.getElementById('stat-training-completed').textContent = stats.training_completed;
+        document.getElementById('stat-a1-completed').textContent       = stats.a1_completed;
+        document.getElementById('stat-pre-discontinued').textContent   = stats.pre_discontinued;
+        document.getElementById('stat-discontinued').textContent       = stats.discontinued;
+      } catch (error) {
+        console.error('Error loading dashboard stats:', error);
+      }
     }
 
     async function loadUpcomingOverdueEvents() {

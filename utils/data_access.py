@@ -1,0 +1,255 @@
+"""
+Data access utilities for the hospital-scoped data folder structure.
+
+Layout:
+    data/
+    ├── manipal/
+    │   ├── patients/<homer_id>/<homer_id>.json  — patient metadata
+    │   │                      <homer_id>.log   — patient activity log
+    │   ├── dashboard/<user_id>.csv              — per-user session log
+    │   └── devices/pluto|mars|actigraphs|modems|sims/
+    ├── ranipet/
+    └── ludhiana/
+
+Access control:
+    login_place == 'admin'   → can read all hospitals
+    login_place == 'Manipal' → mapped to 'manipal' folder only
+"""
+
+import json
+import os
+from pathlib import Path
+from typing import Optional
+from config import Config
+
+
+def derive_status(patient: dict) -> str:
+    """Derive patient state from factual fields. State is never stored."""
+    group       = patient.get('group')
+    activation  = patient.get('activationDate')
+    discontinue = patient.get('discontinuationDate')
+    training    = patient.get('trainingCompletionDate')
+    a1          = patient.get('a1CompletionDate')
+    a2          = patient.get('a2CompletionDate')
+
+    if not group:
+        return 'pre_discontinued' if discontinue else 'unassigned'
+    if discontinue:
+        return 'discontinued'
+    if not activation:
+        return 'inactive'
+    if a2:
+        return 'all_completed'
+    if a1:
+        return 'a1_completed'
+    if training:
+        return 'training_completed'
+    return 'active'
+
+
+def get_hospital_folder(login_place: str) -> Optional[str]:
+    """Map a session login_place ('Manipal') to a data folder name ('manipal').
+    Returns None for the global admin — admin reads all hospitals."""
+    return Config.HOSPITAL_FOLDER_MAP.get(login_place)
+
+
+def get_patients_path(hospital_folder: str) -> Path:
+    return Path(Config.DATA_ROOT) / hospital_folder / 'patients'
+
+
+def list_patient_ids(hospital_folder: str) -> list:
+    """Return a list of patient_id strings (one per subfolder)."""
+    path = get_patients_path(hospital_folder)
+    if not path.exists():
+        return []
+    return [d.name for d in sorted(path.iterdir()) if d.is_dir()]
+
+
+def read_patient_meta(hospital_folder: str, patient_id: str) -> Optional[dict]:
+    """Read <patient_id>.json for a single patient. Returns None if not found."""
+    meta_path = get_patients_path(hospital_folder) / patient_id / f'{patient_id}.json'
+    if not meta_path.exists():
+        return None
+    try:
+        with open(meta_path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def get_all_patients(hospital_folder: str) -> list:
+    """Return a list of patient metadata dicts for one hospital."""
+    patients = []
+    for patient_id in list_patient_ids(hospital_folder):
+        meta = read_patient_meta(hospital_folder, patient_id)
+        if meta:
+            patients.append(meta)
+    return patients
+
+
+def get_patients_for_user(login_place: str) -> list:
+    """Return patients visible to a user based on their login_place.
+    Global admin sees all hospitals; site users see only their own."""
+    if login_place == Config.ADMIN_LOGIN:
+        patients = []
+        for folder in Config.HOSPITALS:
+            patients.extend(get_all_patients(folder))
+        return patients
+    folder = get_hospital_folder(login_place)
+    if not folder:
+        return []
+    return get_all_patients(folder)
+
+
+_HOMER_ID_PREFIXES = {
+    'manipal':  'HOMAHE',
+    'ranipet':  'HOMCMCV',
+    'ludhiana': 'HOMCMCL',
+}
+
+
+def generate_homer_id(hospital_folder: str) -> str:
+    """Auto-generate the next homerID for a hospital (e.g. HOMAHE004)."""
+    prefix = _HOMER_ID_PREFIXES.get(hospital_folder, 'HOMUNK')
+    existing = list_patient_ids(hospital_folder)
+    nums = []
+    for pid in existing:
+        if pid.startswith(prefix):
+            try:
+                nums.append(int(pid[len(prefix):]))
+            except ValueError:
+                pass
+    return f"{prefix}{max(nums, default=0) + 1:03d}"
+
+
+def write_patient_meta(hospital_folder: str, patient_id: str, data: dict) -> None:
+    """Write (create or update) <patient_id>.json for a patient atomically."""
+    patient_dir = get_patients_path(hospital_folder) / patient_id
+    patient_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = patient_dir / f'{patient_id}.json'
+    tmp_path = meta_path.with_suffix('.tmp')
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, meta_path)
+
+
+def _dashboard_path(hospital_folder: str) -> Path:
+    return Path(Config.DATA_ROOT) / hospital_folder / 'dashboard'
+
+
+def _safe_id(user_id: str) -> str:
+    return ''.join(c for c in user_id if c.isalnum() or c in '-_')
+
+
+def open_session(hospital_folder: str, user_id: str) -> int:
+    """Write a new session row to dashboard/<user_id>.csv on login.
+    Returns the new session_id.
+    """
+    from datetime import datetime
+    dashboard_dir = _dashboard_path(hospital_folder)
+    dashboard_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = dashboard_dir / f'{_safe_id(user_id)}.csv'
+    login_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    preheader = [
+        f':Location: {hospital_folder.capitalize()}\n',
+        f':ID: {user_id}\n',
+        'session_id,login_time,logout_time,logout_reason\n',
+    ]
+
+    try:
+        if not csv_path.exists():
+            with open(csv_path, 'w', encoding='utf-8') as f:
+                f.writelines(preheader)
+                f.write(f'1,{login_time},null,null\n')
+            return 1
+
+        with open(csv_path, encoding='utf-8') as f:
+            lines = f.readlines()
+
+        data_rows = [l for l in lines if l.strip() and not l.startswith(':') and not l.startswith('session_id')]
+        session_id = len(data_rows) + 1
+
+        with open(csv_path, 'a', encoding='utf-8') as f:
+            f.write(f'{session_id},{login_time},null,null\n')
+        return session_id
+
+    except Exception as e:
+        print(f'Warning: could not open session: {e}')
+        return -1
+
+
+def close_session(hospital_folder: str, user_id: str, session_id: int, reason: str) -> None:
+    """Update the open session row with logout_time and reason."""
+    from datetime import datetime
+    csv_path = _dashboard_path(hospital_folder) / f'{_safe_id(user_id)}.csv'
+    if not csv_path.exists():
+        return
+    logout_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        with open(csv_path, encoding='utf-8') as f:
+            lines = f.readlines()
+        updated = []
+        for line in lines:
+            if not line.startswith(':') and not line.startswith('session_id') and line.strip():
+                parts = line.strip().split(',')
+                if len(parts) >= 4 and parts[0] == str(session_id) and parts[2] == 'null':
+                    line = f'{parts[0]},{parts[1]},{logout_time},{reason}\n'
+                # If logout_time already filled, leave the row unchanged (first logout wins)
+            updated.append(line)
+        tmp_path = csv_path.with_suffix('.tmp')
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            f.writelines(updated)
+        os.replace(tmp_path, csv_path)
+    except Exception as e:
+        print(f'Warning: could not close session: {e}')
+
+
+def create_patient_log(hospital_folder: str, homer_id: str) -> None:
+    """Create <homer_id>.log with the two-line preheader. Called at enrollment."""
+    log_path = get_patients_path(hospital_folder) / homer_id / f'{homer_id}.log'
+    try:
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(f':Location: {hospital_folder.capitalize()}\n')
+            f.write(f':HomerId: {homer_id}\n')
+    except Exception as e:
+        print(f'Warning: could not create patient log: {e}')
+
+
+def write_patient_log(hospital_folder: str, homer_id: str, user_id: str,
+                      session_id: int, action: str, detail_file: str = None) -> None:
+    """Append a clinical action line to patients/<homer_id>/<homer_id>.log.
+
+    Format:
+        [YYYY-MM-DD HH:MM:SS]   <user_id>    #<session_id>    <action> | <detail_file>
+    """
+    from datetime import datetime
+    log_path = get_patients_path(hospital_folder) / homer_id / f'{homer_id}.log'
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    detail = f' | {detail_file}' if detail_file else ''
+    line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}{detail}\n'
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(line)
+    except Exception as e:
+        print(f'Warning: could not write patient log: {e}')
+
+
+def create_patient_folders(hospital_folder: str, patient_id: str, group: str) -> None:
+    """Create the standard subfolder structure for a new patient."""
+    base = get_patients_path(hospital_folder) / patient_id
+    common = ['actigraphs', 'adl', 'adverse_events', 'call_logs', 'timeline']
+    experimental_only = ['pluto', 'mars']
+    control_only = ['vcg_exercise']
+
+    folders = common[:]
+    if group == 'experimental':
+        folders += experimental_only
+    elif group == 'control':
+        folders += control_only
+
+    for folder in folders:
+        (base / folder).mkdir(parents=True, exist_ok=True)
+
+    for folder in ['adverse_events', 'call_logs', 'timeline']:
+        (base / folder / 'attachments').mkdir(parents=True, exist_ok=True)
