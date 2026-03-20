@@ -67,7 +67,7 @@
       const textColor = (isOverdue || ev.days === 0) ? 'text-red-600'
                       : ev.days <= 2 ? 'text-orange-600' : 'text-slate-500';
       return `
-        <a href="/patients/${ev.homer_id}" class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 hover:opacity-80 transition-opacity">
+        <a href="/patients/${ev.homer_id}?action=${ev.id}" class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 hover:shadow-md transition-shadow">
           <div class="min-w-0">
             <div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>
             <div class="text-xs text-slate-500 mt-0.5">${ev.homer_id} · ${dateStr}</div>

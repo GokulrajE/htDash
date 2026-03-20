@@ -287,6 +287,54 @@
   </div>
 </div>
 
+<!-- Device Setup -->
+<div id="device-setup-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-bold text-slate-800">Device Setup</h3>
+      <button onclick="hideModal('device-setup-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="mb-4 px-4 py-3 bg-slate-50 rounded-xl">
+      <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
+      <p id="device-setup-homer-id" class="text-base font-semibold text-slate-800"></p>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Event Date <span class="text-red-500">*</span></label>
+      <input type="datetime-local" id="device-setup-date" required
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Pluto Device <span class="text-red-500">*</span></label>
+      <select id="device-setup-pluto" required
+              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Mars Device <span class="text-red-500">*</span></label>
+      <select id="device-setup-mars" required
+              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+    <div class="mb-4 flex items-center gap-3">
+      <input type="checkbox" id="device-setup-demo" class="w-4 h-4 rounded accent-blue-600">
+      <label for="device-setup-demo" class="text-sm font-medium text-slate-700">Demo completed</label>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Notes</label>
+      <textarea id="device-setup-notes" rows="2"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                placeholder="Optional notes…"></textarea>
+    </div>
+    <p id="device-setup-error" class="text-sm text-red-500 hidden mb-3"></p>
+    <div class="flex gap-3">
+      <button type="button" onclick="hideModal('device-setup-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+      <button type="button" id="device-setup-submit" data-label="Confirm Setup" onclick="submitDeviceSetup()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Confirm Setup</button>
+    </div>
+  </div>
+</div>
+
 <!-- Discontinue -->
 <div id="discontinue-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">

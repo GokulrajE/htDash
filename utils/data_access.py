@@ -319,6 +319,73 @@ def write_patient_log(hospital_folder: str, homer_id: str, user_id: str,
         print(f'Warning: could not write patient log: {e}')
 
 
+# ── Device file utilities ──────────────────────────────────────────────────────
+
+def _devices_path(hospital_folder: str) -> Path:
+    return Path(Config.DATA_ROOT) / hospital_folder / 'devices'
+
+
+def read_device_inventory(hospital_folder: str, device_type: str) -> list:
+    """Return all device entries from inventory/<device_type>.json."""
+    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f).get('devices', [])
+    except Exception:
+        return []
+
+
+def read_device_assignments(hospital_folder: str, device_type: str) -> list:
+    """Return all assignment records from assignments/<device_type>.json."""
+    path = _devices_path(hospital_folder) / 'assignments' / f'{device_type}.json'
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f).get('assignments', [])
+    except Exception:
+        return []
+
+
+def write_device_assignments(hospital_folder: str, device_type: str, assignments: list) -> None:
+    """Atomically overwrite assignments/<device_type>.json."""
+    path = _devices_path(hospital_folder) / 'assignments' / f'{device_type}.json'
+    tmp = path.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'assignments': assignments}, f, indent=2)
+    os.replace(tmp, path)
+
+
+def get_available_devices(hospital_folder: str, device_type: str) -> list:
+    """Return active, non-clinic, unassigned devices for a given type."""
+    inventory = read_device_inventory(hospital_folder, device_type)
+    assignments = read_device_assignments(hospital_folder, device_type)
+    assigned_ids = {a['device_id'] for a in assignments if a.get('returned_date') is None}
+    return [
+        d for d in inventory
+        if d.get('removal_date') is None
+        and not d.get('clinic_only', False)
+        and d['id'] not in assigned_ids
+    ]
+
+
+def write_device_log(hospital_folder: str, device_id: str, user_id: str,
+                     session_id: int, action: str) -> None:
+    """Append an entry to devices/logs/<device_id>.log, creating it if needed."""
+    logs_dir = _devices_path(hospital_folder) / 'logs'
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f'{device_id}.log'
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}\n'
+    is_new = not log_path.exists()
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            if is_new:
+                f.write(f':Location: {hospital_folder.capitalize()}\n')
+                f.write(f':DeviceId: {device_id}\n')
+            f.write(line)
+    except Exception as e:
+        print(f'Warning: could not write device log: {e}')
+
+
 def create_patient_folders(hospital_folder: str, patient_id: str, group: str) -> None:
     """Create the standard subfolder structure for a new patient."""
     base = get_patients_path(hospital_folder) / patient_id

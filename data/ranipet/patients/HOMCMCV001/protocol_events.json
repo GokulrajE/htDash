@@ -1,13 +1,6 @@
 {
   "incomplete": [
     {
-      "id": "5b63e5fd-2ec9-4d65-aabf-d897b774f0b7",
-      "protocol_event_id": "exp_device_install",
-      "scheduled_date": "2026-03-25T16:48",
-      "flagged": false,
-      "notes": ""
-    },
-    {
       "id": "903afa12-8cd4-4bc9-b690-5039bd0c3d15",
       "protocol_event_id": "activation",
       "scheduled_date": "2026-03-25T16:48",
@@ -71,7 +64,21 @@
       "notes": ""
     }
   ],
-  "complete": [],
+  "complete": [
+    {
+      "id": "5b63e5fd-2ec9-4d65-aabf-d897b774f0b7",
+      "protocol_event_id": "exp_device_install",
+      "scheduled_date": "2026-03-25T16:48",
+      "flagged": false,
+      "notes": "All done setting up. Everything went veryh well.",
+      "completion_date": "2026-03-20T21:16",
+      "filed_at": "2026-03-20 21:17:25",
+      "pluto_id": "RPLUTO002",
+      "mars_id": "RMARS002",
+      "demo_done": true,
+      "attachments": []
+    }
+  ],
   "free": {
     "adverse_event": [],
     "patient_call": [],

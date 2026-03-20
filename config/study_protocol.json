@@ -9,7 +9,7 @@
   ],
   "control": [],
   "shared": [
-    { "id": "activation",              "name": "Patient Activation",          "type": "strict",        "reference": "assignment", "is_master": true,  "window": { "start_day":   0, "end_day":   5 }, "repeatable": false },
+    { "id": "activation",              "name": "Patient Activation",          "type": "strict",        "reference": "assignment", "is_master": true,  "window": { "start_day":   0, "end_day":   5 }, "repeatable": false, "depends_on": ["exp_device_install"] },
     { "id": "home_visit_d02",          "name": "Initial Home Visit Day 02",   "type": "point_in_time", "reference": "activation", "is_master": false, "window": { "start_day":   2, "end_day":   2 }, "repeatable": false },
     { "id": "home_visit_d03",          "name": "Initial Home Visit Day 03",   "type": "point_in_time", "reference": "activation", "is_master": false, "window": { "start_day":   3, "end_day":   3 }, "repeatable": false },
     { "id": "followup_call_d07",       "name": "Follow-up Phone Call Day 07", "type": "point_in_time", "reference": "activation", "is_master": false, "window": { "start_day":   7, "end_day":   7 }, "repeatable": false },

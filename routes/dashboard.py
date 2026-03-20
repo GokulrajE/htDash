@@ -68,10 +68,12 @@ def events():
                 continue
             diff = (sched_date - today).days
             record = {
-                'homer_id':       homer_id,
-                'event_name':     event_names.get(entry['protocol_event_id'], entry['protocol_event_id']),
-                'scheduled_date': sched,
-                'days':           diff,
+                'id':                entry['id'],
+                'protocol_event_id': entry['protocol_event_id'],
+                'homer_id':          homer_id,
+                'event_name':        event_names.get(entry['protocol_event_id'], entry['protocol_event_id']),
+                'scheduled_date':    sched,
+                'days':              diff,
             }
             if diff < 0:
                 overdue.append(record)

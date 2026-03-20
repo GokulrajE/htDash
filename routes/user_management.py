@@ -3,6 +3,7 @@ from utils.data_access import (
     get_patients_for_user, derive_status, get_hospital_folder, find_patient_folder,
     read_patient_meta, write_patient_meta, create_patient_folders, generate_homer_id,
     create_patient_log, write_patient_log,
+    get_available_devices, read_device_assignments, write_device_assignments, write_device_log,
 )
 from utils.protocol_events import (
     create_protocol_events, populate_activation_dates,
@@ -64,15 +65,20 @@ def api_patient_events(homer_id):
         return jsonify({'error': 'Patient not found'}), 404
 
     protocol = load_study_protocol()
-    event_names = {}
+    event_defs = {}
     for section in ('experimental', 'control', 'shared'):
         for e in protocol.get(section, []):
-            event_names[e['id']] = e['name']
-    event_names['training_pause_followup'] = 'Training Pause Follow-up'
+            event_defs[e['id']] = e
+    event_defs['training_pause_followup'] = {'name': 'Training Pause Follow-up', 'depends_on': []}
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
         return jsonify({'overdue': [], 'upcoming': []})
+
+    # Build set of completed event IDs for dependency checking
+    completed_ids = {e['protocol_event_id'] for e in events_data.get('complete', [])}
+    # Build set of all known event IDs (incomplete + complete) — only these can block
+    known_ids = completed_ids | {e['protocol_event_id'] for e in events_data.get('incomplete', [])}
 
     today = datetime.now().date()
     overdue  = []
@@ -87,10 +93,21 @@ def api_patient_events(homer_id):
         except Exception:
             continue
         diff = (sched_date - today).days
+
+        # Compute blocked_by: depends_on entries that are applicable and not yet complete
+        dep_ids = event_defs.get(entry['protocol_event_id'], {}).get('depends_on') or []
+        blocked_by = [
+            event_defs[d]['name'] for d in dep_ids
+            if d in known_ids and d not in completed_ids
+        ]
+
         record = {
-            'event_name':     event_names.get(entry['protocol_event_id'], entry['protocol_event_id']),
-            'scheduled_date': sched,
-            'days':           diff,
+            'id':                entry['id'],
+            'protocol_event_id': entry['protocol_event_id'],
+            'event_name':        event_defs.get(entry['protocol_event_id'], {}).get('name', entry['protocol_event_id']),
+            'scheduled_date':    sched,
+            'days':              diff,
+            'blocked_by':        blocked_by,
         }
         if diff < 0:
             overdue.append(record)
@@ -100,6 +117,102 @@ def api_patient_events(homer_id):
     overdue.sort(key=lambda x: x['scheduled_date'])
     upcoming.sort(key=lambda x: x['scheduled_date'])
     return jsonify({'overdue': overdue, 'upcoming': upcoming})
+
+
+@bp.route('/api/patients/<homer_id>/available-devices', methods=['GET'])
+def api_available_devices(homer_id):
+    """Return available (active, non-clinic, unassigned) Pluto and Mars devices."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+    return jsonify({
+        'pluto': get_available_devices(folder, 'pluto'),
+        'mars':  get_available_devices(folder, 'mars'),
+    })
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/exp_device_install', methods=['POST'])
+def api_complete_device_install(homer_id):
+    """Complete the exp_device_install protocol event."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    data = request.get_json() or {}
+    event_id   = data.get('event_id')
+    event_date = data.get('eventDate', '').strip()
+    pluto_id   = data.get('plutoId', '').strip()
+    mars_id    = data.get('marsId', '').strip()
+    demo_done  = bool(data.get('demoDone', False))
+    notes      = data.get('notes', '').strip()
+
+    if not event_date:
+        return jsonify({'error': 'Event date is required.'}), 400
+    if not pluto_id:
+        return jsonify({'error': 'Pluto device is required.'}), 400
+    if not mars_id:
+        return jsonify({'error': 'Mars device is required.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    # Find the matching incomplete entry
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == 'exp_device_install'
+         and (event_id is None or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Event not found in incomplete list.'}), 404
+
+    filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    complete_entry = {
+        **entry,
+        'completion_date': event_date,
+        'filed_at':        filed_at,
+        'pluto_id':        pluto_id,
+        'mars_id':         mars_id,
+        'demo_done':       demo_done,
+        'notes':           notes,
+        'attachments':     [],
+    }
+
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    # Record device assignments
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    for device_type, device_id in (('pluto', pluto_id), ('mars', mars_id)):
+        assignments = read_device_assignments(folder, device_type)
+        assignments.append({
+            'id':            str(uuid.uuid4()),
+            'device_id':     device_id,
+            'homer_id':      homer_id,
+            'assigned_date': event_date,
+            'returned_date': None,
+            'assigned_by':   loginid,
+            'notes':         notes,
+        })
+        write_device_assignments(folder, device_type, assignments)
+        write_device_log(folder, device_id, loginid, session_id,
+                         f'Assigned to {homer_id}')
+
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      f'Device setup completed — Pluto: {pluto_id}, Mars: {mars_id}')
+
+    return jsonify({'ok': True})
 
 
 @bp.route('/api/patients', methods=['GET'])
@@ -286,6 +399,25 @@ def api_activate_patient(homer_id):
         return jsonify({'error': 'Patient not found'}), 404
     if derive_status(patient) != 'inactive':
         return jsonify({'error': 'Patient must be inactive to activate'}), 409
+
+    # Check depends_on prerequisites for activation
+    protocol = load_study_protocol()
+    activation_def = next(
+        (e for section in ('shared', 'experimental', 'control')
+         for e in protocol.get(section, []) if e['id'] == 'activation'),
+        None
+    )
+    dep_ids = (activation_def or {}).get('depends_on') or []
+    if dep_ids:
+        events_data = read_protocol_events(folder, homer_id)
+        completed_ids = {e['protocol_event_id'] for e in (events_data or {}).get('complete', [])}
+        known_ids = completed_ids | {e['protocol_event_id'] for e in (events_data or {}).get('incomplete', [])}
+        blocking = [d for d in dep_ids if d in known_ids and d not in completed_ids]
+        if blocking:
+            event_names = {e['id']: e['name'] for section in ('shared', 'experimental', 'control') for e in protocol.get(section, [])}
+            names = ', '.join(event_names.get(d, d) for d in blocking)
+            return jsonify({'error': f'Cannot activate: complete these first — {names}'}), 409
+
     patient['activationDate'] = activation_date
     write_patient_meta(folder, homer_id, patient)
 

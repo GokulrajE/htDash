@@ -5,6 +5,7 @@
 
 let patientData = null;
 let isAdmin = false;
+let eventsCache = [];
 
 // ── Status helpers ────────────────────────────────────────────────────────────
 
@@ -286,6 +287,7 @@ async function loadPatientEvents() {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/events`);
     if (!res.ok) throw new Error('Failed to load events');
     const { overdue, upcoming } = await res.json();
+    eventsCache = [...overdue, ...upcoming];
 
     document.getElementById('patient-overdue-count').textContent  = overdue.length;
     document.getElementById('patient-upcoming-count').textContent = upcoming.length;
@@ -301,6 +303,11 @@ async function loadPatientEvents() {
   }
 }
 
+// Map protocol_event_id → opener function name
+const EVENT_OPENERS = {
+  exp_device_install: (ev) => openDeviceSetupModal(ev.id),
+};
+
 function patientEventRow(ev) {
   const d = new Date(ev.scheduled_date);
   const dateStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
@@ -315,18 +322,85 @@ function patientEventRow(ev) {
                   : 'border-slate-100 bg-slate-50';
   const textColor = isOverdue || ev.days === 0 ? 'text-red-600'
                   : ev.days <= 2 ? 'text-orange-600' : 'text-slate-500';
+
+  const blocked   = ev.blocked_by && ev.blocked_by.length > 0;
+  const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
+  const clickable = hasOpener && !blocked;
+  const tag       = clickable ? 'a' : 'div';
+  const href      = clickable ? `href="?action=${ev.id}"` : '';
+  const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
+  const subtitle  = blocked
+    ? `<div class="text-xs text-slate-400 mt-0.5 flex items-center gap-1"><i class="fas fa-lock text-[10px]"></i>Complete ${ev.blocked_by[0]} first</div>`
+    : `<div class="text-xs text-slate-500 mt-0.5">${dateStr}</div>`;
+
   return `
-    <div class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3">
+    <${tag} ${href} class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} ${extra} gap-3">
       <div class="min-w-0">
         <div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>
-        <div class="text-xs text-slate-500 mt-0.5">${dateStr}</div>
+        ${subtitle}
       </div>
       <span class="text-xs font-semibold ${textColor} whitespace-nowrap flex-shrink-0">${whenLabel}</span>
-    </div>`;
+    </${tag}>`;
 }
+
 
 function emptyEventState(icon, colorClass, msg) {
   return `<div class="flex flex-col items-center justify-center py-6 ${colorClass}"><i class="fas fa-${icon} text-xl mb-1.5"></i><p class="text-xs">${msg}</p></div>`;
+}
+
+// ── Device setup modal ────────────────────────────────────────────────────────
+
+let _deviceSetupEventId = null;
+
+async function openDeviceSetupModal(ev) {
+  _deviceSetupEventId = typeof ev === 'object' ? ev.id : ev;
+  document.getElementById('device-setup-homer-id').textContent = PATIENT_HOMER_ID;
+  document.getElementById('device-setup-date').value = '';
+  document.getElementById('device-setup-demo').checked = false;
+  document.getElementById('device-setup-notes').value = '';
+  setError('device-setup-error', '');
+
+  const plutoSel = document.getElementById('device-setup-pluto');
+  const marsSel  = document.getElementById('device-setup-mars');
+  plutoSel.innerHTML = '<option value="">Loading…</option>';
+  marsSel.innerHTML  = '<option value="">Loading…</option>';
+  showModal('device-setup-modal');
+
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
+    const { pluto, mars } = await res.json();
+    plutoSel.innerHTML = '<option value="">Select Pluto device…</option>' +
+      pluto.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    marsSel.innerHTML  = '<option value="">Select Mars device…</option>' +
+      mars.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    if (!pluto.length) plutoSel.innerHTML = '<option value="">No devices available</option>';
+    if (!mars.length)  marsSel.innerHTML  = '<option value="">No devices available</option>';
+  } catch (e) {
+    setError('device-setup-error', 'Failed to load available devices.');
+  }
+}
+
+async function submitDeviceSetup() {
+  const eventDate = document.getElementById('device-setup-date').value;
+  const plutoId   = document.getElementById('device-setup-pluto').value;
+  const marsId    = document.getElementById('device-setup-mars').value;
+  const demoDone  = document.getElementById('device-setup-demo').checked;
+  const notes     = document.getElementById('device-setup-notes').value;
+
+  if (!eventDate) { setError('device-setup-error', 'Please select an event date.'); return; }
+  if (!plutoId)   { setError('device-setup-error', 'Please select a Pluto device.'); return; }
+  if (!marsId)    { setError('device-setup-error', 'Please select a Mars device.'); return; }
+
+  setLoading('device-setup-submit', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/exp_device_install`,
+    { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, demoDone, notes }
+  );
+  setLoading('device-setup-submit', false);
+
+  if (!ok) { setError('device-setup-error', data.error || 'Failed to complete device setup.'); return; }
+  hideModal('device-setup-modal');
+  loadPatientEvents();
 }
 
 // ── Load patient ──────────────────────────────────────────────────────────────
@@ -359,13 +433,23 @@ async function loadPrivilege() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Store submit button labels for loading state
-  ['activate-submit', 'complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit'].forEach(id => {
+  ['activate-submit', 'complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit', 'device-setup-submit'].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.dataset.label = btn.textContent;
   });
 
   await loadPrivilege();
   await loadPatient();
-  loadPatientEvents();
+  await loadPatientEvents();
   switchTab('overview');
+
+  // Auto-open modal if ?action=<event_id> is in the URL
+  const actionId = new URLSearchParams(window.location.search).get('action');
+  if (actionId) {
+    const ev = eventsCache.find(e => e.id === actionId);
+    if (ev) {
+      const opener = EVENT_OPENERS[ev.protocol_event_id];
+      if (opener) opener(ev);
+    }
+  }
 });
