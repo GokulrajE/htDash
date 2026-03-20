@@ -1,0 +1,82 @@
+{
+  "incomplete": [
+    {
+      "id": "5b63e5fd-2ec9-4d65-aabf-d897b774f0b7",
+      "protocol_event_id": "exp_device_install",
+      "scheduled_date": "2026-03-25T16:48",
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "903afa12-8cd4-4bc9-b690-5039bd0c3d15",
+      "protocol_event_id": "activation",
+      "scheduled_date": "2026-03-25T16:48",
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "03428323-6a58-4fc1-859d-c5f66e2f477c",
+      "protocol_event_id": "home_visit_d02",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "b8c9c25d-856e-47f0-8d78-bf93d47107b8",
+      "protocol_event_id": "home_visit_d03",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "775a76b9-0cd1-4d41-a6e0-1cca02fa4a58",
+      "protocol_event_id": "followup_call_d07",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "6794260c-c5e0-468e-8596-b7c9e51da138",
+      "protocol_event_id": "home_visit_d15",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "43be3eae-2ae1-4f29-b534-44b61ea5cc28",
+      "protocol_event_id": "followup_call_d21",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "63edf81a-c892-43c0-b133-2488b4c9cdb3",
+      "protocol_event_id": "training_completion_d29",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "40622eb4-c70e-49a7-a012-23340ec10f45",
+      "protocol_event_id": "a1_assessment",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "7eabbb3a-3f17-457d-91c2-dca2d949752c",
+      "protocol_event_id": "a2_assessment",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    }
+  ],
+  "complete": [],
+  "free": {
+    "adverse_event": [],
+    "patient_call": [],
+    "pre_discontinuation": null,
+    "discontinuation": null,
+    "technical_fault": []
+  }
+}

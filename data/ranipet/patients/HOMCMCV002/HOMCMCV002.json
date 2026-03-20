@@ -1,0 +1,19 @@
+{
+  "homerID": "HOMCMCV002",
+  "hospitalID": "3344556F",
+  "group": "control",
+  "trainingSide": "Left",
+  "enrollDate": "2026-03-20T16:59",
+  "activationDate": null,
+  "discontinuationDate": null,
+  "trainingCompletionDate": null,
+  "a0CompletionDate": "2026-03-19T16:59",
+  "a1CompletionDate": null,
+  "a2CompletionDate": null,
+  "trainingPausedDate": null,
+  "cumulativePauseDays": 0,
+  "plutoPauseDate": null,
+  "marsPauseDate": null,
+  "cumulativePlutoPauseDays": 0,
+  "cumulativeMarsPauseDays": 0
+}

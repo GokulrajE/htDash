@@ -1,0 +1,74 @@
+{
+  "incomplete": [
+    {
+      "id": "8cd028ae-390f-435c-9e71-23d449abccbd",
+      "protocol_event_id": "activation",
+      "scheduled_date": "2026-03-24T16:59",
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "e28ef8bc-214c-4cab-8f4c-8d9e0aecca4f",
+      "protocol_event_id": "home_visit_d02",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "2694cb57-f259-4840-9631-9b05f31ca3ec",
+      "protocol_event_id": "home_visit_d03",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "83e3438d-c7a2-435b-b511-7488d5664406",
+      "protocol_event_id": "followup_call_d07",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "db2c0df7-46bf-4aa7-b89b-40893d8f2da2",
+      "protocol_event_id": "home_visit_d15",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "e98295ba-af10-45fa-9144-24c9baf90372",
+      "protocol_event_id": "followup_call_d21",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "158d45f5-394b-4147-bba3-b8caeadfe80c",
+      "protocol_event_id": "training_completion_d29",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "c2b1435e-bbdc-41d8-bb62-7bbfc040df8f",
+      "protocol_event_id": "a1_assessment",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "dee23162-6484-4de7-af22-17f0a2bbdbff",
+      "protocol_event_id": "a2_assessment",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    }
+  ],
+  "complete": [],
+  "free": {
+    "adverse_event": [],
+    "patient_call": [],
+    "pre_discontinuation": null,
+    "discontinuation": null
+  }
+}

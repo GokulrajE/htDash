@@ -18,9 +18,28 @@ Access control:
 
 import json
 import os
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional
 from config import Config
+
+_PROTOCOL_PATH = Path(__file__).parent.parent / 'config' / 'study_protocol.json'
+_protocol_cache: dict = {}
+
+
+def _load_protocol() -> dict:
+    global _protocol_cache
+    if not _protocol_cache:
+        try:
+            with open(_PROTOCOL_PATH, encoding='utf-8') as f:
+                _protocol_cache = json.load(f)
+        except Exception:
+            _protocol_cache = {'config': {}, 'shared': [], 'experimental': [], 'control': []}
+    return _protocol_cache
+
+
+def _protocol_config() -> dict:
+    return _load_protocol().get('config', {})
 
 
 def derive_status(patient: dict) -> str:
@@ -31,13 +50,53 @@ def derive_status(patient: dict) -> str:
     training    = patient.get('trainingCompletionDate')
     a1          = patient.get('a1CompletionDate')
     a2          = patient.get('a2CompletionDate')
+    a0          = patient.get('a0CompletionDate')
 
     if not group:
         return 'pre_discontinued' if discontinue else 'unassigned'
     if discontinue:
         return 'discontinued'
+
     if not activation:
+        # Check if activation window has been missed → broken_protocol
+        if a0:
+            protocol = _load_protocol()
+            activation_event = next(
+                (e for e in protocol.get('shared', []) if e.get('id') == 'activation'), None
+            )
+            end_day = activation_event['window']['end_day'] if activation_event else 5
+            try:
+                a0_date = datetime.fromisoformat(a0).date()
+                if date.today() > a0_date + timedelta(days=end_day):
+                    return 'broken_protocol'
+            except Exception:
+                pass
         return 'inactive'
+
+    cfg = _protocol_config()
+
+    if group == 'experimental':
+        pluto_days = patient.get('cumulativePlutoPauseDays') or 0
+        mars_days  = patient.get('cumulativeMarsPauseDays') or 0
+        max_device = cfg.get('max_cumulative_device_pause_days', 5)
+        if pluto_days > max_device or mars_days > max_device:
+            return 'broken_protocol'
+
+        pluto_paused = patient.get('plutoPauseDate')
+        mars_paused  = patient.get('marsPauseDate')
+        if pluto_paused and mars_paused:
+            return 'paused'
+        if pluto_paused or mars_paused:
+            return 'active_partial'
+
+    else:  # control
+        cum_pause = patient.get('cumulativePauseDays') or 0
+        max_pause = cfg.get('max_cumulative_pause_days', 5)
+        if cum_pause > max_pause:
+            return 'broken_protocol'
+        if patient.get('trainingPausedDate'):
+            return 'paused'
+
     if a2:
         return 'all_completed'
     if a1:
@@ -85,6 +144,35 @@ def get_all_patients(hospital_folder: str) -> list:
         if meta:
             patients.append(meta)
     return patients
+
+
+def find_patient_folder(login_place: str, homer_id: str) -> Optional[str]:
+    """Return the hospital folder that contains homer_id, or None if not found."""
+    folder = get_hospital_folder(login_place)
+    if folder:
+        return folder if read_patient_meta(folder, homer_id) else None
+    # Admin: search all hospitals
+    for f in Config.HOSPITALS:
+        if read_patient_meta(f, homer_id):
+            return f
+    return None
+
+
+def iter_patients_with_folder(login_place: str):
+    """Yield (hospital_folder, homer_id, patient_meta) for all visible patients."""
+    if login_place == Config.ADMIN_LOGIN:
+        for folder in Config.HOSPITALS:
+            for pid in list_patient_ids(folder):
+                meta = read_patient_meta(folder, pid)
+                if meta:
+                    yield folder, pid, meta
+    else:
+        folder = get_hospital_folder(login_place)
+        if folder:
+            for pid in list_patient_ids(folder):
+                meta = read_patient_meta(folder, pid)
+                if meta:
+                    yield folder, pid, meta
 
 
 def get_patients_for_user(login_place: str) -> list:
@@ -145,7 +233,6 @@ def open_session(hospital_folder: str, user_id: str) -> int:
     """Write a new session row to dashboard/<user_id>.csv on login.
     Returns the new session_id.
     """
-    from datetime import datetime
     dashboard_dir = _dashboard_path(hospital_folder)
     dashboard_dir.mkdir(parents=True, exist_ok=True)
     csv_path = dashboard_dir / f'{_safe_id(user_id)}.csv'
@@ -181,7 +268,6 @@ def open_session(hospital_folder: str, user_id: str) -> int:
 
 def close_session(hospital_folder: str, user_id: str, session_id: int, reason: str) -> None:
     """Update the open session row with logout_time and reason."""
-    from datetime import datetime
     csv_path = _dashboard_path(hospital_folder) / f'{_safe_id(user_id)}.csv'
     if not csv_path.exists():
         return
@@ -195,7 +281,6 @@ def close_session(hospital_folder: str, user_id: str, session_id: int, reason: s
                 parts = line.strip().split(',')
                 if len(parts) >= 4 and parts[0] == str(session_id) and parts[2] == 'null':
                     line = f'{parts[0]},{parts[1]},{logout_time},{reason}\n'
-                # If logout_time already filled, leave the row unchanged (first logout wins)
             updated.append(line)
         tmp_path = csv_path.with_suffix('.tmp')
         with open(tmp_path, 'w', encoding='utf-8') as f:
@@ -223,7 +308,6 @@ def write_patient_log(hospital_folder: str, homer_id: str, user_id: str,
     Format:
         [YYYY-MM-DD HH:MM:SS]   <user_id>    #<session_id>    <action> | <detail_file>
     """
-    from datetime import datetime
     log_path = get_patients_path(hospital_folder) / homer_id / f'{homer_id}.log'
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     detail = f' | {detail_file}' if detail_file else ''
@@ -238,7 +322,7 @@ def write_patient_log(hospital_folder: str, homer_id: str, user_id: str,
 def create_patient_folders(hospital_folder: str, patient_id: str, group: str) -> None:
     """Create the standard subfolder structure for a new patient."""
     base = get_patients_path(hospital_folder) / patient_id
-    common = ['actigraphs', 'adl', 'adverse_events', 'call_logs', 'timeline']
+    common = ['actigraphs', 'adl', 'attachments']
     experimental_only = ['pluto', 'mars']
     control_only = ['vcg_exercise']
 
@@ -250,6 +334,3 @@ def create_patient_folders(hospital_folder: str, patient_id: str, group: str) ->
 
     for folder in folders:
         (base / folder).mkdir(parents=True, exist_ok=True)
-
-    for folder in ['adverse_events', 'call_logs', 'timeline']:
-        (base / folder / 'attachments').mkdir(parents=True, exist_ok=True)

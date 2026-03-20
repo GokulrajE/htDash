@@ -1,6 +1,6 @@
 # htDash — CLAUDE.md
 
-HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managing the HOMER RCT therapy intervention. This document serves as the source of truth for the project context, architecture decisions, and the active refactoring plan to transition from a single-page application (SPA) to a URL-routed multi-page website. 
+HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managing the HOMER RCT therapy intervention. This document serves as the source of truth for the project context, architecture decisions, and the active refactoring plan to transition from a single-page application (SPA) to a URL-routed multi-page website.
 
 ---
 
@@ -76,11 +76,18 @@ data/
 │   │   ├── <user_id2>.csv
 │   │   └── ...
 │   └── devices/
-│       ├── pluto/
-│       ├── mars/
-│       ├── actigraphs/
-│       ├── modems/
-│       └── sims/
+│       ├── inventory/
+│       │   ├── pluto.json
+│       │   ├── mars.json
+│       │   └── agwatch.json
+│       ├── assignments/
+│       │   ├── pluto.json
+│       │   ├── mars.json
+│       │   └── agwatch.json
+│       └── logs/
+│           ├── PLUTO001.log
+│           ├── MARS001.log
+│           └── AGWATCH001.log
 ├── manipal/
 └── ludhiana/
 ```
@@ -94,16 +101,12 @@ Each patient folder contains a JSON metadata file, an activity log, and subfolde
 patients/<homer_id>/
 ├── <homer_id>.json
 ├── <homer_id>.log
+├── protocol_events.json
+├── attachments/
 ├── pluto/
 ├── mars/
 ├── actigraphs/
-├── adl/
-├── adverse_events/
-│   └── attachments/
-├── call_logs/
-│   └── attachments/
-└── timeline/
-    └── attachments/
+└── adl/
 ```
 
 #### Control group
@@ -111,22 +114,20 @@ patients/<homer_id>/
 patients/<homer_id>/
 ├── <homer_id>.json
 ├── <homer_id>.log
+├── protocol_events.json
+├── attachments/
 ├── vcg_exercise/
 ├── actigraphs/
-├── adl/
-├── adverse_events/
-│   └── attachments/
-├── call_logs/
-│   └── attachments/
-└── timeline/
-    └── attachments/
+└── adl/
 ```
 
 #### Populating folders
 The patient folder and all subfolders are created when a new patient is enrolled.
 - `pluto/` and `mars/` — populated by devices uploading directly to S3
 - `actigraphs/` — uploaded periodically by the study engineer
-- `vcg_exercise/`, `adl/`, `adverse_events/`, `call_logs/`, `timeline/` — populated by the therapist via htDash
+- `vcg_exercise/`, `adl/` — populated by the therapist via htDash
+- `protocol_events.json` — created when a patient is assigned to a group (see Protocol Events)
+- `attachments/` — populated whenever an attachment is added to any protocol event
 
 
 #### Patient data file `<homer_id>.json`
@@ -135,36 +136,91 @@ Each patient folder contains a single JSON file named after the patient ID. All 
 
 ```json
 {
-  "homerID":                 "HOMRP001",
-  "hospitalID":              "RP-HS-001",
-  "group":                   "experimental",
-  "trainingSide":            "Right",
-  "enrollDate":              "2024-06-01T08:30:00",
-  "activationDate":          "2024-06-03T09:15:00",
-  "discontinuationDate":     null,
-  "trainingCompletionDate":  null,
-  "a0CompletionDate":        null,
-  "a1CompletionDate":        null,
-  "a2CompletionDate":        null
+  "homerID":                    "HOMRP001",
+  "hospitalID":                 "RP-HS-001",
+  "group":                      "experimental",
+  "trainingSide":               "Right",
+  "enrollDate":                 "2024-06-01T08:30:00",
+  "activationDate":             "2024-06-03T09:15:00",
+  "discontinuationDate":        null,
+  "trainingCompletionDate":     null,
+  "a0CompletionDate":           null,
+  "a1CompletionDate":           null,
+  "a2CompletionDate":           null,
+
+  "trainingPausedDate":         null,
+  "cumulativePauseDays":        0,
+
+  "plutoPauseDate":             null,
+  "marsPauseDate":              null,
+  "cumulativePlutoPauseDays":   0,
+  "cumulativeMarsPauseDays":    0,
+
+  "brokenProtocolDate":         null
 }
 ```
 - `group`: `null` | `"experimental"` | `"control"`
 - `trainingSide`: `"Right"` | `"Left"` | `null` (only set for experimental group)
 - All date fields use ISO 8601 datetime format (`YYYY-MM-DDTHH:MM`). `null` means the event has not occurred.
-- These dates fields cannot exceed the current local time! No future datetimes are allowed.
+- These date fields cannot exceed the current local time — no future datetimes are allowed.
+
+**Control-only pause fields:**
+- `trainingPausedDate` — set when an adverse event causes a full training pause; `null` when not paused.
+- `cumulativePauseDays` — total full-pause days accumulated. Checked against `max_cumulative_pause_days`; if exceeded, `derive_status()` returns `broken_protocol`.
+
+**Experimental-only pause fields:**
+- `plutoPauseDate` — set when Pluto training is paused (adverse event or device fault), regardless of cause; `null` when Pluto is active.
+- `marsPauseDate` — same for Mars.
+- `cumulativePlutoPauseDays` — total days Pluto has been paused. Checked against `max_cumulative_device_pause_days`; if exceeded → `broken_protocol`.
+- `cumulativeMarsPauseDays` — same for Mars.
+
+**Broken protocol detection field:**
+- `brokenProtocolDate` — date when `broken_protocol` was first detected for this patient; set automatically on login (see On-login checks). `null` until first detected. Never cleared once set.
+
+For experimental patients, a full training pause (both devices) is represented by both `plutoPauseDate` and `marsPauseDate` being set — there is no separate `trainingPausedDate`. Control patients do not have per-device fields.
 
 **Derived patient state (never stored):**
 
-| `group` | `activationDate` | `discontinuationDate` | `trainingCompletionDate` | `a0CompletionDate` | `a1CompletionDate` | `a2CompletionDate` | Status               |
-|---------|------------------|-------------------|--------------------------|--------------------|--------------------|--------------------|----------------------|
-| null    | null             | null              | null                     | null               | null               | null               | unassigned           |
-| set     | null             | null              | null                     | set                | null               | null               | inactive             |
-| set     | set              | null              | null                     | set                | null               | null               | active               |
-| set     | set              | null              | set                      | set                | null               | null               | training_completed   |
-| set     | set              | null              | set                      | set                | set                | null               | a1_completed         |
-| set     | set              | null              | set                      | set                | set                | set                | all_completed        |
-| null    | null             | set               | null                     | set                | null               | null               | pre_discontinued     |
-| set     | set              | set               | x                        | x                  | x                  | x                  | discontinued         |
+States common to both groups:
+
+| `group` | `activationDate` | `discontinuationDate` | Other | Status |
+|---------|------------------|-----------------------|-------|--------|
+| null    | null             | null                  | —                           | unassigned        |
+| set     | null             | null                  | today ≤ a0 + 5              | inactive          |
+| set     | null             | null                  | today > a0 + 5              | broken_protocol   |
+| set     | set              | null                  | no pause, no milestones     | active            |
+| set     | set              | null                  | `trainingCompletionDate` set | training_completed |
+| set     | set              | null                  | `a1CompletionDate` set      | a1_completed      |
+| set     | set              | null                  | `a2CompletionDate` set      | all_completed     |
+| null    | null             | set                   | —                           | pre_discontinued  |
+| set     | any              | set                   | —                           | discontinued      |
+
+Additional states for **control** patients:
+
+| `trainingPausedDate` | `cumulativePauseDays` | Status |
+|----------------------|-----------------------|--------|
+| set                  | ≤ max                 | paused |
+| any                  | > max                 | broken_protocol |
+
+Additional states for **experimental** patients:
+
+| `plutoPauseDate` | `marsPauseDate` | `cumulativePlutoPauseDays` | `cumulativeMarsPauseDays` | Status |
+|-----------------|-----------------|---------------------------|--------------------------|--------|
+| set             | set             | ≤ max                     | ≤ max                    | paused |
+| set             | null            | ≤ max                     | ≤ max                    | active_partial |
+| null            | set             | ≤ max                     | ≤ max                    | active_partial |
+| any             | any             | > max                     | any                      | broken_protocol |
+| any             | any             | any                       | > max                    | broken_protocol |
+
+`broken_protocol` is detected by `derive_status()` using the current date — no stored field changes to trigger it. It can be caused by:
+1. Activation not recorded within 5 days of `a0CompletionDate`
+2. *(control)* `cumulativePauseDays` exceeding `max_cumulative_pause_days`
+3. *(experimental)* `cumulativePlutoPauseDays` or `cumulativeMarsPauseDays` exceeding `max_cumulative_device_pause_days`
+
+**On-login check:** On every successful login, all visible patients are checked. For any patient in `broken_protocol` whose `brokenProtocolDate` is still `null`, the server sets `brokenProtocolDate` to today's date in `homer_id.json` and appends a log entry (`Broken protocol detected`). This provides an audit trail of when the condition was first observed without changing how the status is derived.
+
+`broken_protocol` patients can only be discontinued.
+`active_partial` only applies to experimental patients — control patients have no partial pause state.
 
 
 #### `<homer_id>.log`
@@ -210,15 +266,399 @@ session_id, login_time, logout_time, logout_reason
 
 Sessions closed without detection (browser crash, closed tab, server restart) leave `null` in both fields — this is intentional and honest.
 
-### timeline folder 
-Contains different files corresponding to different events.
-| filename | details |
-|----------|---------|
-| prediscontinuation.json | Details of a pre-discontinuation action |
-| discontinuation.json | Details of the patient discontinuation |
-| protocol_events.json | Details of the protocol triggered events completed for the patient|
+### devices folder
 
-There is an attachment folder where any attachments are stored with the appropriate name with datetime (ISO 8601 format), which must be referended in one of the .json files in the root of this folder. There can be no orphaned attachments in the attachment folder.
+Three subdirectories per site: `inventory/`, `assignments/`, `logs/`.
+
+#### Inventory files — `devices/inventory/<type>.json`
+
+Static files managed externally (not written by htDash). Each file lists all devices of that type ever associated with the site. htDash reads these files but never writes them.
+
+**Schema (same structure for `pluto.json`, `mars.json`, `agwatch.json`):**
+```json
+{
+  "devices": [
+    {
+      "id": "PLUTO001",
+      "serial": "SN-P001",
+      "clinic_only": true,
+      "inclusion_date": "2024-01-01",
+      "removal_date": null
+    },
+    {
+      "id": "PLUTO002",
+      "serial": "SN-P002",
+      "clinic_only": false,
+      "inclusion_date": "2024-01-01",
+      "removal_date": null
+    },
+    {
+      "id": "PLUTO003",
+      "serial": "SN-P003",
+      "clinic_only": false,
+      "inclusion_date": "2024-01-01",
+      "removal_date": "2026-01-15"
+    }
+  ]
+}
+```
+
+- `id` — unique device identifier (e.g. `PLUTO001`, `MARS003`, `AGWATCH002`)
+- `serial` — manufacturer serial number
+- `clinic_only` — `true` if this device is designated for clinic/demo use only and cannot be assigned to a patient. `false` for patient-assignable devices. Not applicable to agwatches (all watches circulate to patients — `clinic_only` is always `false`).
+- `inclusion_date` — date the device was added to the site inventory (ISO 8601 date)
+- `removal_date` — date the device was permanently removed from service (`null` if still active). Set externally; never written by htDash.
+
+**Active devices** = entries where `removal_date` is `null`.
+
+**On-login clinic device check (Pluto and Mars only):**
+- For each device type (Pluto, Mars), at least one active (`removal_date: null`) `clinic_only: true` device must exist in the inventory.
+- If the check fails: site users receive a hard error and cannot proceed; global admin receives a warning but is not blocked.
+- The engineer manages `clinic_only` flags manually in the inventory file — e.g. if the designated clinic device needs to go to a patient temporarily, the engineer sets its `clinic_only` to `false` and sets another device's `clinic_only` to `true`.
+
+#### Assignment files — `devices/assignments/<type>.json`
+
+Written by htDash when a device is assigned to or returned from a patient. Tracks the full assignment history.
+
+**Schema (same structure for `pluto.json`, `mars.json`, `agwatch.json`):**
+```json
+{
+  "assignments": [
+    {
+      "id": "<uuid>",
+      "device_id": "PLUTO002",
+      "homer_id": "HOMCMCV001",
+      "assigned_date": "2026-03-20T09:00",
+      "returned_date": null,
+      "assigned_by": "siva",
+      "notes": ""
+    }
+  ]
+}
+```
+
+- `id` — UUID for this assignment record
+- `device_id` — references a device `id` from the inventory
+- `homer_id` — patient the device is assigned to
+- `assigned_date` — ISO 8601 datetime of assignment
+- `returned_date` — ISO 8601 datetime when device was returned (`null` if currently assigned)
+- `assigned_by` — `loginid` of the user who performed the assignment
+- `notes` — free text
+
+**Currently assigned** = entries where `returned_date` is `null`. A device should have at most one open assignment at a time. Clinic-only devices (`clinic_only: true` in inventory) cannot appear in the assignments file.
+
+For agwatches, assignment records are created at each `watch_record` protocol event completion rather than as standalone actions.
+
+#### Device log files — `devices/logs/<device_id>.log`
+
+One log file per device, created when the device is first assigned. Records every assignment and return event for that device, in append-only format.
+
+```
+:Location: Ranipet
+:DeviceId: PLUTO002
+[2026-03-20 09:00:00]   siva             #3    Assigned to HOMCMCV001
+[2026-03-25 11:30:00]   siva             #5    Returned from HOMCMCV001
+```
+
+Format mirrors the patient log: `[timestamp]   <user_id>   #<session_id>   <action>`.
+
+### `protocol_events.json`
+
+Sits directly in the patient root alongside `<homer_id>.json`. All clinical events — scheduled checkpoints, assessments, adverse events, calls, watch records, pre-discontinuation, and discontinuation — are recorded here. Created at group assignment so that pre-activation events (activation itself, device installation) appear as reminders immediately.
+
+### attachments folder
+
+A flat folder at the patient root holding all attachments for any protocol event. Filename convention:
+
+```
+<protocol_event_id>_<ISO8601_datetime>_<description>.<ext>
+```
+
+The `ISO8601_datetime` in the filename is the `completion_date` of the event (the user-entered event date), not the server filing time.
+
+Examples:
+```
+adverse_event_2026-04-18T10:30_report.pdf
+patient_call_2026-04-18T14:00_notes.pdf
+a1_assessment_2026-05-20T09:00_scoresheet.pdf
+watch_record_2026-04-25T11:15_photo.jpg
+```
+
+Every file in `attachments/` must be referenced in `protocol_events.json`. Files not referenced by any event are orphans and must not exist.
+
+---
+
+### Protocol Events
+
+#### Protocol definition — `config/study_protocol.json`
+
+A static configuration file checked into the repo. Defines all protocol events for each group and study-level configuration constants. Never written to at runtime — only updated when the study protocol changes.
+
+**Top-level structure:**
+```json
+{
+  "config": {
+    "max_cumulative_pause_days":        5,
+    "max_cumulative_device_pause_days": 5
+  },
+  "experimental": [...],
+  "control": [...],
+  "shared": [...]
+}
+```
+
+- `max_cumulative_pause_days` — *(control)* cumulative full-pause threshold. If `cumulativePauseDays` exceeds this, `derive_status()` returns `broken_protocol`.
+- `max_cumulative_device_pause_days` — *(experimental)* per-device pause threshold. If either `cumulativePlutoPauseDays` or `cumulativeMarsPauseDays` exceeds this, `derive_status()` returns `broken_protocol`.
+
+Each event definition:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique identifier, used as `protocol_event_id` in patient records |
+| `name` | string | Human-readable event name |
+| `type` | string | One of `strict`, `point_in_time`, `windowed`, `anytime`, `chained` |
+| `window` | object or null | `{ "start_day": N, "end_day": N }` relative to the `reference` date; `null` for `anytime` and `chained` |
+| `reference` | string or null | `"assignment"` (days from `a0CompletionDate`) or `"activation"` (days from `activationDate`); `null` for `anytime` and `chained` |
+| `is_master` | bool | If `true`, completing this event sets the reference point for all `reference: "activation"` events. Currently only the `activation` event is master. `strict` and `is_master` are independent properties. |
+| `repeatable` | bool | Whether multiple instances of this event can exist for one patient |
+
+**Event types:**
+
+| `type` | `window` | Behaviour |
+|--------|----------|-----------|
+| `strict` | `{ start_day: N, end_day: N }` | Must be completed within window relative to `reference` date. If today exceeds `reference + end_day` and the event is still incomplete, `derive_status()` returns `broken_protocol`. |
+| `point_in_time` | `{ start_day: N, end_day: N }` | Single scheduled day relative to `reference` date. Accepted at any time but flagged if recorded outside the window. |
+| `windowed` | `{ start_day: M, end_day: N }` | Acceptable date range relative to `reference` date. Accepted at any time but flagged if recorded outside the range. |
+| `anytime` | `null` | No scheduled date. Lives in `free`. Never flagged. |
+| `chained` | `null` | User-driven recurring event. First occurrence is seeded on the activation day (`scheduled_date = activationDate`). Each completion requires the user to enter the number of days until the next occurrence, creating a new `incomplete` entry. Lives in `incomplete`/`complete`. Currently only `watch_record` is chained — it replaces separate actigraph setup and watch swap events. |
+
+A `point_in_time` or `windowed` event recorded outside its window is accepted but automatically flagged (`"flagged": true`). `strict` events that miss their window change patient state instead.
+
+Events in `"shared"` apply to both groups.
+
+#### Patient event record — `protocol_events.json`
+
+Created when a patient is assigned to a group. Has three top-level keys: `incomplete`, `complete`, and `free`.
+
+```
+incomplete  — scheduled events not yet done (strict, point_in_time, windowed, watch_record chain,
+              training_pause_followup chain)
+complete    — scheduled events that have been completed
+free        — unscheduled events with no fixed date (adverse_event, technical_fault [experimental],
+              patient_call, pre_discontinuation, discontinuation)
+```
+
+**On group assignment**, `incomplete` is pre-populated with all timed events (`strict`, `point_in_time`, `windowed`) from `study_protocol.json` for that group plus `shared`. Events with `reference: "assignment"` (e.g. `activation`, `exp_d0_device_install`) get their `scheduled_date` computed immediately as `a0CompletionDate + start_day`. Events with `reference: "activation"` are included as placeholders with `scheduled_date: null` — their dates are computed when the master event (`activation`) is completed. `complete` starts empty. `free` starts with all keys at zero state.
+
+**On activation**, all `reference: "activation"` entries in `incomplete` have their `scheduled_date` computed as `activationDate + start_day`. The first `watch_record` chained entry is also created with `scheduled_date = activationDate`.
+
+##### `incomplete` and `complete` entries
+
+> **Date comparison convention:** All date comparisons for event-level checks (overdue/upcoming classification, window flagging, `broken_protocol` detection) must compare **date only**, ignoring the time component. Always call `.date()` on any ISO 8601 datetime before comparing. Dates are stored as full ISO 8601 datetimes (`YYYY-MM-DDTHH:MM`) for precision, but time is irrelevant for scheduling logic.
+
+> **Terminology:** `completion_date` is the user-entered date the clinical event occurred. In the UI this is labelled **"Event Date"**. `filed_at` is the server timestamp of when the record was saved — set automatically, never editable.
+
+Each entry shares this base schema:
+
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "<id from study_protocol.json>",
+  "scheduled_date": "YYYY-MM-DDTHH:MM",
+  "flagged": false,
+  "notes": ""
+}
+```
+
+`complete` entries additionally carry:
+```json
+{
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS"
+}
+```
+
+- `scheduled_date` — the deadline date, computed as `reference_date + end_day` for timed events (represents when the event must be done by, not when it opens); `null` for `reference: "activation"` placeholders before activation; `activationDate` for the first `watch_record`; user-specified for subsequent `watch_record` chain entries
+- `completion_date` — user-entered date the event occurred (shown in UI as "Event Date")
+- `filed_at` — server timestamp when the record was written; set automatically
+- `flagged` — set automatically to `true` if `completion_date` falls outside the event's window
+
+**Type-specific extra fields on `complete` entries:**
+
+**Scheduled call events** (`exp_d7_call`, `ctrl_d7_call`, etc.)
+```json
+{ "duration_minutes": null, "summary": "", "attachments": [] }
+```
+
+**`a1_assessment`** / **`a2_assessment`**
+```json
+{ "assessor": "", "attachments": [] }
+```
+
+**`watch_record`** — records an actigraph watch handover for both watches simultaneously. When completed, the user provides the number of days until the next handover, creating a new `watch_record` entry in `incomplete` with `scheduled_date = completion_date + days_until_next`.
+
+Each watch slot tracks `old_id` → `new_id`. The ID transitions across the chain are the sole source of truth for watch data gaps — no separate event is needed.
+
+| `old_id` | `new_id` | Meaning |
+|----------|----------|---------|
+| `"W001"` | `"W002"` | Normal swap |
+| `"W001"` | `"W001"` | Watch continuing unchanged |
+| `"W001"` | `null`   | Watch going missing — data gap starts |
+| `null`   | `"W005"` | Missing watch now replaced — data gap ends |
+| `null`   | `null`   | Watch still missing — gap continues |
+
+The **first** `watch_record` (seeded on activation day) has both `old_id: null` — this is the initial setup, not a data gap.
+
+```json
+{
+  "watch_1": { "old_id": null, "new_id": "" },
+  "watch_2": { "old_id": null, "new_id": "" },
+  "reason": "",
+  "days_until_next": null,
+  "attachments": []
+}
+```
+
+**`training_pause_followup`** — a synthetic event (not defined in `study_protocol.json`) created whenever training is paused, regardless of cause (adverse event or device fault). Links back to the triggering event:
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "training_pause_followup",
+  "triggered_by": "<uuid of adverse_event or technical_fault>",
+  "triggered_by_type": "adverse_event | technical_fault",
+  "pause_scope": "full | pluto | mars",
+  "scheduled_date": "YYYY-MM-DDTHH:MM",
+  "flagged": false,
+  "notes": ""
+}
+```
+- `pause_scope` — which training is paused: `"full"` (all training / both devices), `"pluto"` (Pluto only), `"mars"` (Mars only). Control patients always have `"full"`.
+- `scheduled_date` = `pause_date + allocated_pause_days` for the first link; `completion_date + allocated_pause_days` for each extension.
+
+When a follow-up is completed, extra fields on the `complete` entry:
+```json
+{
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "outcome": "resumed | extended",
+  "pause_days_this_segment": null,
+  "pluto_new_id": null,
+  "mars_new_id":  null
+}
+```
+- `pluto_new_id` — *(experimental, when Pluto was involved)* new device ID if replaced; same as old ID if repaired; `null` if Pluto was not part of this follow-up.
+- `mars_new_id` — same for Mars.
+- Both fields are `null` for control patients (no devices).
+- `outcome: "resumed"`:
+  - *(control full)* → `trainingPausedDate` cleared; `cumulativePauseDays` incremented
+  - *(experimental pluto)* → `plutoPauseDate` cleared; `cumulativePlutoPauseDays` incremented
+  - *(experimental mars)* → `marsPauseDate` cleared; `cumulativeMarsPauseDays` incremented
+  - *(experimental full)* → both cleared; both counters incremented
+  - Patient returns to `active` (or `active_partial` if one device is still paused) if threshold not exceeded
+- `outcome: "extended"` → relevant cumulative counter incremented; if threshold exceeded → `broken_protocol`; otherwise new `training_pause_followup` created in `incomplete`
+
+All other scheduled events (device installation, home visit, etc.) have no extra fields beyond the base schema.
+
+##### `free` entries
+
+```json
+{
+  "adverse_event":      [],
+  "technical_fault":    [],
+  "patient_call":       [],
+  "pre_discontinuation": null,
+  "discontinuation":     null
+}
+```
+
+`adverse_event`, `technical_fault`, and `patient_call` are lists — a new object is appended each time one occurs.
+`pre_discontinuation` and `discontinuation` are single objects (`null` until recorded).
+`technical_fault` is only present for experimental patients.
+
+Each occurrence carries a `completion_date` (user-entered event date, shown in UI as "Event Date"), a `filed_at` (server timestamp when saved), and its type-specific fields:
+
+**`adverse_event`**
+```json
+{
+  "id": "<uuid>",
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "description": "",
+  "action_taken": "",
+  "pause_scope": "none | full | pluto | mars",
+  "pause_date": null,
+  "allocated_pause_days": null,
+  "attachments": []
+}
+```
+- `pause_scope` — `"none"` if no training impact; `"full"` for full pause; `"pluto"` / `"mars"` for partial pause (experimental only). Control patients use only `"none"` or `"full"`.
+- `pause_date` — user-specified date training pauses; written to the relevant pause date field(s) in `homer_id.json`; `null` when `pause_scope` is `"none"`.
+- `allocated_pause_days` — number of pause days for this first segment; determines `scheduled_date` of the first `training_pause_followup`; `null` when `pause_scope` is `"none"`.
+- When `pause_scope` ≠ `"none"`, a `training_pause_followup` entry is created in `incomplete`.
+
+**`technical_fault`** *(experimental only)*
+```json
+{
+  "id": "<uuid>",
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "description": "",
+  "faults": [
+    {
+      "device": "pluto | mars",
+      "fault_description": "",
+      "resolved_same_day": false,
+      "pause_date": null,
+      "allocated_pause_days": null
+    }
+  ],
+  "attachments": []
+}
+```
+- Each entry in `faults` describes one device. A single `technical_fault` can cover both Pluto and Mars simultaneously.
+- `resolved_same_day: true` — device fixed before end of day; no training pause, no follow-up.
+- `resolved_same_day: false` — device not fixed; the relevant `plutoPauseDate`/`marsPauseDate` is set in `homer_id.json`; a single combined `training_pause_followup` is created in `incomplete` covering all affected devices.
+- `pause_date` and `allocated_pause_days` are `null` when `resolved_same_day: true`.
+
+**`patient_call`**
+```json
+{
+  "id": "<uuid>",
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "duration_minutes": null,
+  "summary": "",
+  "attachments": []
+}
+```
+
+**`pre_discontinuation`** / **`discontinuation`**
+```json
+{
+  "id": "<uuid>",
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "reason": "",
+  "attachments": []
+}
+```
+
+> **Note:** `discontinuationDate`, `a1CompletionDate`, and `a2CompletionDate` in `<homer_id>.json` remain the authoritative fields for status derivation. All pause-related fields (`trainingPausedDate`, `cumulativePauseDays`, `plutoPauseDate`, `marsPauseDate`, `cumulativePlutoPauseDays`, `cumulativeMarsPauseDays`) are also kept in `homer_id.json` for fast status derivation without reading `protocol_events.json`. When any of these values change, `homer_id.json` is updated atomically.
+
+> **Incomplete events on `broken_protocol`:** When a patient enters `broken_protocol`, all entries in `incomplete` remain as-is — they are genuinely incomplete and represent the true state of the patient record. `broken_protocol` is a derived status; nothing is auto-closed.
+
+---
+
+## User Permissions and Access
+
+### User types
+1. `admin`
+2. `therapist`
+3. `engineer`
+
+The permissions allowed for each user is defined in the Actions for each pages. If the user type does not appear the action, then they are not allowed to perform that action.
+
+The UI controls corresponding to the actions not allowed for a user will be disabled. They can view the controls but cannot interact with it.
 
 ---
 
@@ -260,19 +700,25 @@ Page-rendering routes live in the same blueprint that owns the domain logic. The
 - Server actions: None
 
 ### `GET /` Page
-- Main dashboard with that display the bubble contains various study level numbers. These are:
+- Main dashboard displaying stat bubbles in two rows (6 per row on large screens). The bubbles, in order, are:
   - Total number of patients enrolled in the study
   - Total number of patients in the experimental group
   - Total number of patients in the control group
   - Total number of patients unassigned to any group
   - Total number of patients who are inactive
+  - Total number of patients who are active
+  - Total number of patients who are active (partial) — experimental only, one device paused
   - Total number of patients who have completed training
-  - Total number of patients who have completed a1 assessment
-  - Total number of patients who have pre-discontinued from the study
+  - Total number of patients who have completed the A1 assessment
+  - Total number of patients with broken protocol
   - Total number of patients who have discontinued from the study
+  - Total number of patients who have completed all assessments
 These numbers are for the study site the person has access to. They cannot see the numbers for the other sites.
 - The numbers for the derived by reading the individual <homer_id>.json files under the patients folder and aggregating the data.
 - There are no other UI elements.
+
+**Timeline Events**
+
 
 #### Actions
 None
@@ -284,39 +730,54 @@ Displays the list of patients for the user's site. Admins see all patients; site
 #### Page elements
 - Search bar (filter by patient ID)
 - Add Patient button (site admin and global admin only)
-- Filter tabs: All, Unassigned, Inactive, Active, Training Complete, A2 Compelte, All Complete, Pre-Discontinued, Discontinued — each showing a count.
+- Filter tabs (in order): All, Unassigned, Inactive, Active, Active (Partial), Paused, Training Complete, A1 Complete, Pre-Discontinued, Broken Protocol, Discontinued, All Complete — each showing a count.
 - "All" filter tab must be selected by default.
 - When any of the filter button is clicked, the corresponding list is shown.
 - Any shown list should be sorted by their `enrollDate`.
-- Each subject "row" should display differnet patients details. The color of the patient's indicates group.
+- Each subject "row" should display different patient details. The color of the patient's row indicates group.
 - A status badge indicates status, which has different colors for different status.
 - Patient list — each row shows: Homer ID, Hospital ID, Group, Training Side, derived Status
 - Clicking a patient navigates to `/patients/<homer_id>`
 
 #### Patient state transitions
 
-| Current state      | Action                        | Field set                              | Next state         | 
-|--------------------|-------------------------------|----------------------------------------|--------------------|
-| unassigned         | Assign group <br>Record a0 date                  | `group` <br>`a0CompletionDate`                               | inactive           |
-| unassigned         | Discontinue (pre-enrolment)   | `discontinuationDate`                  | pre_discontinued   |
-| inactive           | Activate                      | `activationDate` | active             |
-| inactive           | Discontinue                   | `discontinuationDate`                  | discontinued       |
-| active             | Complete training             | `trainingCompletionDate`               | training_completed |
-| active             | Discontinue                   | `discontinuationDate`                  | discontinued       |
-| training_completed | Record a1 date                | `a1CompletionDate`                     | a1_completed       |
-| training_completed | Discontinue                   | `discontinuationDate`                  | discontinued       |
-| a1_completed       | Record a2 date                | `a2CompletionDate`                     | all_completed      |
-| a1_completed       | Discontinue                   | `discontinuationDate`                  | discontinued       |
+| Current state      | Action                                        | Field set                                                      | Next state         |
+|--------------------|-----------------------------------------------|----------------------------------------------------------------|--------------------|
+| unassigned         | Assign group + Record a0 date                 | `group`, `a0CompletionDate`                                    | inactive           |
+| unassigned         | Discontinue (pre-enrolment)                   | `discontinuationDate`                                          | pre_discontinued   |
+| inactive           | Activate                                      | `activationDate`                                               | active             |
+| inactive           | Discontinue                                   | `discontinuationDate`                                          | discontinued       |
+| inactive           | *(today > a0 + 5 days)*                       | *(none — derived)*                                             | broken_protocol    |
+| broken_protocol    | Discontinue                                   | `discontinuationDate`                                          | discontinued       |
+| active             | Complete training                             | `trainingCompletionDate`                                       | training_completed |
+| active             | Discontinue                                   | `discontinuationDate`                                          | discontinued       |
+| active             | Adverse event / fault — full pause            | `trainingPausedDate` *(ctrl)* or both pause dates *(exp)*      | paused             |
+| active             | Adverse event / fault — partial pause *(exp)* | `plutoPauseDate` or `marsPauseDate`                            | active_partial     |
+| active_partial     | Remaining device also paused                  | other pause date set                                           | paused             |
+| active_partial     | Paused device resumed                         | pause date cleared; cumulative counter incremented             | active             |
+| active_partial     | Cumulative device days > max                  | cumulative counter incremented                                 | broken_protocol    |
+| paused             | Resume training (full)                        | pause date(s) cleared; cumulative counter(s) incremented       | active             |
+| paused             | Extend pause (cumulative ≤ max)               | cumulative counter(s) incremented                              | paused             |
+| paused             | Extend pause (cumulative > max)               | cumulative counter(s) incremented                              | broken_protocol    |
+| training_completed | Record a1 date                                | `a1CompletionDate`                                             | a1_completed       |
+| training_completed | Discontinue                                   | `discontinuationDate`                                          | discontinued       |
+| a1_completed       | Record a2 date                                | `a2CompletionDate`                                             | all_completed      |
+| a1_completed       | Discontinue                                   | `discontinuationDate`                                          | discontinued       |
 
 **Notes:**
-- `a0` is a baseline assessment compulsarily recorded during the Activate action. This needs to be done through a datetime selector in the dialog for assigning group.
-- `discontinued` is a terminal state reachable from any non-completed state via `discontinuationDate`.
+- `a0` is a baseline assessment compulsorily recorded during the Assign Group action.
+- `broken_protocol` is a derived state — no stored field changes. Causes: activation delay past a0 + 5 days; cumulative pause days exceeding threshold (control: `cumulativePauseDays`; experimental: either device counter).
+- Training can only be paused after activation.
+- A patient can only have one active pause chain at a time.
+- `active_partial` applies to experimental patients only — one device paused, the other active.
+- Control patients have no `active_partial` state — adverse events either fully pause training or don't affect it; notes capture what exercises were affected.
+- `discontinued` is a terminal state reachable from any non-completed state.
 - `pre_discontinued` and `all_completed` are terminal states.
 
 
 #### Actions
 
-**Add Patient** *(admin only)*
+**Add Patient** *(`admin`)*
 - Trigger: "Add Patient" button in the page header
 - Modal fields:
   - Hospital Patient ID (text input, required)
@@ -325,24 +786,112 @@ Displays the list of patients for the user's site. Admins see all patients; site
 - Server actions:
   - Create `<homer_id>.json`
   - Create `<homer_id>.log` with this entry as the first line
+- Allowed users:
+  - `admin`
 
-**Assign Group** *(admin only, unassigned patients)*
+**Assign Group** *(`admin` | unassigned patients)*
 - Trigger: "Assign" button on patient card
 - Modal fields:
   - Group (Experimental / Control toggle, required)
   - A0 Assessment Date (datetime selector, required)
-- Log message: `Assigned group to <group>`
+- Log message: `Assigned group: <group>`
 - Server actions:
   - Update `<homer_id>.json` with `group` and `a0CompletionDate`
+  - Create `protocol_events.json` with pre-populated `incomplete` entries (reference=assignment events scheduled; reference=activation events as null placeholders)
 
-**Pre-Discontinue** *(admin only, unassigned patients)*
+**Pre-Discontinue** *(`admin`, `therapist` | unassigned patients)*
 - Trigger: "Pre-DC" button on patient card
 - Modal fields:
   - Reason / Comments (textarea, required)
-- Log message: `Pre-discontinued patient : prediscontinuation.json`
+- Log message: `Patient pre-discontinued`
 - Server actions:
-  - Create `prediscontinuation.json` in `timeline/`
+  - Append `pre_discontinuation` record to `protocol_events.json` free section
   - Update `<homer_id>.json` with `discontinuationDate`
+
+
+### `GET /patients/<homer_id>` Page
+
+Displays the details of patients that are `inactive` and beyond, and not `discontinued`. Includes `broken_protocol`, `paused`, and `active_partial` patients.
+
+#### Page elements
+
+- **Back button** in the page header — navigates back to `/patients`
+- **Page title** — Homer ID; subtitle shows the current status badge
+
+- **Tab bar** — horizontal tab strip with JS-driven switching (stays as JS per architecture):
+  | Tab | Shown for |
+  |-----|-----------|
+  | Overview | All |
+  | Devices | All |
+  | ADL | All |
+  | VCG | Control group only |
+  | Timeline | All |
+  | Adverse Events | All |
+  | Call Logs | All |
+
+- **Overview tab** (default active tab) — three sections:
+
+  1. **Patient Info card**
+     - Homer ID
+     - Hospital ID
+     - Group (colour-coded: blue for experimental, teal for control)
+     - Training Side
+     - Status (badge, colour-coded by status)
+     - Enrolment Date
+
+  2. **Key Dates card**
+     - A0 Assessment date
+     - Activation date
+     - Training Completion date
+     - A1 Assessment date
+     - A2 Assessment date
+     - Discontinuation date
+
+  3. **Events panels** — two side-by-side panels below Key Dates, showing incomplete protocol events for this patient:
+     - **Overdue** — events whose `scheduled_date` (deadline) has passed; always shown, colour-coded red
+     - **Upcoming** — all future incomplete events sorted by deadline; colour-coded by urgency (red = today, orange = ≤ 2 days, slate = further)
+     - Event rows are clickable to complete the event if today ≥ the event's window start date (see Event completion below)
+     - Fetched from `GET /api/patients/<homer_id>/events`
+
+- **Stub tabs** — Devices, ADL, VCG, Timeline, Adverse Events, Call Logs each show a "Coming soon" placeholder
+
+#### Actions
+
+**Activate** *(`admin`, `therapist` | `inactive` patients)*
+- Trigger: "Activate" button in the Actions card
+- Modal fields:
+  - Activation Date (datetime selector, required; cannot be in the future)
+- Log message: `Patient activated`
+- Server actions:
+  - Update `<homer_id>.json` with `activationDate`
+  - Compute and fill `scheduled_date` for all `reference: "activation"` entries in `protocol_events.json` incomplete
+  - Create first `watch_record` entry in `incomplete` with `scheduled_date = activationDate`
+
+**Record A1 Assessment** *(admin only, `training_completed` patients)*
+- Trigger: "Record A1" button in the Actions card
+- Modal fields:
+  - A1 Assessment Date (datetime selector, required; cannot be in the future)
+- Log message: `A1 assessment recorded`
+- Server actions:
+  - Update `<homer_id>.json` with `a1CompletionDate`
+
+**Record A2 Assessment** *(admin only, `a1_completed` patients)*
+- Trigger: "Record A2" button in the Actions card
+- Modal fields:
+  - A2 Assessment Date (datetime selector, required; cannot be in the future)
+- Log message: `A2 assessment recorded`
+- Server actions:
+  - Update `<homer_id>.json` with `a2CompletionDate`
+
+**Discontinue** *(admin only, `inactive` / `broken_protocol` / `active` / `paused` / `training_completed` / `a1_completed` patients)*
+- Trigger: "Discontinue" button in the Actions card
+- Modal fields:
+  - Reason / Comments (textarea, required)
+- Log message: `Patient discontinued`
+- Server actions:
+  - Append `discontinuation` record to `protocol_events.json` free section
+  - Update `<homer_id>.json` with `discontinuationDate`
+
 
 ---
 

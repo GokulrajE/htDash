@@ -1,0 +1,9 @@
+{
+  "devices": [
+    { "id": "MAGWATCH001", "serial": "SN-MP-W001", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "MAGWATCH002", "serial": "SN-MP-W002", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "MAGWATCH003", "serial": "SN-MP-W003", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "MAGWATCH004", "serial": "SN-MP-W004", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "MAGWATCH005", "serial": "SN-MP-W005", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null }
+  ]
+}

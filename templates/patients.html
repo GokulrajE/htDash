@@ -47,20 +47,29 @@
     <button data-filter="active"           class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('active')">
       Active <span id="count-active" class="ml-1 text-xs font-bold opacity-70">0</span>
     </button>
+    <button data-filter="active_partial"   class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('active_partial')">
+      Active (Partial) <span id="count-active-partial" class="ml-1 text-xs font-bold opacity-70">0</span>
+    </button>
+    <button data-filter="paused"           class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('paused')">
+      Paused <span id="count-paused" class="ml-1 text-xs font-bold opacity-70">0</span>
+    </button>
     <button data-filter="training_completed" class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('training_completed')">
       Training Complete <span id="count-training-completed" class="ml-1 text-xs font-bold opacity-70">0</span>
     </button>
     <button data-filter="a1_completed"     class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('a1_completed')">
       A1 Complete <span id="count-a1-completed" class="ml-1 text-xs font-bold opacity-70">0</span>
     </button>
-    <button data-filter="all_completed"    class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('all_completed')">
-      All Complete <span id="count-all-completed" class="ml-1 text-xs font-bold opacity-70">0</span>
-    </button>
     <button data-filter="pre_discontinued" class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('pre_discontinued')">
       Pre-Discontinued <span id="count-pre-discontinued" class="ml-1 text-xs font-bold opacity-70">0</span>
     </button>
+    <button data-filter="broken_protocol"  class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('broken_protocol')">
+      Broken Protocol <span id="count-broken-protocol" class="ml-1 text-xs font-bold opacity-70">0</span>
+    </button>
     <button data-filter="discontinued"     class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('discontinued')">
       Discontinued <span id="count-discontinued" class="ml-1 text-xs font-bold opacity-70">0</span>
+    </button>
+    <button data-filter="all_completed"    class="filter-btn px-3 py-1.5 text-sm font-medium rounded-xl border transition-all duration-150" onclick="filterPatients('all_completed')">
+      All Complete <span id="count-all-completed" class="ml-1 text-xs font-bold opacity-70">0</span>
     </button>
   </div>
 

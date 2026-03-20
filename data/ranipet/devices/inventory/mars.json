@@ -1,0 +1,9 @@
+{
+  "devices": [
+    { "id": "RMARS001", "serial": "SN-RP-M001", "clinic_only": true,  "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "RMARS002", "serial": "SN-RP-M002", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "RMARS003", "serial": "SN-RP-M003", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "RMARS004", "serial": "SN-RP-M004", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
+    { "id": "RMARS005", "serial": "SN-RP-M005", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null }
+  ]
+}

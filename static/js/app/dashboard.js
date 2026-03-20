@@ -5,6 +5,7 @@
 
     function initPage() {
       loadDashboard();
+      loadEvents();
     }
 
     // Dashboard Data
@@ -18,13 +19,67 @@
         document.getElementById('stat-control').textContent            = stats.control;
         document.getElementById('stat-unassigned').textContent         = stats.unassigned;
         document.getElementById('stat-inactive').textContent           = stats.inactive;
+        document.getElementById('stat-active').textContent             = stats.active;
+        document.getElementById('stat-active-partial').textContent     = stats.active_partial;
         document.getElementById('stat-training-completed').textContent = stats.training_completed;
         document.getElementById('stat-a1-completed').textContent       = stats.a1_completed;
-        document.getElementById('stat-pre-discontinued').textContent   = stats.pre_discontinued;
+        document.getElementById('stat-all-completed').textContent      = stats.all_completed;
+        document.getElementById('stat-broken-protocol').textContent    = stats.broken_protocol;
         document.getElementById('stat-discontinued').textContent       = stats.discontinued;
       } catch (error) {
         console.error('Error loading dashboard stats:', error);
       }
+    }
+
+    async function loadEvents() {
+      const overdueEl  = document.getElementById('overdue-events');
+      const upcomingEl = document.getElementById('upcoming-events');
+      try {
+        const res = await fetch('/api/dashboard/events');
+        if (!res.ok) throw new Error('Failed to load events');
+        const { overdue, upcoming } = await res.json();
+
+        document.getElementById('overdue-count').textContent  = overdue.length;
+        document.getElementById('upcoming-count').textContent = upcoming.length;
+
+        overdueEl.innerHTML  = overdue.length  ? overdue.map(eventRow).join('')  : emptyState('check-circle', 'text-green-500', 'All clear — no overdue events');
+        upcomingEl.innerHTML = upcoming.length ? upcoming.map(eventRow).join('') : emptyState('calendar-check', 'text-slate-400', 'No events in the next 7 days');
+      } catch (e) {
+        console.error('Error loading events:', e);
+        overdueEl.innerHTML  = '<p class="text-sm text-red-500 text-center py-4">Error loading events</p>';
+        upcomingEl.innerHTML = '<p class="text-sm text-red-500 text-center py-4">Error loading events</p>';
+      }
+    }
+
+    function eventRow(ev) {
+      const d = new Date(ev.scheduled_date);
+      const dateStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+      const isOverdue = ev.days < 0;
+      const abs = Math.abs(ev.days);
+      const whenLabel = ev.days === 0 ? 'Today'
+                      : isOverdue    ? `${abs}d overdue`
+                      : ev.days === 1 ? 'Tomorrow'
+                      : `In ${ev.days} days`;
+      const urgency   = isOverdue ? 'border-red-200 bg-red-50'
+                      : ev.days === 0 ? 'border-red-200 bg-red-50'
+                      : ev.days <= 2  ? 'border-orange-200 bg-orange-50'
+                      : 'border-slate-100 bg-slate-50';
+      const textColor = (isOverdue || ev.days === 0) ? 'text-red-600'
+                      : ev.days <= 2 ? 'text-orange-600' : 'text-slate-500';
+      return `
+        <a href="/patients/${ev.homer_id}" class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 hover:opacity-80 transition-opacity">
+          <div class="min-w-0">
+            <div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>
+            <div class="text-xs text-slate-500 mt-0.5">${ev.homer_id} · ${dateStr}</div>
+          </div>
+          <div class="flex-shrink-0">
+            <span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>
+          </div>
+        </a>`;
+    }
+
+    function emptyState(icon, colorClass, msg) {
+      return `<div class="flex flex-col items-center justify-center py-8 ${colorClass}"><i class="fas fa-${icon} text-2xl mb-2"></i><p class="text-sm">${msg}</p></div>`;
     }
 
     async function loadUpcomingOverdueEvents() {

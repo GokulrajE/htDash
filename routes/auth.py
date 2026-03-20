@@ -4,7 +4,7 @@ import json
 import os
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, date
 from models.user import current_session
 
 bp = Blueprint('auth', __name__)
@@ -70,6 +70,24 @@ def log_user_activity(action, data=None, user_id=None):
         print(f"Error logging user activity: {e}")
 
 
+def _check_broken_protocol_on_login(login_place: str, loginid: str, session_id: int) -> None:
+    """Detect newly-broken patients and stamp brokenProtocolDate + log entry."""
+    try:
+        from utils.data_access import (
+            iter_patients_with_folder, derive_status,
+            write_patient_meta, write_patient_log,
+        )
+        today_str = date.today().isoformat()
+        for hospital_folder, homer_id, patient in iter_patients_with_folder(login_place):
+            if derive_status(patient) == 'broken_protocol' and not patient.get('brokenProtocolDate'):
+                patient['brokenProtocolDate'] = today_str
+                write_patient_meta(hospital_folder, homer_id, patient)
+                write_patient_log(hospital_folder, homer_id, loginid, session_id,
+                                  'Broken protocol detected')
+    except Exception as e:
+        print(f'Warning: broken protocol check failed: {e}')
+
+
 def _check_rate_limit(ip: str) -> bool:
     """Returns True if this IP is currently locked out."""
     now = time.time()
@@ -118,6 +136,7 @@ def validate_login():
             privilege=user_data.get("privilege", "user")
         )
         flask_session['loginid'] = loginid
+        session_id = -1
         try:
             from utils.data_access import open_session, get_hospital_folder
             hospital_folder = get_hospital_folder(user_data['place'])
@@ -126,6 +145,7 @@ def validate_login():
                 flask_session['session_id'] = session_id
         except Exception as e:
             print(f'Warning: could not open session: {e}')
+        _check_broken_protocol_on_login(user_data['place'], loginid, session_id)
         return jsonify({
             "status": "success",
             "loginid": loginid,
