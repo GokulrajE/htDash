@@ -131,8 +131,11 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   | Call Logs     | All                |
 
 - **Overview tab** (default):
-  1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date
-  2. **Key Dates card** — A0, Activation, Training Completion, A1, A2, Discontinuation dates
+  1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date, Pluto ID *(experimental group)*, Mars ID *(experimental group)*, AG Watch Right ID *(both groups)*, AG Watch Left ID *(both groups)*,
+  2. **Key Dates card** — A0, Activation, Training Completion, A1, A2, Discontinuation dates. On the right side of the card header: a large bold number showing days elapsed, with a subtitle label:
+     - Before activation: **"Day N — since recruitment"** (N = today − `a0CompletionDate`)
+     - After activation: **"Day N — since activation"** (N = today − `activationDate`)
+     - Calculated client-side in `patient_detail.js`; not shown for terminal states (discontinued, all_completed)
   3. **Events panels** — Overdue (past deadline, red) and Upcoming (future, urgency-coded) protocol events. Fetched from `GET /api/patients/<homer_id>/events`. Clickable if today ≥ event's window start date.
 
 - **Stub tabs** — Devices, ADL, VCG, Timeline, Adverse Events, Call Logs show "Coming soon"

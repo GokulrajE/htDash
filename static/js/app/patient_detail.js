@@ -137,6 +137,23 @@ function renderOverview(p) {
   set('date-a2',             fmtDate(p.a2CompletionDate));
   set('date-discontinuation',fmtDate(p.discontinuationDate));
 
+  // Days elapsed counter
+  const terminal  = new Set(['discontinued', 'all_completed', 'pre_discontinued']);
+  const daysCard  = document.getElementById('days-card');
+  if (daysCard) {
+    const refDate = !terminal.has(p.status) && p.activationDate;
+    if (refDate) {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const ref   = new Date(refDate); ref.setHours(0,0,0,0);
+      const days  = Math.floor((today - ref) / 86400000) + 1;
+      document.getElementById('days-elapsed-number').textContent = days > 0 ? days : '—';
+      document.getElementById('days-elapsed-label').textContent  = 'Days Since Activation';
+      daysCard.classList.remove('hidden');
+    } else {
+      daysCard.classList.add('hidden');
+    }
+  }
+
   // Show VCG tab for control group only
   const vcgBtn = document.getElementById('tab-btn-vcg');
   if (vcgBtn) vcgBtn.classList.toggle('hidden', p.group !== 'control');

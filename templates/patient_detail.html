@@ -47,66 +47,79 @@
     <!-- ── Overview ────────────────────────────────────────────────────────── -->
     <div id="tab-overview" class="tab-pane space-y-4">
 
-      <!-- Patient info -->
-      <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-        <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Patient Info</h3>
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-5">
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Homer ID</p>
-            <p id="info-homer-id" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Hospital ID</p>
-            <p id="info-hospital-id" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Group</p>
-            <p id="info-group" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Training Side</p>
-            <p id="info-training-side" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Status</p>
-            <p id="info-status" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Enrolment Date</p>
-            <p id="info-enroll-date" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-        </div>
-      </div>
+      <!-- Patient info + Key dates + Days counter -->
+      <div class="grid grid-cols-5 gap-4">
 
-      <!-- Key dates -->
-      <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-        <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Key Dates</h3>
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-5">
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">A0 Assessment</p>
-            <p id="date-a0" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Activation</p>
-            <p id="date-activation" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Training Completion</p>
-            <p id="date-training" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">A1 Assessment</p>
-            <p id="date-a1" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">A2 Assessment</p>
-            <p id="date-a2" class="text-sm font-semibold text-slate-800">—</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-400 font-medium mb-0.5">Discontinuation</p>
-            <p id="date-discontinuation" class="text-sm font-semibold text-slate-800">—</p>
+        <!-- Patient Info -->
+        <div class="col-span-2 bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Patient Info</h3>
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Homer ID</p>
+              <p id="info-homer-id" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Hospital ID</p>
+              <p id="info-hospital-id" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Group</p>
+              <p id="info-group" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Training Side</p>
+              <p id="info-training-side" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Status</p>
+              <p id="info-status" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Enrolment Date</p>
+              <p id="info-enroll-date" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
           </div>
         </div>
+
+        <!-- Key Dates -->
+        <div class="col-span-2 bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Key Dates</h3>
+          <div class="grid grid-cols-3 gap-4">
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">A0 Assessment</p>
+              <p id="date-a0" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Activation</p>
+              <p id="date-activation" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Training Completion</p>
+              <p id="date-training" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">A1 Assessment</p>
+              <p id="date-a1" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">A2 Assessment</p>
+              <p id="date-a2" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 font-medium mb-0.5">Discontinuation</p>
+              <p id="date-discontinuation" class="text-sm font-semibold text-slate-800">—</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Days counter -->
+        <div id="days-card" class="col-span-1 bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col hidden">
+          <h3 id="days-elapsed-label" class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Days Since Recruitment</h3>
+          <div class="flex-1 flex items-center justify-center">
+            <p id="days-elapsed-number" class="text-8xl font-black text-slate-800 leading-none"></p>
+          </div>
+        </div>
+
       </div>
 
       <!-- Overdue & Upcoming events -->
