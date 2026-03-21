@@ -74,28 +74,12 @@ def derive_status(patient: dict) -> str:
         return 'inactive'
 
     cfg = _protocol_config()
-
-    if group == 'experimental':
-        pluto_days = patient.get('cumulativePlutoPauseDays') or 0
-        mars_days  = patient.get('cumulativeMarsPauseDays') or 0
-        max_device = cfg.get('max_cumulative_device_pause_days', 5)
-        if pluto_days > max_device or mars_days > max_device:
-            return 'broken_protocol'
-
-        pluto_paused = patient.get('plutoPauseDate')
-        mars_paused  = patient.get('marsPauseDate')
-        if pluto_paused and mars_paused:
-            return 'paused'
-        if pluto_paused or mars_paused:
-            return 'active_partial'
-
-    else:  # control
-        cum_pause = patient.get('cumulativePauseDays') or 0
-        max_pause = cfg.get('max_cumulative_pause_days', 5)
-        if cum_pause > max_pause:
-            return 'broken_protocol'
-        if patient.get('trainingPausedDate'):
-            return 'paused'
+    cum_pause = patient.get('cumulativePauseDays') or 0
+    max_pause = cfg.get('max_cumulative_pause_days', 10)
+    if cum_pause > max_pause:
+        return 'broken_protocol'
+    if patient.get('trainingPausedDate'):
+        return 'paused'
 
     if a2:
         return 'all_completed'

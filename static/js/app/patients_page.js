@@ -37,11 +37,10 @@ async function loadPatients() {
 
 // Each filter tab maps directly to one status
 const FILTER_STATUS_MAP = {
-  all:               ['unassigned', 'inactive', 'active', 'active_partial', 'paused', 'broken_protocol', 'training_completed', 'a1_completed', 'all_completed', 'pre_discontinued', 'discontinued'],
+  all:               ['unassigned', 'inactive', 'active', 'paused', 'broken_protocol', 'training_completed', 'a1_completed', 'all_completed', 'pre_discontinued', 'discontinued'],
   unassigned:        ['unassigned'],
   inactive:          ['inactive'],
   active:            ['active'],
-  active_partial:    ['active_partial'],
   paused:            ['paused'],
   broken_protocol:   ['broken_protocol'],
   training_completed:['training_completed'],
@@ -52,7 +51,7 @@ const FILTER_STATUS_MAP = {
 };
 
 function updateFilterCounts() {
-  const counts = { all: 0, unassigned: 0, inactive: 0, active: 0, active_partial: 0, paused: 0, broken_protocol: 0, training_completed: 0, a1_completed: 0, all_completed: 0, pre_discontinued: 0, discontinued: 0 };
+  const counts = { all: 0, unassigned: 0, inactive: 0, active: 0, paused: 0, broken_protocol: 0, training_completed: 0, a1_completed: 0, all_completed: 0, pre_discontinued: 0, discontinued: 0 };
   allPatients.forEach(p => {
     counts.all++;
     if (counts[p.status] !== undefined) counts[p.status]++;
@@ -62,7 +61,6 @@ function updateFilterCounts() {
   el('count-unassigned').textContent        = counts.unassigned;
   el('count-inactive').textContent          = counts.inactive;
   el('count-active').textContent            = counts.active;
-  el('count-active-partial').textContent    = counts.active_partial;
   el('count-paused').textContent            = counts.paused;
   el('count-broken-protocol').textContent   = counts.broken_protocol;
   el('count-training-completed').textContent= counts.training_completed;
@@ -87,7 +85,6 @@ function setActiveFilterButton(filter) {
     unassigned:        'bg-gradient-to-r from-slate-500 to-slate-600 text-white border-transparent shadow-md shadow-slate-200',
     inactive:          'bg-gradient-to-r from-orange-500 to-orange-600 text-white border-transparent shadow-md shadow-orange-200',
     active:            'bg-gradient-to-r from-blue-500 to-blue-600 text-white border-transparent shadow-md shadow-blue-200',
-    active_partial:    'bg-gradient-to-r from-sky-500 to-sky-600 text-white border-transparent shadow-md shadow-sky-200',
     paused:            'bg-gradient-to-r from-amber-500 to-amber-600 text-white border-transparent shadow-md shadow-amber-200',
     broken_protocol:   'bg-gradient-to-r from-red-500 to-red-600 text-white border-transparent shadow-md shadow-red-200',
     training_completed:'bg-gradient-to-r from-teal-500 to-teal-600 text-white border-transparent shadow-md shadow-teal-200',

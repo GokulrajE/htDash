@@ -250,10 +250,6 @@ def api_create_patient():
         'a2CompletionDate':           None,
         'trainingPausedDate':         None,
         'cumulativePauseDays':        0,
-        'plutoPauseDate':             None,
-        'marsPauseDate':              None,
-        'cumulativePlutoPauseDays':   0,
-        'cumulativeMarsPauseDays':    0,
     }
     write_patient_meta(folder, homer_id, patient_data)
     create_patient_folders(folder, homer_id, 'unassigned')

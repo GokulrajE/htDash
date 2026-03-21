@@ -13,7 +13,6 @@ const STATUS_LABEL = {
   unassigned:          'Unassigned',
   inactive:            'Inactive',
   active:              'Active',
-  active_partial:      'Active (Partial)',
   paused:              'Paused',
   broken_protocol:     'Broken Protocol',
   training_completed:  'Training Complete',
@@ -27,7 +26,6 @@ const STATUS_CLASS = {
   unassigned:          'bg-slate-100 text-slate-600',
   inactive:            'bg-yellow-100 text-yellow-700',
   active:              'bg-blue-100 text-blue-700',
-  active_partial:      'bg-sky-100 text-sky-700',
   paused:              'bg-amber-100 text-amber-700',
   broken_protocol:     'bg-red-100 text-red-700',
   training_completed:  'bg-teal-100 text-teal-700',
@@ -141,16 +139,19 @@ function renderOverview(p) {
   const terminal  = new Set(['discontinued', 'all_completed', 'pre_discontinued']);
   const daysCard  = document.getElementById('days-card');
   if (daysCard) {
-    const refDate = !terminal.has(p.status) && p.activationDate;
-    if (refDate) {
-      const today = new Date(); today.setHours(0,0,0,0);
-      const ref   = new Date(refDate); ref.setHours(0,0,0,0);
-      const days  = Math.floor((today - ref) / 86400000) + 1;
-      document.getElementById('days-elapsed-number').textContent = days > 0 ? days : '—';
+    if (terminal.has(p.status)) {
+      daysCard.classList.add('hidden');
+    } else {
+      let display = '—';
+      if (p.activationDate) {
+        const today = new Date(); today.setHours(0,0,0,0);
+        const ref   = new Date(p.activationDate); ref.setHours(0,0,0,0);
+        const days  = Math.floor((today - ref) / 86400000) + 1;
+        if (days > 0) display = days;
+      }
+      document.getElementById('days-elapsed-number').textContent = display;
       document.getElementById('days-elapsed-label').textContent  = 'Days Since Activation';
       daysCard.classList.remove('hidden');
-    } else {
-      daysCard.classList.add('hidden');
     }
   }
 
@@ -170,9 +171,6 @@ const ACTION_DEFS = {
   ],
   active: [
     { label: 'Complete Training', color: 'bg-teal-600 hover:bg-teal-700 text-white',   action: () => openCompleteTrainingModal() },
-    { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
-  ],
-  active_partial: [
     { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
   ],
   paused: [

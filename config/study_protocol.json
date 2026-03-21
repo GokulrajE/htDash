@@ -1,7 +1,6 @@
 {
   "config": {
-    "max_cumulative_pause_days":        5,
-    "max_cumulative_device_pause_days": 5
+    "max_cumulative_pause_days": 10
   },
   "experimental": [
     { "id": "exp_device_install", "name": "Device Installation + Demo", "type": "point_in_time", "reference": "assignment", "is_master": false, "window": { "start_day": 0, "end_day": 5 }, "repeatable": false },

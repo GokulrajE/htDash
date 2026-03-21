@@ -24,7 +24,7 @@ def stats():
         'unassigned':         sum(1 for s in statuses if s == 'unassigned'),
         'inactive':           sum(1 for s in statuses if s == 'inactive'),
         'active':             sum(1 for s in statuses if s == 'active'),
-        'active_partial':     sum(1 for s in statuses if s == 'active_partial'),
+        'paused':             sum(1 for s in statuses if s == 'paused'),
         'training_completed': sum(1 for s in statuses if s == 'training_completed'),
         'a1_completed':       sum(1 for s in statuses if s == 'a1_completed'),
         'all_completed':      sum(1 for s in statuses if s == 'all_completed'),
