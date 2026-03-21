@@ -7,7 +7,7 @@ from utils.data_access import (
 )
 from utils.protocol_events import (
     create_protocol_events, populate_activation_dates,
-    set_free_event, read_protocol_events, load_study_protocol,
+    set_free_event, read_protocol_events, write_protocol_events, load_study_protocol,
 )
 import os
 import csv
@@ -71,18 +71,37 @@ def api_patient_events(homer_id):
             event_defs[e['id']] = e
     event_defs['training_pause_followup'] = {'name': 'Training Pause Follow-up', 'depends_on': []}
 
+    patient = read_patient_meta(folder, homer_id)
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
         return jsonify({'overdue': [], 'upcoming': []})
+
+    today = datetime.now().date()
+    overdue  = []
+    upcoming = []
+
+    # For broken_protocol patients only show the discontinuation reminder
+    if patient and derive_status(patient) == 'broken_protocol':
+        if not events_data.get('free', {}).get('discontinuation'):
+            broken_date = patient.get('brokenProtocolDate') or today.isoformat()
+            try:
+                broken_sched = datetime.fromisoformat(broken_date).date()
+            except Exception:
+                broken_sched = today
+            overdue.append({
+                'id':                'discontinuation_reminder',
+                'protocol_event_id': 'discontinuation_reminder',
+                'event_name':        'Discontinue Patient',
+                'scheduled_date':    broken_date,
+                'days':              (broken_sched - today).days,
+                'blocked_by':        [],
+            })
+        return jsonify({'overdue': overdue, 'upcoming': upcoming})
 
     # Build set of completed event IDs for dependency checking
     completed_ids = {e['protocol_event_id'] for e in events_data.get('complete', [])}
     # Build set of all known event IDs (incomplete + complete) — only these can block
     known_ids = completed_ids | {e['protocol_event_id'] for e in events_data.get('incomplete', [])}
-
-    today = datetime.now().date()
-    overdue  = []
-    upcoming = []
 
     for entry in events_data.get('incomplete', []):
         sched = entry.get('scheduled_date')
@@ -131,6 +150,17 @@ def api_available_devices(homer_id):
         'pluto': get_available_devices(folder, 'pluto'),
         'mars':  get_available_devices(folder, 'mars'),
     })
+
+
+@bp.route('/api/patients/<homer_id>/available-agwatches', methods=['GET'])
+def api_available_agwatches(homer_id):
+    """Return available (active, non-clinic, unassigned) AG watches."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+    return jsonify({'agwatch': get_available_devices(folder, 'agwatch')})
 
 
 @bp.route('/api/patients/<homer_id>/complete-event/exp_device_install', methods=['POST'])
@@ -250,6 +280,9 @@ def api_create_patient():
         'a2CompletionDate':           None,
         'trainingPausedDate':         None,
         'cumulativePauseDays':        0,
+        'brokenProtocolDate':         None,
+        'agWatchRightID':      None,
+        'agWatchLeftID':    None,
     }
     write_patient_meta(folder, homer_id, patient_data)
     create_patient_folders(folder, homer_id, 'unassigned')
@@ -376,12 +409,21 @@ def api_discontinue_patient(homer_id):
 def api_activate_patient(homer_id):
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
-    if flask_session.get('privilege') != 'admin':
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json() or {}
-    activation_date = (data.get('activationDate') or '').strip()
+    activation_date        = (data.get('activationDate') or '').strip()
+    ag_watch_right_id   = (data.get('agWatchRightID') or '').strip()
+    ag_watch_left_id = (data.get('agWatchLeftID') or '').strip()
+    notes                  = (data.get('notes') or '').strip()
     if not activation_date:
         return jsonify({'error': 'activationDate is required'}), 400
+    if not ag_watch_right_id:
+        return jsonify({'error': 'AG Watch (Right) is required'}), 400
+    if not ag_watch_left_id:
+        return jsonify({'error': 'AG Watch (Left) is required'}), 400
+    if ag_watch_right_id == ag_watch_left_id:
+        return jsonify({'error': 'Right and left limb watches must be different'}), 400
     try:
         if datetime.strptime(activation_date, '%Y-%m-%dT%H:%M') > datetime.now():
             return jsonify({'error': 'activationDate cannot be in the future'}), 400
@@ -404,8 +446,8 @@ def api_activate_patient(homer_id):
         None
     )
     dep_ids = (activation_def or {}).get('depends_on') or []
+    events_data = read_protocol_events(folder, homer_id)
     if dep_ids:
-        events_data = read_protocol_events(folder, homer_id)
         completed_ids = {e['protocol_event_id'] for e in (events_data or {}).get('complete', [])}
         known_ids = completed_ids | {e['protocol_event_id'] for e in (events_data or {}).get('incomplete', [])}
         blocking = [d for d in dep_ids if d in known_ids and d not in completed_ids]
@@ -414,17 +456,70 @@ def api_activate_patient(homer_id):
             names = ', '.join(event_names.get(d, d) for d in blocking)
             return jsonify({'error': f'Cannot activate: complete these first — {names}'}), 409
 
-    patient['activationDate'] = activation_date
+    # Update patient record
+    patient['activationDate']         = activation_date
+    patient['agWatchRightID']  = ag_watch_right_id
+    patient['agWatchLeftID'] = ag_watch_left_id
     write_patient_meta(folder, homer_id, patient)
 
+    # Move activation event from incomplete to complete
+    if events_data:
+        incomplete = events_data.get('incomplete', [])
+        entry = next((e for e in incomplete if e.get('protocol_event_id') == 'activation'), None)
+        if entry:
+            filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            complete_entry = {**entry, 'completion_date': activation_date, 'filed_at': filed_at, 'notes': notes}
+            events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+            events_data.setdefault('complete', []).append(complete_entry)
+            write_protocol_events(folder, homer_id, events_data)
+
+    # Fill activation-reference scheduled dates and seed first watch_record
     try:
         populate_activation_dates(folder, homer_id, activation_date)
     except Exception as e:
         print(f'Warning: could not populate activation dates: {e}')
 
+    # The seeded watch_record represents the initial watch assignment done at activation —
+    # move it straight to complete since the watches were assigned in this same action.
     try:
-        write_patient_log(folder, homer_id, flask_session.get('loginid', 'unknown'),
-                          flask_session.get('session_id', 0), 'Patient activated')
+        ev_data = read_protocol_events(folder, homer_id)
+        if ev_data:
+            incomplete = ev_data.get('incomplete', [])
+            wr_entry = next((e for e in incomplete if e.get('protocol_event_id') == 'watch_record'), None)
+            if wr_entry:
+                filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ev_data['incomplete'] = [e for e in incomplete if e.get('id') != wr_entry['id']]
+                ev_data.setdefault('complete', []).append({
+                    **wr_entry,
+                    'completion_date':      activation_date,
+                    'filed_at':             filed_at,
+                    'ag_watch_right_id': ag_watch_right_id,
+                    'ag_watch_left_id': ag_watch_left_id,
+                    'notes':                notes,
+                })
+                write_protocol_events(folder, homer_id, ev_data)
+    except Exception as e:
+        print(f'Warning: could not complete initial watch_record: {e}')
+
+    # Record agwatch assignments
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    for label, watch_id in (('right', ag_watch_right_id), ('left', ag_watch_left_id)):
+        assignments = read_device_assignments(folder, 'agwatch')
+        assignments.append({
+            'id':            str(uuid.uuid4()),
+            'device_id':     watch_id,
+            'homer_id':      homer_id,
+            'limb':          label,
+            'assigned_date': activation_date,
+            'returned_date': None,
+            'assigned_by':   loginid,
+            'notes':         notes,
+        })
+        write_device_assignments(folder, 'agwatch', assignments)
+
+    try:
+        write_patient_log(folder, homer_id, loginid, session_id, 'Patient activated')
     except Exception as e:
         print(f'Warning: could not write patient log: {e}')
     return jsonify({'status': 'success', 'homerID': homer_id})

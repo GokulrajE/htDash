@@ -1,91 +1,98 @@
 {
   "incomplete": [
     {
-      "id": "1d92c184-975c-4e37-aa09-d035b593725a",
-      "protocol_event_id": "exp_device_install",
-      "scheduled_date": "2026-03-20T18:17",
+      "id": "0fb75742-d2fc-4614-b8a7-486c013fa0f6",
+      "protocol_event_id": "vcg_prescription_d1",
+      "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "f4eeed1a-e0ac-4e77-9005-2c0e17fb95b9",
+      "id": "41b9adfc-8d05-481e-879c-5f4889722d99",
+      "protocol_event_id": "vcg_prescription_d15",
+      "scheduled_date": null,
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "8099fb5f-dae6-4f0c-8962-8ecebb8ec04b",
       "protocol_event_id": "activation",
-      "scheduled_date": "2026-03-20T18:17",
+      "scheduled_date": "2026-03-24T18:18",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "37051bcc-e7d8-4344-8acc-c30e2ded2e46",
+      "id": "ec6722c8-b035-414d-b854-801b20e20905",
       "protocol_event_id": "adl_prescription_d1",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "420a47da-e791-4563-9179-47cc2d997ae0",
+      "id": "c803ff93-03c1-445c-9c75-7ae2a695f992",
       "protocol_event_id": "prescription_printout_d1",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "93f85d3d-147b-4df4-aa35-2739d7d1d795",
+      "id": "f3f92429-45f8-497d-8e13-8423b03c135f",
       "protocol_event_id": "adl_prescription_d15",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "35fc2b81-5a88-46ab-9ba8-6fea324f00eb",
+      "id": "cfbd9044-f812-40a5-8b39-9ac9d66a64ab",
       "protocol_event_id": "home_visit_d02",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "4a4cf1ca-5cd0-42b3-9f9b-af1d65a61325",
+      "id": "2b6b4ae0-c2d2-4269-be5d-f3380c3906b2",
       "protocol_event_id": "home_visit_d03",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "85bf6ef2-be41-4ab3-ab0b-be13698c2b96",
+      "id": "96f92d5b-6e4f-48f3-9bb3-7577d7293ed5",
       "protocol_event_id": "followup_call_d07",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "4c31d72a-719e-429c-93c3-ec4fd4c490ef",
+      "id": "3ecb0985-d6ca-4c59-8c5b-db465f591bf5",
       "protocol_event_id": "home_visit_d15",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "7ddb23b9-121e-44b0-9b7a-7c0bccc7a820",
+      "id": "76618e1e-13f4-4d95-81fe-03c9c8761db0",
       "protocol_event_id": "followup_call_d21",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "d42955a9-6a81-4082-8e4e-806f501b6a8b",
+      "id": "92719416-8601-4010-8f35-780aca22feab",
       "protocol_event_id": "training_completion_d29",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "f1864b11-9060-40bf-a8f7-3bdf220380e3",
+      "id": "28d0388c-e4a9-4262-b1a0-effc0441e533",
       "protocol_event_id": "a1_assessment",
       "scheduled_date": null,
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "720d068f-743d-403d-8b1b-f904e01b44ed",
+      "id": "f95f2959-abfa-49c4-bade-d8f6da364b6c",
       "protocol_event_id": "a2_assessment",
       "scheduled_date": null,
       "flagged": false,
@@ -97,12 +104,6 @@
     "adverse_event": [],
     "patient_call": [],
     "pre_discontinuation": null,
-    "discontinuation": {
-      "id": "7a14f3f1-f0f1-434a-aca6-ff3eb106bff5",
-      "completion_date": "2026-03-21T18:41",
-      "reason": "The patient was not available for starting the therapy within the time frame.",
-      "attachments": []
-    },
-    "technical_fault": []
+    "discontinuation": null
   }
 }

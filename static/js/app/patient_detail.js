@@ -166,7 +166,7 @@ function renderOverview(p) {
 
 const ACTION_DEFS = {
   inactive: [
-    { label: 'Activate',          color: 'bg-blue-600 hover:bg-blue-700 text-white',   action: () => openActivateModal() },
+    { label: 'Activate',          color: 'bg-blue-600 hover:bg-blue-700 text-white',   action: () => openActivationModal(null) },
     { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
   ],
   active: [
@@ -211,13 +211,6 @@ function renderActions(p) {
 
 // ── Modal openers ─────────────────────────────────────────────────────────────
 
-function openActivateModal() {
-  document.getElementById('activate-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('activate-date').value = '';
-  setError('activate-error', '');
-  showModal('activate-modal');
-}
-
 function openCompleteTrainingModal() {
   document.getElementById('complete-training-homer-id').textContent = PATIENT_HOMER_ID;
   document.getElementById('complete-training-date').value = '';
@@ -247,15 +240,6 @@ function openDiscontinueModal() {
 }
 
 // ── Modal submitters ──────────────────────────────────────────────────────────
-
-async function submitActivate() {
-  const date = document.getElementById('activate-date').value;
-  if (!date) { setError('activate-error', 'Please select an activation date.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/activate`, { activationDate: date });
-  if (!ok) { setError('activate-error', data.error || 'Failed to activate patient.'); return; }
-  hideModal('activate-modal');
-  loadPatient();
-}
 
 async function submitCompleteTraining() {
   const date = document.getElementById('complete-training-date').value;
@@ -320,7 +304,9 @@ async function loadPatientEvents() {
 
 // Map protocol_event_id → opener function name
 const EVENT_OPENERS = {
-  exp_device_install: (ev) => openDeviceSetupModal(ev.id),
+  exp_device_install:       (ev) => openDeviceSetupModal(ev.id),
+  activation:               (ev) => openActivationModal(ev.id),
+  discontinuation_reminder: (_ev) => openDiscontinueModal(),
 };
 
 function patientEventRow(ev) {
@@ -344,17 +330,21 @@ function patientEventRow(ev) {
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
-  const subtitle  = blocked
-    ? `<div class="text-xs text-slate-400 mt-0.5 flex items-center gap-1"><i class="fas fa-lock text-[10px]"></i>Complete ${ev.blocked_by[0]} first</div>`
-    : `<div class="text-xs text-slate-500 mt-0.5">${dateStr}</div>`;
+  const subtitle  = `<div class="text-xs text-slate-500 mt-0.5">${dateStr}</div>`;
+  const eventName = blocked
+    ? `<div class="font-medium text-slate-800 text-sm truncate flex items-center gap-1"><i class="fas fa-lock text-slate-400 text-[10px]"></i>${ev.event_name}</div>`
+    : `<div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>`;
+  const rightLabel = blocked
+    ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
+    : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap flex-shrink-0">${whenLabel}</span>`;
 
   return `
     <${tag} ${href} class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} ${extra} gap-3">
       <div class="min-w-0">
-        <div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>
+        ${eventName}
         ${subtitle}
       </div>
-      <span class="text-xs font-semibold ${textColor} whitespace-nowrap flex-shrink-0">${whenLabel}</span>
+      ${rightLabel}
     </${tag}>`;
 }
 
@@ -418,6 +408,77 @@ async function submitDeviceSetup() {
   loadPatientEvents();
 }
 
+// ── Activation modal ──────────────────────────────────────────────────────────
+
+let _activationEventId = null;
+
+async function openActivationModal(evId) {
+  _activationEventId = typeof evId === 'object' ? evId.id : evId;
+  document.getElementById('activation-homer-id').textContent = PATIENT_HOMER_ID;
+  document.getElementById('activation-date').value = '';
+  document.getElementById('activation-notes').value = '';
+  setError('activation-error', '');
+
+  const affectedSel   = document.getElementById('activation-watch-right');
+  const unaffectedSel = document.getElementById('activation-watch-left');
+  affectedSel.innerHTML   = '<option value="">Loading…</option>';
+  unaffectedSel.innerHTML = '<option value="">Loading…</option>';
+  showModal('activation-modal');
+
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-agwatches`);
+    const { agwatch } = await res.json();
+
+    function buildWatchOpts(watches, excludeId) {
+      if (!watches.length) return '<option value="" disabled>No watches available</option>';
+      return '<option value="">Select watch…</option>' +
+        watches.filter(d => d.id !== excludeId)
+               .map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`)
+               .join('');
+    }
+
+    affectedSel.innerHTML   = buildWatchOpts(agwatch, null);
+    unaffectedSel.innerHTML = buildWatchOpts(agwatch, null);
+
+    affectedSel.addEventListener('change', () => {
+      const prev = unaffectedSel.value;
+      unaffectedSel.innerHTML = buildWatchOpts(agwatch, affectedSel.value);
+      if (prev && prev !== affectedSel.value) unaffectedSel.value = prev;
+    });
+    unaffectedSel.addEventListener('change', () => {
+      const prev = affectedSel.value;
+      affectedSel.innerHTML = buildWatchOpts(agwatch, unaffectedSel.value);
+      if (prev && prev !== unaffectedSel.value) affectedSel.value = prev;
+    });
+  } catch (e) {
+    setError('activation-error', 'Failed to load available watches.');
+  }
+}
+
+async function submitActivation() {
+  const activationDate      = document.getElementById('activation-date').value;
+  const agWatchRightId   = document.getElementById('activation-watch-right').value;
+  const agWatchLeftId = document.getElementById('activation-watch-left').value;
+  const notes               = document.getElementById('activation-notes').value;
+
+  if (!activationDate)      { setError('activation-error', 'Please select an activation date.'); return; }
+  if (!agWatchRightId)   { setError('activation-error', 'Please select a watch for the affected limb.'); return; }
+  if (!agWatchLeftId) { setError('activation-error', 'Please select a watch for the unaffected limb.'); return; }
+  if (agWatchRightId === agWatchLeftId) { setError('activation-error', 'Affected and unaffected limb watches must be different.'); return; }
+
+  setLoading('activation-submit', true);
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/activate`, {
+    activationDate, agWatchRightID: agWatchRightId,
+    agWatchLeftID: agWatchLeftId, notes,
+  });
+  setLoading('activation-submit', false);
+
+  if (!ok) { setError('activation-error', data.error || 'Failed to activate patient.'); return; }
+  hideModal('activation-modal');
+  await loadPatient();
+  loadPatientEvents();
+}
+
 // ── Load patient ──────────────────────────────────────────────────────────────
 
 async function loadPatient() {
@@ -448,7 +509,7 @@ async function loadPrivilege() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Store submit button labels for loading state
-  ['activate-submit', 'complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit', 'device-setup-submit'].forEach(id => {
+  ['complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit', 'device-setup-submit', 'activation-submit'].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.dataset.label = btn.textContent;
   });

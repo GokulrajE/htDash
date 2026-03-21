@@ -1,3 +1,24 @@
 {
-  "assignments": []
+  "assignments": [
+    {
+      "id": "fd5e0101-30a1-4171-ade4-c9db279bd37f",
+      "device_id": "RAGWATCH001",
+      "homer_id": "HOMCMCV002",
+      "limb": "right",
+      "assigned_date": "2026-03-20T19:06",
+      "returned_date": null,
+      "assigned_by": "RP-HS-ADMIN",
+      "notes": "Started therapy. Everything went well. Patient seems comfortable with the devices and the ADL exercies."
+    },
+    {
+      "id": "2303de03-76f5-4349-aa3a-f72b8f29c4f1",
+      "device_id": "RAGWATCH002",
+      "homer_id": "HOMCMCV002",
+      "limb": "left",
+      "assigned_date": "2026-03-20T19:06",
+      "returned_date": null,
+      "assigned_by": "RP-HS-ADMIN",
+      "notes": "Started therapy. Everything went well. Patient seems comfortable with the devices and the ADL exercies."
+    }
+  ]
 }

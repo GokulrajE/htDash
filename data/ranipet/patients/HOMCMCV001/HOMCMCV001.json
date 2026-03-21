@@ -1,13 +1,18 @@
 {
   "homerID": "HOMCMCV001",
-  "hospitalID": "123456G",
+  "hospitalID": "123456A",
   "group": "experimental",
   "trainingSide": "Right",
-  "enrollDate": "2026-03-19T21:17",
+  "enrollDate": "2026-03-21T18:17",
   "activationDate": null,
-  "discontinuationDate": null,
+  "discontinuationDate": "2026-03-21T18:41",
   "trainingCompletionDate": null,
-  "a0CompletionDate": "2026-03-19T21:17",
+  "a0CompletionDate": "2026-03-15T18:17",
   "a1CompletionDate": null,
-  "a2CompletionDate": null
+  "a2CompletionDate": null,
+  "trainingPausedDate": null,
+  "cumulativePauseDays": 0,
+  "brokenProtocolDate": "2026-03-21",
+  "agWatchRightID": null,
+  "agWatchLeftID": null
 }

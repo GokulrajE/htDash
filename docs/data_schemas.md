@@ -452,6 +452,7 @@ Static config checked into the repo. Never written at runtime.
 }
 ```
 
+### Event Definitions
 Each event definition:
 
 | Field | Type | Description |
@@ -488,7 +489,7 @@ Dependencies only apply to experimental patients for `exp_device_install` — co
 
 **UI rendering of blocked events:**
 - If all `depends_on` events are complete → render as `<a href="?action=<id>">` (clickable)
-- If any `depends_on` event is incomplete → render as a plain `<div>` (no href, no cursor) with a muted lock icon and a subtitle naming the blocking event(s), e.g. "Complete device setup first"
+- If any `depends_on` event is incomplete → render as a plain `<div>` (no href, no cursor) with a muted lock icon next to the event name and an amber badge on the right reading "Needs: \<blocking event name\>" in place of the date/urgency label
 - This matches the existing pattern for non-actionable events, which are also plain `<div>` elements
 
 **Event types:**
@@ -500,3 +501,42 @@ Dependencies only apply to experimental patients for `exp_device_install` — co
 | `windowed` | Acceptable date range. Accepted anytime but flagged if outside range. |
 | `anytime` | No scheduled date. Lives in `free`. Never flagged. |
 | `chained` | Recurring. Each completion creates next entry. `watch_record` is the only chained event. |
+
+### Protocol Event Catalogue
+Each event's group, type, window, clinical purpose, and dependencies. Windows are in days relative to the reference date.
+
+#### Experimental only
+
+| ID | Name | Type | Reference | Window | `depends_on` | Purpose |
+|----|------|------|-----------|--------|-------------|---------|
+| `exp_device_install` | Device Installation + Demo | strict | assignment | day 0–5 | — | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
+| `technical_fault` | Technical Fault | anytime | — | — | `activation` | Document any device malfunction affecting therapy delivery. May trigger a training pause. |
+
+#### Control only
+
+| ID | Name | Type | Reference | Window | `depends_on` | Purpose |
+|----|------|------|-----------|--------|-------------|---------|
+| `vcg_prescription_d1` | VCG Exercise Prescription | point_in_time | assignment | day 1 | — | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
+| `vcg_prescription_d15` | VCG Exercise Prescription Revision | point_in_time | activation | day 15 | — | Review and revise the VCG exercise programme at the mid-point of the intervention. |
+
+#### Shared (both groups)
+
+| ID | Name | Type | Reference | Window | `depends_on` | Purpose |
+|----|------|------|-----------|--------|-------------|---------|
+| `activation` | Patient Activation | strict | assignment | day 0–5 | `exp_device_install` *(exp only)* | First home visit to begin the training intervention. Marks the official start of the therapy period. |
+| `adl_prescription_d1` | ADL Exercise Prescription | point_in_time | assignment | day 1 | — | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
+| `prescription_printout_d1` | Therapy Prescription Printout | point_in_time | assignment | day 1 | `adl_prescription_d1` *(both)*; `vcg_prescription_d1` *(ctrl only)* | Provide the patient with a printed copy of their personalised therapy prescription. |
+| `home_visit_d02` | Initial Home Visit Day 02 | point_in_time | activation | day 2 | — | Second home visit — review training progress and address any early questions or difficulties. |
+| `home_visit_d03` | Initial Home Visit Day 03 | point_in_time | activation | day 3 | — | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
+| `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
+| `home_visit_d15` | Mid Home Visit Day 15 | point_in_time | activation | day 15 | — | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
+| `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | — | Review and revise the ADL exercise programme at the mid-point of the intervention. |
+| `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
+| `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
+| `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | Post-training clinical outcome assessment conducted within one week of training completion. |
+| `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | Six-month follow-up clinical outcome assessment. |
+| `watch_record` | Watch Record | chained | — | — | — | Track actigraph watch assignments and swaps to ensure continuous activity monitoring throughout the study. |
+| `adverse_event` | Adverse Event | anytime | — | — | `activation` | Document any adverse event experienced by the patient during the intervention. May trigger a training pause. |
+| `patient_call` | Patient Call | anytime | — | — | — | Document any unscheduled contact with the patient or carer outside the protocol schedule. |
+| `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | Document withdrawal from the study before group assignment. |
+| `discontinuation` | Discontinuation | anytime | — | — | — | Document withdrawal from the study after group assignment. |

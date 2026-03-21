@@ -1,4 +1,6 @@
 :Location: Ranipet
 :HomerId: HOMCMCV002
-[2026-03-20 16:59:42]   RP-HS-ADMIN     #15   Created new patient : HOMCMCV002.json
-[2026-03-20 16:59:49]   RP-HS-ADMIN     #15   Assigned group: control
+[2026-03-21 18:18:04]   RP-HS-ADMIN     #35   Created new patient : HOMCMCV002.json
+[2026-03-21 18:18:13]   RP-HS-ADMIN     #35   Assigned group: experimental
+[2026-03-21 18:41:54]   RP-HS-ADMIN     #38   Device setup completed — Pluto: RPLUTO002, Mars: RMARS002
+[2026-03-21 19:06:21]   RP-HS-ADMIN     #39   Patient activated

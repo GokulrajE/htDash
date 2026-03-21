@@ -49,12 +49,14 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 3. ✅ Dashboard page — summary stats + events panels
 4. ✅ Patients list page
 5. ✅ Patient detail page — overview, key dates, events panels
-6. ⬜ Patient detail — protocol event completion modals (device setup first)
-7. ⬜ Devices page
-8. ⬜ SIMs page
-9. ⬜ Cleanup — remove old `dashboard.html` and unused JS
-10. ⬜ Test all routes and functionality
-11. ⬜ Merge to `main`
+6. ✅ Device setup modal (`exp_device_install`)
+7. ✅ Activation modal (`activation`) — including agwatch assignment
+8. ⬜ Remaining protocol event modals (prescriptions, home visits, calls, assessments)
+9. ⬜ Devices page
+10. ⬜ SIMs page
+11. ⬜ Cleanup — remove old `dashboard.html` and unused JS
+12. ⬜ Test all routes and functionality
+13. ⬜ Merge to `main`
 
 ---
 
@@ -96,3 +98,49 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 - Chart.js rendering
 - Modal interactions
 - In-page dynamic updates (fetch calls within a page)
+
+---
+
+## Consistency Checklist
+
+When adding or modifying any feature that touches event rows or protocol events, verify ALL of the following locations are updated consistently:
+
+### Event row rendering (blocked events)
+Both pages that show event rows must render blocked events identically: lock icon next to event name, amber badge "Needs: \<event name\>" on the right, non-clickable `<div>`.
+
+| Location | Function | Notes |
+|---|---|---|
+| `static/js/app/patient_detail.js` | `patientEventRow()` | Calls `EVENT_OPENERS` to determine clickability |
+| `static/js/app/dashboard.js` | `eventRow()` | Always links to `/patients/<homer_id>?action=<id>` unless blocked |
+
+### blocked_by computation (server-side)
+Both event APIs must compute `blocked_by` using the same logic (depends_on entries that are applicable and not yet complete).
+
+| Location | Route | Notes |
+|---|---|---|
+| `routes/user_management.py` | `GET /api/patients/<homer_id>/events` | Per-patient events |
+| `routes/dashboard.py` | `GET /api/dashboard/events` | Cross-patient events |
+
+### Protocol event openers (patient detail page)
+Every protocol event that has a modal must be listed in `EVENT_OPENERS` in `patient_detail.js`. When a new modal is implemented, add the entry.
+
+### Synthetic events
+Some events are not stored in `protocol_events.json` but injected at query time by both event APIs. These require matching `EVENT_OPENERS` entries in `patient_detail.js`.
+
+| Synthetic event ID | Condition | Purpose |
+|---|---|---|
+| `discontinuation_reminder` | `broken_protocol` status + no `free.discontinuation` | Prompt user to discontinue patient |
+
+When adding a new synthetic event, update BOTH event APIs and `EVENT_OPENERS`.
+
+### New protocol events
+When adding events to `config/study_protocol.json`, check:
+1. `create_protocol_events()` in `utils/protocol_events.py` handles the event type correctly
+2. Test data (`protocol_events.json` files) are updated with the new events
+3. `EVENT_OPENERS` in `patient_detail.js` has an entry if the event has a modal
+
+### Patient JSON schema
+When adding fields to `homer_id.json`, update in all three places:
+1. Patient creation dict in `routes/user_management.py` (`api_create_patient`)
+2. `docs/data_schemas.md` — `homer_id.json` schema table
+3. Test data file(s) in `data/<site>/patients/<homer_id>/<homer_id>.json`

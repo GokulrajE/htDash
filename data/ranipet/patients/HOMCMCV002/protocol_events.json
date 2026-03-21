@@ -1,74 +1,123 @@
 {
   "incomplete": [
     {
-      "id": "8cd028ae-390f-435c-9e71-23d449abccbd",
-      "protocol_event_id": "activation",
-      "scheduled_date": "2026-03-24T16:59",
+      "id": "c5c8f37b-3cf4-4a3b-b292-ae9f3c368e23",
+      "protocol_event_id": "adl_prescription_d1",
+      "scheduled_date": "2026-03-21T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "e28ef8bc-214c-4cab-8f4c-8d9e0aecca4f",
+      "id": "b7531a1a-a357-4dc9-8c93-9cea201c252d",
+      "protocol_event_id": "prescription_printout_d1",
+      "scheduled_date": "2026-03-21T19:06",
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "2c5f9848-f37a-4990-a426-159dfc54d796",
+      "protocol_event_id": "adl_prescription_d15",
+      "scheduled_date": "2026-04-04T19:06",
+      "flagged": false,
+      "notes": ""
+    },
+    {
+      "id": "1dbf3c94-3310-43a1-af4b-c6fb6e59b262",
       "protocol_event_id": "home_visit_d02",
-      "scheduled_date": null,
+      "scheduled_date": "2026-03-22T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "2694cb57-f259-4840-9631-9b05f31ca3ec",
+      "id": "0f65e4de-47d1-469a-aae8-35d75c70c619",
       "protocol_event_id": "home_visit_d03",
-      "scheduled_date": null,
+      "scheduled_date": "2026-03-23T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "83e3438d-c7a2-435b-b511-7488d5664406",
+      "id": "8c1ff984-f175-44c9-b60b-9a1bb93657e6",
       "protocol_event_id": "followup_call_d07",
-      "scheduled_date": null,
+      "scheduled_date": "2026-03-27T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "db2c0df7-46bf-4aa7-b89b-40893d8f2da2",
+      "id": "b72cbb92-45d3-469a-8560-e5fe3c8ef392",
       "protocol_event_id": "home_visit_d15",
-      "scheduled_date": null,
+      "scheduled_date": "2026-04-04T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "e98295ba-af10-45fa-9144-24c9baf90372",
+      "id": "dda50e45-a793-4a46-916e-c5bca9b4f77d",
       "protocol_event_id": "followup_call_d21",
-      "scheduled_date": null,
+      "scheduled_date": "2026-04-10T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "158d45f5-394b-4147-bba3-b8caeadfe80c",
+      "id": "e02d2706-af21-49fe-84b8-e769ed4d8db1",
       "protocol_event_id": "training_completion_d29",
-      "scheduled_date": null,
+      "scheduled_date": "2026-04-18T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "c2b1435e-bbdc-41d8-bb62-7bbfc040df8f",
+      "id": "0728e443-f185-495f-b71e-c4dc5705acca",
       "protocol_event_id": "a1_assessment",
-      "scheduled_date": null,
+      "scheduled_date": "2026-04-26T19:06",
       "flagged": false,
       "notes": ""
     },
     {
-      "id": "dee23162-6484-4de7-af22-17f0a2bbdbff",
+      "id": "34c36ca5-a58f-4199-877a-3ce3c95fc9d8",
       "protocol_event_id": "a2_assessment",
-      "scheduled_date": null,
+      "scheduled_date": "2026-09-23T19:06",
       "flagged": false,
       "notes": ""
     }
   ],
-  "complete": [],
+  "complete": [
+    {
+      "id": "1b54512c-02e6-473c-b8bc-2ac414e76052",
+      "protocol_event_id": "exp_device_install",
+      "scheduled_date": "2026-03-24T18:18",
+      "flagged": false,
+      "notes": "Demo was done. Everything set up.",
+      "completion_date": "2026-03-21T18:41",
+      "filed_at": "2026-03-21 18:41:54",
+      "pluto_id": "RPLUTO002",
+      "mars_id": "RMARS002",
+      "demo_done": true,
+      "attachments": []
+    },
+    {
+      "id": "65ad979c-5156-4245-873f-b227945c5880",
+      "protocol_event_id": "watch_record",
+      "scheduled_date": "2026-03-20T19:06",
+      "flagged": false,
+      "notes": "Started therapy. Everything went well. Patient seems comfortable with the devices and the ADL exercies.",
+      "completion_date": "2026-03-20T19:06",
+      "filed_at": "2026-03-21 19:06:21",
+      "ag_watch_right_id": "RAGWATCH001",
+      "ag_watch_left_id": "RAGWATCH002"
+    },
+    {
+      "id": "681bb19d-667b-4add-91f5-374c77898a6b",
+      "protocol_event_id": "activation",
+      "scheduled_date": "2026-03-24T18:18",
+      "flagged": false,
+      "notes": "Started therapy. Everything went well. Patient seems comfortable with the devices and the ADL exercies.",
+      "completion_date": "2026-03-20T19:06",
+      "filed_at": "2026-03-21 19:06:21"
+    }
+  ],
   "free": {
     "adverse_event": [],
     "patient_call": [],
     "pre_discontinuation": null,
-    "discontinuation": null
+    "discontinuation": null,
+    "technical_fault": []
   }
 }

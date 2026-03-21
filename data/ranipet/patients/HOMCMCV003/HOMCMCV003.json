@@ -1,10 +1,10 @@
 {
-  "homerID": "HOMCMCV002",
-  "hospitalID": "123456B",
-  "group": "experimental",
-  "trainingSide": "Right",
+  "homerID": "HOMCMCV003",
+  "hospitalID": "123456C",
+  "group": "control",
+  "trainingSide": "Left",
   "enrollDate": "2026-03-21T18:18",
-  "activationDate": "2026-03-20T19:06",
+  "activationDate": null,
   "discontinuationDate": null,
   "trainingCompletionDate": null,
   "a0CompletionDate": "2026-03-19T18:18",
@@ -13,6 +13,6 @@
   "trainingPausedDate": null,
   "cumulativePauseDays": 0,
   "brokenProtocolDate": null,
-  "agWatchRightID": "RAGWATCH001",
-  "agWatchLeftID": "RAGWATCH002"
+  "agWatchRightID": null,
+  "agWatchLeftID": null
 }

@@ -66,16 +66,27 @@
                       : 'border-slate-100 bg-slate-50';
       const textColor = (isOverdue || ev.days === 0) ? 'text-red-600'
                       : ev.days <= 2 ? 'text-orange-600' : 'text-slate-500';
+
+      const blocked = ev.blocked_by && ev.blocked_by.length > 0;
+      const tag     = blocked ? 'div' : 'a';
+      const href    = blocked ? '' : `href="/patients/${ev.homer_id}?action=${ev.id}"`;
+      const extra   = blocked ? '' : 'hover:shadow-md transition-shadow';
+      const eventName = blocked
+        ? `<div class="font-medium text-slate-800 text-sm truncate flex items-center gap-1"><i class="fas fa-lock text-slate-400 text-[10px]"></i>${ev.event_name}</div>`
+        : `<div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>`;
+      const rightLabel = blocked
+        ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
+        : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>`;
       return `
-        <a href="/patients/${ev.homer_id}?action=${ev.id}" class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 hover:shadow-md transition-shadow">
+        <${tag} ${href} class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 ${extra}">
           <div class="min-w-0">
-            <div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>
+            ${eventName}
             <div class="text-xs text-slate-500 mt-0.5">${ev.homer_id} · ${dateStr}</div>
           </div>
           <div class="flex-shrink-0">
-            <span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>
+            ${rightLabel}
           </div>
-        </a>`;
+        </${tag}>`;
     }
 
     function emptyState(icon, colorClass, msg) {

@@ -1,4 +1,6 @@
 :Location: Ranipet
 :HomerId: HOMCMCV001
-[2026-03-19 21:17:04]   RP-HS-ADMIN     #8    Created new patient : HOMCMCV001.json
-[2026-03-19 21:17:16]   RP-HS-ADMIN     #8    Assigned group to experimental
+[2026-03-21 18:17:29]   RP-HS-ADMIN     #35   Created new patient : HOMCMCV001.json
+[2026-03-21 18:17:48]   RP-HS-ADMIN     #35   Assigned group: experimental
+[2026-03-21 18:26:37]   RP-HS-ADMIN     #36   Broken protocol detected
+[2026-03-21 18:41:16]   RP-HS-ADMIN     #38   Patient discontinued

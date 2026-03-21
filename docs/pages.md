@@ -107,7 +107,7 @@ Patient list for the user's visible site(s).
 
 ### `GET /patients/<homer_id>`
 
-Patient detail. Shown for patients `inactive` and beyond (including `broken_protocol`, `paused`, `active_partial`). Not shown for `pre_discontinued` or `discontinued`.
+Patient detail. Shown for patients `inactive` and beyond (including `broken_protocol`, `paused`). Not shown for `pre_discontinued` or `discontinued`.
 
 #### Page elements
 
@@ -128,15 +128,14 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 
 - **Overview tab** (default):
   1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date, Pluto ID *(experimental group)*, Mars ID *(experimental group)*, AG Watch Right ID *(both groups)*, AG Watch Left ID *(both groups)*,
-  2. **Key Dates card** — A0, Activation, Training Completion, A1, A2, Discontinuation dates. On the right side of the card header: a large bold number showing days elapsed, with a subtitle label:
-     - Before activation: **"Day N — since recruitment"** (N = today − `a0CompletionDate`)
-     - After activation: **"Day N — since activation"** (N = today − `activationDate`)
-     - Calculated client-side in `patient_detail.js`; not shown for terminal states (discontinued, all_completed)
+  2. **Key Dates card** — A0, Activation, Training Completion, A1, A2, Discontinuation dates. A separate **Days card** sits alongside showing days elapsed since activation (Day 1 = activation date). Displays `—` until activated. Hidden for terminal states (discontinued, all_completed, pre_discontinued). Calculated client-side in `patient_detail.js`.
   3. **Events panels** — Overdue (past deadline, red) and Upcoming (future, urgency-coded) protocol events. Fetched from `GET /api/patients/<homer_id>/events`. Clickable if today ≥ event's window start date.
+     - **Blocked events** (unmet `depends_on`): rendered as a non-clickable `<div>` with an amber badge on the right reading "Needs: \<event name\>" instead of the date/urgency label. A muted lock icon appears next to the event name.
 
 - **Stub tabs** — Devices, ADL, VCG, Timeline, Adverse Events, Call Logs show "Coming soon"
 
-**Actions:** [Activate](#activate), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue), [Device Setup](#device-setup-exp_device_install)
+
+**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d1), [VCG Prescription](#vcg-prescription-vcg_prescription_d1), [Prescription Printout](#prescription-printout-prescription_printout_d1), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call), [Training Completion](#training-completion-training_completion_d29), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
 
 ---
 
@@ -205,18 +204,23 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Activate
-- Trigger: "Activate" event row on patient detail (inactive patients)
+- Trigger:
+  - Clicking the `activation` event row on patient detail (inactive patients).
+  - Takes the user to patients details page where the modal is implemented.
 - Allowed users: `admin`, `therapist`
 - Prerequisites: all events listed in `depends_on` for `activation` in `study_protocol.json` must be in `complete` (e.g. `exp_device_install` for experimental patients)
 - Modal fields:
-  - Activation Date (datetime, required; cannot be in the future)
+  - Event Date (datetime, required; cannot be in the future)
+  - AG Watch Right (dropdown — active, unassigned watch from inventory; required)
+  - AG Watch Left (dropdown — active, unassigned watch from inventory; required)
+  - Notes (textarea, optional). The notes text area must be large enough for the user to write the their notes comfortably.
 - Server actions:
-  - Check `depends_on` prerequisites; return error if any are unmet
+  - Verify `depends_on` prerequisites are met (server-side safety check — the UI already blocks the action, but the endpoint rejects the request if any prerequisite event is not in `complete`)
   - Update `<homer_id>.json` with `activationDate`
   - Compute and fill `scheduled_date` for all `reference: "activation"` entries in `protocol_events.json`
   - Create first `watch_record` entry in `incomplete` with `scheduled_date = activationDate`
 - Log message: `Patient activated`
-- UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` (no `href`) with a muted lock icon and a subtitle naming the blocking event(s) (e.g. "Complete device setup first")
+- UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` (no `href`) with a muted lock icon next to the event name and an amber badge on the right reading "Needs: \<blocking event name\>" in place of the date/urgency label
 
 ---
 
@@ -256,13 +260,86 @@ Each action is defined once here. Pages above reference which actions apply to t
 ### Discontinue
 - Trigger: "Discontinue" button on patient detail
 - Allowed users: `admin`
-- Applicable states: `inactive`, `broken_protocol`, `active`, `active_partial`, `paused`, `training_completed`, `a1_completed`
+- Applicable states: `inactive`, `broken_protocol`, `active`, `paused`, `training_completed`, `a1_completed`
 - Modal fields:
   - Reason / Comments (textarea, required)
 - Server actions:
   - Update `<homer_id>.json` with `discontinuationDate`
   - Append `discontinuation` record to `protocol_events.json` free section
 - Log message: `Patient discontinued`
+
+---
+
+### ADL Prescription (`adl_prescription_d1`)
+- Trigger: `adl_prescription_d1` event row on patient detail (both groups, inactive patients)
+- Allowed users: `admin`, `therapist`
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `ADL prescription recorded`
+
+---
+
+### VCG Prescription (`vcg_prescription_d1`)
+- Trigger: `vcg_prescription_d1` event row on patient detail (control patients only, inactive)
+- Allowed users: `admin`, `therapist`
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `VCG prescription recorded`
+
+---
+
+### Prescription Printout (`prescription_printout_d1`)
+- Trigger: `prescription_printout_d1` event row on patient detail (both groups, inactive)
+- Allowed users: `admin`, `therapist`
+- `depends_on`: `adl_prescription_d1` (both); `vcg_prescription_d1` (ctrl only)
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `Prescription printout generated`
+
+---
+
+### ADL Prescription Revision (`adl_prescription_d15`)
+- Trigger: `adl_prescription_d15` event row on patient detail (both groups, active patients, day 15)
+- Allowed users: `admin`, `therapist`
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `ADL prescription revised`
+
+---
+
+### VCG Prescription Revision (`vcg_prescription_d15`)
+- Trigger: `vcg_prescription_d15` event row on patient detail (control patients only, day 15)
+- Allowed users: `admin`, `therapist`
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `VCG prescription revised`
+
+---
+
+### Home Visit (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`)
+- Trigger: respective event row on patient detail
+- Allowed users: `admin`, `therapist`
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `Home visit recorded — Day <N>`
+
+---
+
+### Follow-up Call (`followup_call_d07`, `followup_call_d21`)
+- Trigger: respective event row on patient detail
+- Allowed users: `admin`, `therapist`
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `Follow-up call recorded — Day <N>`
+
+---
+
+### Training Completion Visit (`training_completion_d29`)
+- Trigger: `training_completion_d29` event row on patient detail (active patients, day 29)
+- Allowed users: `admin`, `therapist`
+- Modal fields: TBD
+- Server actions: TBD
+- Log message: `Training completion visit recorded`
 
 ---
 

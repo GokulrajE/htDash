@@ -42,9 +42,11 @@ def events():
 
     protocol = load_study_protocol()
     event_names = {}
+    event_defs  = {}
     for section in ('experimental', 'control', 'shared'):
         for e in protocol.get(section, []):
             event_names[e['id']] = e['name']
+            event_defs[e['id']]  = e
     event_names['training_pause_followup'] = 'Training Pause Follow-up'
 
     terminal = {'discontinued', 'pre_discontinued', 'all_completed'}
@@ -58,6 +60,29 @@ def events():
         events_data = read_protocol_events(hospital_folder, homer_id)
         if not events_data:
             continue
+
+        # For broken_protocol patients only show the discontinuation reminder
+        if derive_status(patient) == 'broken_protocol':
+            if not events_data.get('free', {}).get('discontinuation'):
+                broken_date = patient.get('brokenProtocolDate') or today.isoformat()
+                try:
+                    broken_sched = datetime.fromisoformat(broken_date).date()
+                except Exception:
+                    broken_sched = today
+                overdue.append({
+                    'id':                'discontinuation_reminder',
+                    'protocol_event_id': 'discontinuation_reminder',
+                    'homer_id':          homer_id,
+                    'event_name':        'Discontinue Patient',
+                    'scheduled_date':    broken_date,
+                    'days':              (broken_sched - today).days,
+                    'blocked_by':        [],
+                })
+            continue
+
+        completed_ids = {e['protocol_event_id'] for e in events_data.get('complete', [])}
+        known_ids     = completed_ids | {e['protocol_event_id'] for e in events_data.get('incomplete', [])}
+
         for entry in events_data.get('incomplete', []):
             sched = entry.get('scheduled_date')
             if not sched:
@@ -67,6 +92,10 @@ def events():
             except Exception:
                 continue
             diff = (sched_date - today).days
+
+            dep_ids    = event_defs.get(entry['protocol_event_id'], {}).get('depends_on') or []
+            blocked_by = [event_defs[d]['name'] for d in dep_ids if d in known_ids and d not in completed_ids]
+
             record = {
                 'id':                entry['id'],
                 'protocol_event_id': entry['protocol_event_id'],
@@ -74,11 +103,13 @@ def events():
                 'event_name':        event_names.get(entry['protocol_event_id'], entry['protocol_event_id']),
                 'scheduled_date':    sched,
                 'days':              diff,
+                'blocked_by':        blocked_by,
             }
             if diff < 0:
                 overdue.append(record)
             elif diff <= 7:
                 upcoming.append(record)
+
 
     overdue.sort(key=lambda x: x['scheduled_date'])
     upcoming.sort(key=lambda x: x['scheduled_date'])

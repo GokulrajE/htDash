@@ -1,13 +1,13 @@
 {
   "assignments": [
     {
-      "id": "1b11a72d-735d-48dc-8beb-89c9661fee78",
+      "id": "9b81b9b6-038a-4a33-8272-14417a9e33ea",
       "device_id": "RPLUTO002",
-      "homer_id": "HOMCMCV001",
-      "assigned_date": "2026-03-20T21:16",
+      "homer_id": "HOMCMCV002",
+      "assigned_date": "2026-03-21T18:41",
       "returned_date": null,
       "assigned_by": "RP-HS-ADMIN",
-      "notes": "All done setting up. Everything went veryh well."
+      "notes": "Demo was done. Everything set up."
     }
   ]
 }
