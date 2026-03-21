@@ -106,11 +106,6 @@ All fields are factual — status is never stored but always derived.
   "trainingPausedDate":         null,
   "cumulativePauseDays":        0,
 
-  "plutoPauseDate":             null,
-  "marsPauseDate":              null,
-  "cumulativePlutoPauseDays":   0,
-  "cumulativeMarsPauseDays":    0,
-
   "brokenProtocolDate":         null
 }
 ```
@@ -120,15 +115,9 @@ All fields are factual — status is never stored but always derived.
 - All date fields use ISO 8601 datetime format (`YYYY-MM-DDTHH:MM`). `null` means the event has not occurred.
 - Date fields cannot exceed the current local time — no future datetimes are allowed.
 
-**Control-only pause fields:**
-- `trainingPausedDate` — set when an adverse event causes a full training pause; `null` when not paused.
-- `cumulativePauseDays` — total full-pause days accumulated. Checked against `max_cumulative_pause_days`; if exceeded, `derive_status()` returns `broken_protocol`.
-
-**Experimental-only pause fields:**
-- `plutoPauseDate` — set when Pluto training is paused; `null` when active.
-- `marsPauseDate` — same for Mars.
-- `cumulativePlutoPauseDays` — total days Pluto has been paused. If exceeded → `broken_protocol`.
-- `cumulativeMarsPauseDays` — same for Mars.
+**Pause fields (both groups):**
+- `trainingPausedDate` — set when training is paused (adverse event or technical fault); `null` when not paused. For experimental patients, pausing one device pauses everything.
+- `cumulativePauseDays` — total pause days accumulated across all episodes. Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`.
 
 **Broken protocol detection field:**
 - `brokenProtocolDate` — date when `broken_protocol` was first detected; set automatically on login. `null` until first detected. Never cleared once set.
@@ -151,27 +140,16 @@ All fields are factual — status is never stored but always derived.
 | null    | null             | set                   | —                            | pre_discontinued  |
 | set     | any              | set                   | —                            | discontinued      |
 
-**Additional states — control patients:**
+**Additional states — both groups:**
 
 | `trainingPausedDate` | `cumulativePauseDays` | Status |
 |----------------------|-----------------------|--------|
-| set                  | ≤ max                 | paused |
-| any                  | > max                 | broken_protocol |
-
-**Additional states — experimental patients:**
-
-| `plutoPauseDate` | `marsPauseDate` | `cumulativePlutoPauseDays` | `cumulativeMarsPauseDays` | Status |
-|-----------------|-----------------|---------------------------|--------------------------|--------|
-| set             | set             | ≤ max                     | ≤ max                    | paused |
-| set             | null            | ≤ max                     | ≤ max                    | active_partial |
-| null            | set             | ≤ max                     | ≤ max                    | active_partial |
-| any             | any             | > max                     | any                      | broken_protocol |
-| any             | any             | any                       | > max                    | broken_protocol |
+| set                  | ≤ 10 days             | paused |
+| any                  | > 10 days             | broken_protocol |
 
 `broken_protocol` causes:
 1. Activation not recorded within 5 days of `a0CompletionDate`
-2. *(control)* `cumulativePauseDays` exceeding `max_cumulative_pause_days`
-3. *(experimental)* either device cumulative days exceeding `max_cumulative_device_pause_days`
+2. `cumulativePauseDays` exceeding `max_cumulative_pause_days` (10 days) — applies to both groups
 
 **On-login check:** For any patient in `broken_protocol` whose `brokenProtocolDate` is still `null`, the server sets `brokenProtocolDate` to today and appends `Broken protocol detected` to the patient log.
 
@@ -352,7 +330,6 @@ Watch `old_id` → `new_id` transitions are the source of truth for data gaps:
   "protocol_event_id": "training_pause_followup",
   "triggered_by": "<uuid>",
   "triggered_by_type": "adverse_event | technical_fault",
-  "pause_scope": "full | pluto | mars",
   "scheduled_date": "YYYY-MM-DDTHH:MM",
   "flagged": false,
   "notes": ""
@@ -363,9 +340,7 @@ Extra fields on `complete`:
 ```json
 {
   "outcome": "resumed | extended",
-  "pause_days_this_segment": null,
-  "pluto_new_id": null,
-  "mars_new_id": null
+  "pause_days_this_segment": null
 }
 ```
 
@@ -391,7 +366,7 @@ Extra fields on `complete`:
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "description": "",
   "action_taken": "",
-  "pause_scope": "none | full | pluto | mars",
+  "paused": false,
   "pause_date": null,
   "allocated_pause_days": null,
   "attachments": []
@@ -405,13 +380,14 @@ Extra fields on `complete`:
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "description": "",
+  "paused": false,
+  "pause_date": null,
+  "allocated_pause_days": null,
   "faults": [
     {
       "device": "pluto | mars",
       "fault_description": "",
-      "resolved_same_day": false,
-      "pause_date": null,
-      "allocated_pause_days": null
+      "resolved_same_day": false
     }
   ],
   "attachments": []
@@ -468,8 +444,7 @@ Static config checked into the repo. Never written at runtime.
 ```json
 {
   "config": {
-    "max_cumulative_pause_days":        5,
-    "max_cumulative_device_pause_days": 5
+    "max_cumulative_pause_days": 10
   },
   "shared":       [...],
   "experimental": [...],

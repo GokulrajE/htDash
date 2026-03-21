@@ -53,9 +53,9 @@ Main dashboard. Stat bubbles in two rows (6 per row on large screens), in order:
 4. Unassigned
 5. Inactive
 6. Active
-7. Active (Partial)
-8. Training Complete
-9. A1 Complete
+7. Training Complete
+8. A1 Complete
+9. Paused
 10. Broken Protocol
 11. Discontinued
 12. All Complete
@@ -75,7 +75,7 @@ Patient list for the user's visible site(s).
 #### Page elements
 - Search bar (filter by Homer ID)
 - **Add Patient** button (admin only)
-- Filter tabs (in order): All, Unassigned, Inactive, Active, Active (Partial), Paused, Training Complete, A1 Complete, Pre-Discontinued, Broken Protocol, Discontinued, All Complete — each with count. "All" selected by default.
+- Filter tabs (in order): All, Unassigned, Inactive, Active, Paused, Training Complete, A1 Complete, Pre-Discontinued, Broken Protocol, Discontinued, All Complete — each with count. "All" selected by default.
 - Patient rows sorted by `enrollDate`. Row colour indicates group. Status badge colour-coded.
 - Each row: Homer ID, Hospital ID, Group, Training Side, Status
 - Clicking a row navigates to `/patients/<homer_id>`
@@ -92,14 +92,10 @@ Patient list for the user's visible site(s).
 | broken_protocol    | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
 | active             | Complete training                              | `trainingCompletionDate`                                  | training_completed |
 | active             | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
-| active             | Adverse event / fault — full pause             | `trainingPausedDate` *(ctrl)* or both pause dates *(exp)* | paused             |
-| active             | Adverse event / fault — partial pause *(exp)*  | `plutoPauseDate` or `marsPauseDate`                       | active_partial     |
-| active_partial     | Remaining device also paused                   | other pause date set                                      | paused             |
-| active_partial     | Paused device resumed                          | pause date cleared; counter incremented                   | active             |
-| active_partial     | Cumulative device days > max                   | counter incremented                                       | broken_protocol    |
-| paused             | Resume training                                | pause date(s) cleared; counter(s) incremented             | active             |
-| paused             | Extend pause (≤ max)                           | counter(s) incremented                                    | paused             |
-| paused             | Extend pause (> max)                           | counter(s) incremented                                    | broken_protocol    |
+| active             | Adverse event / fault — training paused        | `trainingPausedDate` set                                  | paused             |
+| paused             | Resume training                                | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active       |
+| paused             | Extend pause (cumulative ≤ 10 days)            | `cumulativePauseDays` incremented                         | paused             |
+| paused             | Extend pause (cumulative > 10 days)            | `cumulativePauseDays` incremented                         | broken_protocol    |
 | training_completed | Record A1                                      | `a1CompletionDate`                                        | a1_completed       |
 | training_completed | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
 | a1_completed       | Record A2                                      | `a2CompletionDate`                                        | all_completed      |
