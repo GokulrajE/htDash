@@ -58,6 +58,8 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-pane').forEach(pane => {
     pane.classList.toggle('hidden', pane.id !== `tab-${tab}`);
   });
+  if (tab === 'adl') loadAdlTab();
+  if (tab === 'vcg') loadVcgTab();
 }
 
 // ── Modal helpers ─────────────────────────────────────────────────────────────
@@ -743,6 +745,7 @@ async function submitAdlPrescription() {
 
   if (!ok) { setError('adl-prescription-error', data.error || 'Failed to save prescription.'); return; }
   hideModal('adl-prescription-modal');
+  _adlTabLoaded = false;
   loadPatientEvents();
 }
 
@@ -819,7 +822,122 @@ async function submitVcgPrescription() {
 
   if (!ok) { setError('vcg-prescription-error', data.error || 'Failed to save prescription.'); return; }
   hideModal('vcg-prescription-modal');
+  _vcgTabLoaded = false;
   loadPatientEvents();
+}
+
+// ── ADL / VCG prescription tab viewers ────────────────────────────────────────
+
+let _adlTabLoaded = false;
+let _vcgTabLoaded = false;
+
+function _prescriptionCard(data, exercises, dayLabel, headerClass) {
+  const exMap = Object.fromEntries(exercises.map(e => [e.id, e]));
+  const rows = (data.prescribed_exercises || []).map((pe, i) => {
+    const name = exMap[pe.exercise_id]?.name || pe.exercise_id;
+    const notesHtml = pe.notes
+      ? `<p class="text-xs text-slate-400 mt-0.5 italic">${pe.notes}</p>` : '';
+    return `
+      <div class="flex items-baseline gap-3 py-2.5 border-b border-slate-100 last:border-b-0">
+        <span class="text-xs font-bold text-slate-400 w-5 flex-shrink-0 text-right">${i + 1}.</span>
+        <div class="flex-1 min-w-0">
+          <span class="text-sm font-semibold text-slate-800">${name}</span>
+          ${notesHtml}
+        </div>
+        <span class="text-xs font-medium text-slate-500 whitespace-nowrap flex-shrink-0">${pe.blocks} blocks × ${pe.repetitions} reps</span>
+      </div>`;
+  }).join('');
+
+  const generalNotes = data.notes ? `
+    <div class="mt-3 pt-3 border-t border-slate-100">
+      <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">General Notes</p>
+      <p class="text-sm text-slate-600">${data.notes}</p>
+    </div>` : '';
+
+  return `
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 ${headerClass} border-b border-slate-100">
+        <h3 class="text-sm font-bold">${dayLabel}</h3>
+        <div class="text-right">
+          <p class="text-xs opacity-70">Filed ${data.filed_at}</p>
+          <p class="text-xs opacity-50">by ${data.filed_by}</p>
+        </div>
+      </div>
+      <div class="px-5 py-2">
+        ${rows}
+        ${generalNotes}
+      </div>
+    </div>`;
+}
+
+async function loadAdlTab() {
+  if (_adlTabLoaded) return;
+  const container = document.getElementById('adl-tab-content');
+  if (!container) return;
+
+  try {
+    const [exRes, d1Res, d15Res] = await Promise.all([
+      fetch('/api/exercises?type=adl'),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d1`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d15`),
+    ]);
+    const exercises = exRes.ok  ? await exRes.json()  : [];
+    const d1        = d1Res.ok  ? await d1Res.json()  : null;
+    const d15       = d15Res.ok ? await d15Res.json() : null;
+
+    if (!d1 && !d15) {
+      container.innerHTML = `
+        <div class="bg-white rounded-2xl p-10 shadow-sm border border-slate-100 text-center text-slate-400">
+          <i class="fas fa-dumbbell text-3xl mb-3 block"></i>
+          <p class="font-medium">No ADL prescriptions recorded yet.</p>
+        </div>`;
+    } else {
+      let html = '';
+      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-50 text-blue-800');
+      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-slate-50 text-slate-700');
+      container.innerHTML = html;
+    }
+    _adlTabLoaded = true;
+  } catch (_) {
+    container.innerHTML = `<p class="text-sm text-red-500 p-4">Failed to load ADL prescriptions.</p>`;
+  }
+}
+
+async function loadVcgTab() {
+  if (_vcgTabLoaded) return;
+  const container = document.getElementById('vcg-tab-content');
+  if (!container) return;
+
+  const vcgGroup  = patientData?.vcgGroup || '';
+  const groupLabel = VCG_GROUP_LABELS[vcgGroup] || vcgGroup || '';
+
+  try {
+    const [exRes, d1Res, d15Res] = await Promise.all([
+      fetch(`/api/exercises?type=vcg&group=${vcgGroup}`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d1`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d15`),
+    ]);
+    const exercises = exRes.ok  ? await exRes.json()  : [];
+    const d1        = d1Res.ok  ? await d1Res.json()  : null;
+    const d15       = d15Res.ok ? await d15Res.json() : null;
+
+    if (!d1 && !d15) {
+      container.innerHTML = `
+        <div class="bg-white rounded-2xl p-10 shadow-sm border border-slate-100 text-center text-slate-400">
+          <i class="fas fa-heartbeat text-3xl mb-3 block"></i>
+          <p class="font-medium">No VCG prescriptions recorded yet.</p>
+        </div>`;
+    } else {
+      const suffix = groupLabel ? ` · <span class="font-normal opacity-70">${groupLabel}</span>` : '';
+      let html = '';
+      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-50 text-teal-800');
+      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-slate-50 text-slate-700');
+      container.innerHTML = html;
+    }
+    _vcgTabLoaded = true;
+  } catch (_) {
+    container.innerHTML = `<p class="text-sm text-red-500 p-4">Failed to load VCG prescriptions.</p>`;
+  }
 }
 
 // ── Load patient ──────────────────────────────────────────────────────────────
