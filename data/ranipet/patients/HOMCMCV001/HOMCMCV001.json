@@ -13,6 +13,7 @@
   "trainingPausedDate": null,
   "cumulativePauseDays": 0,
   "brokenProtocolDate": "2026-03-21",
+  "vcgGroup": null,
   "agWatchRightID": null,
   "agWatchLeftID": null
 }

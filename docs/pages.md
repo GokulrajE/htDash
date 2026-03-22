@@ -213,10 +213,11 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Event Date (datetime, required; cannot be in the future)
   - AG Watch Right (dropdown — active, unassigned watch from inventory; required)
   - AG Watch Left (dropdown — active, unassigned watch from inventory; required)
+  - **VCG Group** (dropdown: VCG 2 / VCG 3 / VCG 4–5; required; **control patients only**) — therapist selects the patient's VCG level at the activation visit; fixed for the entire study duration
   - Notes (textarea, optional). The notes text area must be large enough for the user to write the their notes comfortably.
 - Server actions:
   - Verify `depends_on` prerequisites are met (server-side safety check — the UI already blocks the action, but the endpoint rejects the request if any prerequisite event is not in `complete`)
-  - Update `<homer_id>.json` with `activationDate`
+  - Update `<homer_id>.json` with `activationDate` and `vcgGroup` (control patients only)
   - Compute and fill `scheduled_date` for all `reference: "activation"` entries in `protocol_events.json`
   - Create first `watch_record` entry in `incomplete` with `scheduled_date = activationDate`
 - Log message: `Patient activated`
@@ -271,25 +272,41 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### ADL Prescription (`adl_prescription_d1`)
-- Trigger: `adl_prescription_d1` event row on patient detail (both groups, inactive patients)
+- Trigger: `adl_prescription_d1` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
-- Modal fields: TBD
-- Server actions: TBD
+- Modal fields:
+  - Event Date (datetime, pre-filled with `activationDate`, read-only)
+  - **Exercise search bar** — live-filters the ADL exercise list fetched from `GET /api/exercises?type=adl`; clicking a result adds it to the selected list; already-selected exercises are excluded from search results
+  - **Selected exercises list** (scrollable if long) — each exercise exists in one of two states:
+    - *Editing state* (entered when first added, or when Edit is pressed): exercise name + × (remove) button; Blocks field (number, required); Repetitions field (number, required); Notes field (textarea, optional); **Save** button — commits values and collapses to compact view
+    - *Compact state* (entered after Save is pressed): exercise name · `<blocks> blocks × <reps> reps`; **Edit** button (re-expands to editing state pre-filled with saved values); × button (removes exercise)
+    - The modal's **Save Prescription** button is **disabled** while any exercise card is in editing state — the therapist must Save or remove all cards before submitting
+  - General Notes (textarea, optional)
+- Server actions:
+  - Write prescription to `adl/adl_prescription_d1.json` in the patient folder
+  - Move `adl_prescription_d1` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "adl/adl_prescription_d1.json"`
 - Log message: `ADL prescription recorded`
 
 ---
 
 ### VCG Prescription (`vcg_prescription_d1`)
-- Trigger: `vcg_prescription_d1` event row on patient detail (control patients only, inactive)
+- Trigger: `vcg_prescription_d1` event row on patient detail (control patients only, day 1 after activation)
 - Allowed users: `admin`, `therapist`
-- Modal fields: TBD
-- Server actions: TBD
+- Modal fields:
+  - Event Date (datetime, pre-filled with `activationDate`, read-only)
+  - **VCG Group** (read-only display — pre-filled from `vcgGroup` in `<homer_id>.json`, set at activation)
+  - **Exercise search bar** — live-filters the VCG exercise list fetched from `GET /api/exercises?type=vcg&group=<vcg_group>`; clicking a result adds it to the selected list; already-selected exercises are excluded
+  - **Selected exercises list** (scrollable if long) — same two-state card behaviour as [ADL Prescription](#adl-prescription-adl_prescription_d1); **Save Prescription** button disabled while any card is in editing state
+  - General Notes (textarea, optional)
+- Server actions:
+  - Write prescription to `vcg_exercise/vcg_prescription_d1.json` in the patient folder
+  - Move `vcg_prescription_d1` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "vcg_exercise/vcg_prescription_d1.json"`
 - Log message: `VCG prescription recorded`
 
 ---
 
 ### Prescription Printout (`prescription_printout_d1`)
-- Trigger: `prescription_printout_d1` event row on patient detail (both groups, inactive)
+- Trigger: `prescription_printout_d1` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `adl_prescription_d1` (both); `vcg_prescription_d1` (ctrl only)
 - Modal fields: TBD
@@ -299,19 +316,28 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### ADL Prescription Revision (`adl_prescription_d15`)
-- Trigger: `adl_prescription_d15` event row on patient detail (both groups, active patients, day 15)
+- Trigger: `adl_prescription_d15` event row on patient detail (both groups, day 15 after activation)
 - Allowed users: `admin`, `therapist`
-- Modal fields: TBD
-- Server actions: TBD
+- Modal fields: same structure as [ADL Prescription](#adl-prescription-adl_prescription_d1), with:
+  - Event Date pre-filled with `activationDate + 15 days`, read-only
+  - Exercise list and notes pre-populated from `adl/adl_prescription_d1.json` — all cards open in **compact state** (already saved); therapist edits individual cards as needed
+- Server actions:
+  - Write revised prescription to `adl/adl_prescription_d15.json` in the patient folder
+  - Move `adl_prescription_d15` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "adl/adl_prescription_d15.json"`
 - Log message: `ADL prescription revised`
 
 ---
 
 ### VCG Prescription Revision (`vcg_prescription_d15`)
-- Trigger: `vcg_prescription_d15` event row on patient detail (control patients only, day 15)
+- Trigger: `vcg_prescription_d15` event row on patient detail (control patients only, day 15 after activation)
 - Allowed users: `admin`, `therapist`
-- Modal fields: TBD
-- Server actions: TBD
+- Modal fields: same structure as [VCG Prescription](#vcg-prescription-vcg_prescription_d1), with:
+  - Event Date pre-filled with `activationDate + 15 days`, read-only
+  - VCG Group read-only (from `vcgGroup` in `<homer_id>.json` — fixed for entire study)
+  - Exercise list and notes pre-populated from `vcg_exercise/vcg_prescription_d1.json` — all cards open in **compact state**; therapist edits individual cards as needed
+- Server actions:
+  - Write revised prescription to `vcg_exercise/vcg_prescription_d15.json` in the patient folder
+  - Move `vcg_prescription_d15` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "vcg_exercise/vcg_prescription_d15.json"`
 - Log message: `VCG prescription revised`
 
 ---

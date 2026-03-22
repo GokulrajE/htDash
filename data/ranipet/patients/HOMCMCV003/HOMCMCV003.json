@@ -4,7 +4,7 @@
   "group": "control",
   "trainingSide": "Left",
   "enrollDate": "2026-03-21T18:18",
-  "activationDate": null,
+  "activationDate": "2026-03-21T19:45",
   "discontinuationDate": null,
   "trainingCompletionDate": null,
   "a0CompletionDate": "2026-03-19T18:18",
@@ -13,6 +13,7 @@
   "trainingPausedDate": null,
   "cumulativePauseDays": 0,
   "brokenProtocolDate": null,
-  "agWatchRightID": null,
-  "agWatchLeftID": null
+  "vcgGroup": "vcg3",
+  "agWatchRightID": "RAGWATCH003",
+  "agWatchLeftID": "RAGWATCH004"
 }

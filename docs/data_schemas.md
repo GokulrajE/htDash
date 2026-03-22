@@ -106,12 +106,17 @@ All fields are factual — status is never stored but always derived.
   "trainingPausedDate":         null,
   "cumulativePauseDays":        0,
 
-  "brokenProtocolDate":         null
+  "brokenProtocolDate":         null,
+
+  "vcgGroup":                   null,
+  "agWatchRightID":             null,
+  "agWatchLeftID":              null
 }
 ```
 
 - `group`: `null` | `"experimental"` | `"control"`
 - `trainingSide`: `"Right"` | `"Left"` | `null` (only set for experimental group)
+- `vcgGroup`: `null` | `"vcg2"` | `"vcg3"` | `"vcg4_5"` — set at activation for control patients; `null` for experimental patients; fixed for the entire study duration once set
 - All date fields use ISO 8601 datetime format (`YYYY-MM-DDTHH:MM`). `null` means the event has not occurred.
 - Date fields cannot exceed the current local time — no future datetimes are allowed.
 
@@ -323,6 +328,18 @@ Watch `old_id` → `new_id` transitions are the source of truth for data gaps:
 | `"W001"` | `null`   | Watch missing — gap starts |
 | `null`   | `"W005"` | Missing watch replaced — gap ends |
 
+**`adl_prescription_d1`** / **`adl_prescription_d15`**
+```json
+{ "prescription_file": "adl/adl_prescription_d1.json" }
+```
+
+**`vcg_prescription_d1`** / **`vcg_prescription_d15`**
+```json
+{ "prescription_file": "vcg_exercise/vcg_prescription_d1.json" }
+```
+
+The complete entry stores only a relative path reference. The prescription data itself lives in the file — see [Prescription files](#prescription-files) below.
+
 **`training_pause_followup`** — synthetic event created when training is paused.
 ```json
 {
@@ -417,7 +434,58 @@ Extra fields on `complete`:
 }
 ```
 
-> **Note:** `discontinuationDate`, `a1CompletionDate`, `a2CompletionDate`, and all pause-related fields in `homer_id.json` are the authoritative fields for status derivation. They are updated atomically whenever they change, so status can be derived without reading `protocol_events.json`.
+> **Note:** `discontinuationDate`, `a1CompletionDate`, `a2CompletionDate`, and all pause-related fields in `homer_id.json` are the authoritative fields for status derivation.
+
+---
+
+## Prescription files
+
+### `adl/adl_prescription_d1.json` and `adl/adl_prescription_d15.json`
+
+Written by htDash when the therapist completes an ADL prescription event. The d15 file is independent — it is a full prescription, not a diff.
+
+```json
+{
+  "filed_at": "YYYY-MM-DD HH:MM:SS",
+  "filed_by": "<user_id>",
+  "prescribed_exercises": [
+    {
+      "exercise_id": "adl_2",
+      "blocks": 2,
+      "repetitions": 10,
+      "notes": "Use lighter comb initially"
+    }
+  ],
+  "notes": ""
+}
+```
+
+### `vcg_exercise/vcg_prescription_d1.json` and `vcg_exercise/vcg_prescription_d15.json`
+
+Written by htDash when the therapist completes a VCG prescription event. `vcg_group` mirrors `<homer_id>.json` for self-documentation.
+
+```json
+{
+  "filed_at": "YYYY-MM-DD HH:MM:SS",
+  "filed_by": "<user_id>",
+  "vcg_group": "vcg3",
+  "prescribed_exercises": [
+    {
+      "exercise_id": "vcg3_unilateral_4",
+      "blocks": 3,
+      "repetitions": 8,
+      "notes": ""
+    }
+  ],
+  "notes": ""
+}
+```
+
+**Common fields:**
+- `prescribed_exercises`: at least one entry required
+- `blocks`, `repetitions`: positive integers
+- `notes` (per exercise): optional free text
+- `notes` (top-level): optional general notes for the whole prescription They are updated atomically whenever they change, so status can be derived without reading `protocol_events.json`.
 
 > **Incomplete events on `broken_protocol`:** All `incomplete` entries remain as-is — they are genuinely incomplete. `broken_protocol` is a derived status; nothing is auto-closed.
 
@@ -434,6 +502,50 @@ Flat folder at patient root. Filename convention:
 The datetime is the `completion_date` of the event, not the server filing time.
 
 Every file in `attachments/` must be referenced in `protocol_events.json`.
+
+---
+
+## `config/homer_exercises.json`
+
+Static config checked into the repo. Never written at runtime. Contains the full exercise catalogue used for ADL and VCG prescriptions.
+
+```json
+{
+  "adl": {
+    "description": "Activities of Daily Living — functional self-care exercises common to both groups.",
+    "exercises": [
+      {
+        "id": "adl_1",
+        "name": "Practice Brushing Your Teeth",
+        "description": "...",
+        "dosage": "2–3 brushing cycles, 2–3 sets",
+        "items": "Toothbrush, toothpaste, mirror, chair with back support",
+        "category": "hygiene"
+      }
+    ]
+  },
+  "vcg": {
+    "vcg2":   { "name": "VCG 2",   "description": "...", "exercises": [...] },
+    "vcg3":   { "name": "VCG 3",   "description": "...", "exercises": [...] },
+    "vcg4_5": { "name": "VCG 4–5", "description": "...", "exercises": [...] }
+  }
+}
+```
+
+Each exercise object:
+
+| Field | Description |
+|-------|-------------|
+| `id` | Unique identifier, e.g. `adl_1`, `vcg3_unilateral_4`, `vcg45_bilateral_2` |
+| `name` | Human-readable exercise name |
+| `description` | Full therapist-facing instructions |
+| `dosage` | Recommended dosage string (informational) |
+| `items` | Equipment required |
+| `category` | ADL: `hygiene` \| `self-care`; VCG: `unilateral` \| `bilateral` |
+
+ID naming conventions:
+- ADL: `adl_<N>`
+- VCG: `vcg<group>_<unilateral|bilateral>_<N>` (e.g. `vcg3_unilateral_4`, `vcg45_bilateral_2`)
 
 ---
 

@@ -1,0 +1,627 @@
+{
+  "adl": {
+    "description": "Activities of Daily Living — functional self-care exercises common to both experimental and control groups.",
+    "exercises": [
+      {
+        "id": "adl_1",
+        "name": "Practice Brushing Your Teeth",
+        "description": "Seat the patient comfortably on a chair in front of a mirror with proper posture and feet supported. Place the toothbrush and toothpaste within reachable distance on the affected hand side. Ask the patient to reach out and grasp the toothbrush using the affected hand. Lift the toothbrush toward the mouth, encouraging controlled shoulder, elbow, and wrist movements. Brush the upper teeth using small, controlled movements, followed by the lower teeth — emphasize smooth and repetitive strokes. Maintain steady grip and coordinated arm movements throughout. After brushing, lower the hand and place the toothbrush back on the surface. Repeat 2–3 brushing cycles, 2–3 sets.",
+        "dosage": "2–3 brushing cycles, 2–3 sets",
+        "items": "Toothbrush, toothpaste (pea-sized, if required), mirror, chair with back support",
+        "category": "hygiene"
+      },
+      {
+        "id": "adl_2",
+        "name": "Practice Combing Your Hair",
+        "description": "Seat the patient on a chair with back support in front of a mirror, feet flat on the floor and trunk upright. The comb is placed within reachable distance on the affected side. Ask the patient to reach toward the comb and grasp it using the affected hand. Guide the patient to lift the comb toward the head, encouraging controlled shoulder and elbow movement. Place the comb on the scalp, maintaining wrist stability and appropriate grip. Comb the hair from front to back or top to side using slow, smooth strokes. Encourage repeated combing strokes to different areas of the head to promote endurance and coordination. After finishing, lower the arm and place the comb back on the table. Repeat 8–12 combing strokes, 2–3 sets, 3–5 minutes per set.",
+        "dosage": "8–12 combing strokes, 2–3 sets, 3–5 minutes per set",
+        "items": "Comb, mirror (for visual guidance), chair with back support",
+        "category": "hygiene"
+      },
+      {
+        "id": "adl_3",
+        "name": "Practice Washing Your Face",
+        "description": "Seat the patient on a chair in front of a mirror at a comfortable height, feet flat on the floor and trunk upright. Place a towel and a bowl of water within reach on the affected side. Instruct the patient to reach out and grasp the towel using the affected hand. Guide the patient to dip or wet the towel in water using the same hand. Ask the patient to lift the arm toward the face, encouraging controlled shoulder and elbow movements. Instruct the patient to gently wipe the face using upward, downward, or circular motions, covering the forehead, cheeks, and chin while looking in the mirror. Encourage smooth, controlled movements while maintaining a stable grip on the towel. Repeat the wiping motions as prescribed. Repeat 6–10 face-washing strokes, 2–3 sets, 3–5 minutes per session.",
+        "dosage": "6–10 face-washing strokes, 2–3 sets, 3–5 minutes per session",
+        "items": "Soft face towel, mirror (visual guidance), water in a bowl, chair with backrest, table",
+        "category": "hygiene"
+      },
+      {
+        "id": "adl_4",
+        "name": "Practice Dressing",
+        "description": "Seat the patient on a chair with feet flat on the floor, trunk upright with back support, and a table placed in front at elbow height. Shirt or blouse placed within reachable distance. Patient identifies the front and sleeves of the garment. Patient uses the unaffected hand to assist in holding the shirt or blouse. Patient actively inserts the affected arm into the sleeve first, then actively pulls the sleeve up over the forearm and upper arm — encourage shoulder flexion, elbow extension, and hand grasp-release. Patient then inserts the unaffected arm into the other sleeve independently. Patient actively pulls the shirt or blouse over the shoulders and chest, using bilateral hand movements to adjust and align the garment. Patient checks garment position using visual feedback or mirror. Task is repeated as per the prescribed dosage. Repeat 5–10 dressing cycles.",
+        "dosage": "5–10 dressing cycles",
+        "items": "Chair with backrest, table, mirror (for feedback), loose-fitting daily-use shirt or blouse",
+        "category": "self-care"
+      },
+      {
+        "id": "adl_5",
+        "name": "Practice Feeding",
+        "description": "Seat the patient on a chair with feet flat, trunk upright with back support, affected elbow and forearm supported on the table at elbow height. Simulated food items (rice or beans in a plate or bowl) are placed within functional reach. Patient grasps the spoon using the affected hand. Patient moves the spoon toward the bowl or plate and scoops simulated food using controlled wrist and finger movements. Patient lifts the spoon from the bowl and brings it toward the mouth, maintaining eye-hand coordination. Patient simulates placing food into the mouth. Patient lowers the spoon back to the bowl. Task is repeated according to prescribed repetitions and sets. Repeat 8–12 scooping and feeding cycles, 2–3 sets.",
+        "dosage": "8–12 scooping and feeding cycles, 2–3 sets",
+        "items": "Plate with raised edges or bowl, spoon, chair with backrest",
+        "category": "self-care"
+      },
+      {
+        "id": "adl_6",
+        "name": "Practice Drinking",
+        "description": "Seat the patient on a chair with feet flat, trunk upright with back support, affected elbow and forearm supported on the table at elbow height. A plastic tumbler or steel glass is placed within functional reach. Patient reaches forward using the affected hand — shoulder flexion and elbow extension are encouraged. Patient grasps the tumbler using the affected hand independently, or both hands if additional stability is required; emphasize cylindrical grasp and finger flexion. Patient lifts the tumbler off the table, encouraging elbow flexion and shoulder flexion while maintaining trunk stability. Patient brings the tumbler toward the mouth and simulates sipping (no actual drinking if unsafe). Head and neck movements are kept minimal. Patient lowers the tumbler back to the table in a controlled manner. Repeat 8–12 drinking cycles, 2–3 sets.",
+        "dosage": "8–12 drinking cycles, 2–3 sets",
+        "items": "Plastic tumbler or steel glass, chair with backrest, table",
+        "category": "self-care"
+      },
+      {
+        "id": "adl_7",
+        "name": "Practice Bathing",
+        "description": "Seat the patient on a chair or bath stool with feet flat on the floor and trunk upright with back support. Patient grasps a towel or sponge using the affected hand, or both hands if required initially. Patient brings the towel or sponge toward the chest and abdomen using controlled forward and diagonal movements. Patient then holds a mug, scoops water from the bucket, and simulates pouring water over the body to replicate bathing movements. Task is repeated as per dosage. Repeat 6–10 bathing cycles.",
+        "dosage": "6–10 bathing cycles",
+        "items": "Small bucket with mug, bath towel or sponge, chair or bath stool",
+        "category": "self-care"
+      },
+      {
+        "id": "adl_8",
+        "name": "Practice Toileting",
+        "description": "Seat the patient on a chair or commode with feet flat on the floor and trunk upright with back support. A hand-shower or mug is placed on a stool near the patient. Patient grasps the hand-shower or mug using the affected hand. Patient reaches the hand backward or downward toward the posterior hip region (simulated). Encourage shoulder extension, elbow flexion and extension, and trunk control. Patient simulates spraying water with the hand-shower, or scoops water using the mug and simulates pouring over the posterior hip area. Movements are slow, controlled, and purposeful. Patient may perform a slight forward or lateral trunk lean as required. Patient brings the hand-shower or mug back to the starting position, rests briefly, and repeats. Repeat 5–10 toileting movement cycles.",
+        "dosage": "5–10 toileting movement cycles",
+        "items": "Chair or commode, hand shower or mug",
+        "category": "self-care"
+      }
+    ]
+  },
+  "vcg": {
+    "vcg2": {
+      "name": "VCG 2",
+      "description": "Voluntary Control Group 2 — early-stage arm and hand exercises for patients with minimal voluntary movement.",
+      "exercises": [
+        {
+          "id": "vcg2_unilateral_1",
+          "name": "Forward Arm Slide",
+          "description": "Sit upright on a chair with feet flat and affected forearm resting on a table. Place a towel under the affected hand. Slide the hand forward on the table to perform shoulder flexion. Avoid trunk movements. Hold the end position for 2–3 seconds, then slowly return. Repeat 5–10 times, 1–2 sets.",
+          "category": "unilateral",
+          "dosage": "5–10 reps, 1–2 sets",
+          "items": "Chair with back support, table, towel"
+        },
+        {
+          "id": "vcg2_unilateral_2",
+          "name": "Ball Roll",
+          "description": "Sit on a chair facing the table with the affected arm resting on it and hand placed on top of a ball. Roll the ball forward slowly (shoulder flexion). Hold the end position for 2–3 seconds, then slowly roll back. Allow the arm to relax and repeat. Repeat 5–10 times, 1–3 sets.",
+          "category": "unilateral",
+          "dosage": "5–10 reps, 1–3 sets",
+          "items": "Table at elbow height, chair, small soft ball"
+        },
+        {
+          "id": "vcg2_unilateral_3",
+          "name": "Grasp and Release",
+          "description": "Sit with the affected forearm fully supported on a table, hand in mid-prone or palm down. Ask the patient to bend the fingers to grasp a towel and hold for 2–3 seconds. Then open the hand slowly and straighten fingers as much as possible. Hold the open position for 2–3 seconds. Repeat 5–10 times, 1–2 sets.",
+          "category": "unilateral",
+          "dosage": "5–10 reps, 1–2 sets",
+          "items": "Chair, table, towel"
+        },
+        {
+          "id": "vcg2_unilateral_4",
+          "name": "Small Balloon Tap",
+          "description": "Sit upright with the affected arm supported on the table. A small balloon is fixed with tape within comfortable reach. Actively lift the affected arm above the table to gently tap the balloon. Encourage lifting the shoulder while tapping. Rest as needed and repeat. Repeat 5–10 times, 2–3 sets.",
+          "category": "unilateral",
+          "dosage": "5–10 reps, 2–3 sets",
+          "items": "Small balloon, chair, table, tape"
+        },
+        {
+          "id": "vcg2_unilateral_5",
+          "name": "Finger Painting",
+          "description": "Sit facing the table with the affected arm resting completely and paper placed in front of the affected hand. Dip one or more fingers of the affected hand into paint and actively move fingers on the paper. Make simple movements: lines, dots, small circles. Encourage slow and controlled movement. Duration: 5–15 minutes.",
+          "category": "unilateral",
+          "dosage": "5–15 minutes",
+          "items": "Table, chair, paper sheet, non-toxic finger paints, shallow plate, towel, water"
+        },
+        {
+          "id": "vcg2_unilateral_6",
+          "name": "Item Arrangement",
+          "description": "Sit facing the table with all objects within easy reach. Using only the affected hand, sort and move each object from one side of the table to the other (e.g., cups to one corner, spoons in the middle). Use slow, controlled movements and rest the arm between movements. Repeat 5–10 objects, 1–2 sets.",
+          "category": "unilateral",
+          "dosage": "5–10 objects, 1–2 sets",
+          "items": "Lightweight objects (cups, spoons, small towel), table, chair"
+        },
+        {
+          "id": "vcg2_unilateral_7",
+          "name": "Draw and Wipe",
+          "description": "Sit facing the table with the affected arm supported. Use the unaffected (dominant) hand to draw a shape, letter, or number on the table with chalk or marker. Hold the cloth in the affected hand and wipe over the drawn shape. Encourage slow and wide movement. Draw the next shape with the unaffected hand and repeat. Repeat 3–5 times, 2–3 sets.",
+          "category": "unilateral",
+          "dosage": "3–5 reps, 2–3 sets",
+          "items": "Table, chair, chalk or marker, small cloth or towel"
+        },
+        {
+          "id": "vcg2_unilateral_8",
+          "name": "Page Turning",
+          "description": "Sit facing the table with the affected arm supported and a newspaper placed within easy reach. Place the newspaper flat on the table. Use the fingers or fist of the affected hand to lift the corner of a page and separate it from the rest. Use the unaffected hand to stabilize the paper. Flip the page over and release it onto the table. Ensure fingers open fully after releasing. Rest between pages. Repeat 5–10 pages, 1–2 sets.",
+          "category": "unilateral",
+          "dosage": "5–10 pages, 1–2 sets",
+          "items": "Newspaper or book, table, chair"
+        },
+        {
+          "id": "vcg2_bilateral_9",
+          "name": "Palm Turn",
+          "description": "Sit facing the table with both arms and forearms supported. Hold a lightweight small ball in both hands with the affected hand's palm facing upward (supination). Actively rotate both forearms together to turn palms downward (pronation) while maintaining grip on the ball. Movement should be slow, controlled, and equal on both sides. Return and repeat. Repeat 5–10 times, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 reps, 1–2 sets",
+          "items": "Table, chair, small soft lightweight ball"
+        },
+        {
+          "id": "vcg2_bilateral_10",
+          "name": "Reach and Touch",
+          "description": "Sit facing the table with both arms supported. A steel tumbler is placed within easy reach. Clasp both hands together and reach forward with both hands to touch the tumbler. Hold for 2–3 seconds, then slowly bring both hands back. Rest before the next repetition. Repeat 5–10 times, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 reps, 1–2 sets",
+          "items": "Table, chair, lightweight steel tumbler"
+        },
+        {
+          "id": "vcg2_bilateral_11",
+          "name": "Elbow Curls",
+          "description": "Sit upright holding a cane with both hands, elbows close to the body. Hold the cane horizontally at waist level. Bend both elbows together to bring the cane towards the chest; the unaffected arm assists. Hold for 2–3 seconds. Slowly straighten both elbows and push the cane away from the body. Hold for 2–3 seconds. Bring back to starting and repeat. Repeat 5–10 times, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 reps, 1–2 sets",
+          "items": "Chair, cane or stick or plastic rod"
+        },
+        {
+          "id": "vcg2_bilateral_12",
+          "name": "Reach-to-Grasp-to-Mouth",
+          "description": "Sit facing the table with a tumbler placed at midline and both arms resting on the table. Place both hands around either side of the tumbler. Actively reach forward with both arms together, then lift the tumbler with both hands above the table. Bend both elbows together to bring the tumbler towards the mouth. Stop just before touching the lips and hold for 2–3 seconds. Slowly move it away and lower back to the table. Repeat 5–8 times, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "5–8 reps, 1–2 sets",
+          "items": "Lightweight plastic glass or tumbler (empty), table, chair"
+        },
+        {
+          "id": "vcg2_bilateral_13",
+          "name": "Forward Bag Lift",
+          "description": "Sit facing the table with both arms resting. Place both hands on the handles of a shopping bag (one handle per hand). Slowly lift the bag upward from the table, both arms moving together. Continue lifting up to about neck level. Movement should be smooth and controlled. Hold for 2–3 seconds, then slowly lower back. Relax and repeat. Repeat 5–10 times, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 reps, 1–2 sets",
+          "items": "Shopping bag or cloth/tote bag, table, chair with back support"
+        },
+        {
+          "id": "vcg2_bilateral_14",
+          "name": "Towel Folding",
+          "description": "Sit facing the table with both elbows and forearms supported and a towel spread flat within arm's reach. Place both hands on the towel at midline and actively move both hands forward. Grasp the edge of the towel with both hands and fold, emphasizing active participation of the affected hand. Increase folds (vertically and horizontally). Release and return hands to starting position. Relax and repeat. Repeat 6–10 times, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "6–10 reps, 1–2 sets",
+          "items": "Smaller or lighter towel, table, chair with back support"
+        },
+        {
+          "id": "vcg2_bilateral_15",
+          "name": "Rolling Pin Use",
+          "description": "Sit upright facing a table at elbow level. Place both hands on a rolling pin in front of the table, palms facing down. Roll the pin forward (away from body) with both arms together, then roll backward (toward body). Movement should be slow and controlled with equal use of both arms. Pause and relax between repetitions. Repeat 5–10 forward and backward rolls, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 forward and backward rolls, 1–2 sets",
+          "items": "Lightweight rolling pin, table, chair with back support"
+        },
+        {
+          "id": "vcg2_bilateral_16",
+          "name": "Hold Paper While Writing",
+          "description": "Sit with paper placed directly in front. Position the affected (non-dominant) hand on the top or side edge of the paper to stabilize it. The unaffected (dominant) hand holds the pen. Write or draw simple lines, circles, or basic letters. Focus on keeping the paper steady with the affected hand. Continue writing with rest breaks as needed. Duration: 5–10 minutes.",
+          "category": "bilateral",
+          "dosage": "5–10 minutes",
+          "items": "Paper or notebook, pen with comfortable grip, table, chair with back support"
+        },
+        {
+          "id": "vcg2_bilateral_17",
+          "name": "Wipe a Plate",
+          "description": "Sit facing the table with both arms and forearms supported. Place a plate at midline on a non-slip mat. The affected hand stabilizes the plate while the unaffected hand holds a sponge or cloth and performs circular scrubbing movements over the plate surface. Encourage holding the plate tight with the affected hand while the unaffected hand cleans. Rest and repeat. Repeat 5–10 wiping motions, 2–3 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 wiping motions, 2–3 sets",
+          "items": "Plate, clean cloth or small towel, table, chair"
+        },
+        {
+          "id": "vcg2_bilateral_18",
+          "name": "Holding Bowl and Scoop",
+          "description": "Sit with the bowl placed at midline on the table. The affected hand holds and stabilizes the bowl. The unaffected hand holds the spoon and scoops rice or beans from the bowl, transferring them to another bowl placed nearby. Practice slow, controlled movements and encourage keeping the bowl steady with the affected hand. Rest as needed. Repeat 5–10 scooping actions, 1–2 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 scooping actions, 1–2 sets",
+          "items": "Spoon, rice or beans, lightweight non-slip bowl, table, chair with back support"
+        }
+      ]
+    },
+    "vcg3": {
+      "name": "VCG 3",
+      "description": "Voluntary Control Group 3 — intermediate exercises targeting functional reach, grasp, and bilateral coordination.",
+      "exercises": [
+        {
+          "id": "vcg3_unilateral_1",
+          "name": "Reach and Grasp",
+          "description": "Sit facing the table with the affected arm supported. Place a tumbler at midline. Stretch out the affected hand toward the tumbler, open the hand, and wrap all fingers around it. Pick it up and bring it to the side of the table, then release it gently. Rest between repetitions. Repeat 5–10 times.",
+          "category": "unilateral",
+          "dosage": "5–10 reps",
+          "items": "Steel tumbler, chair, table"
+        },
+        {
+          "id": "vcg3_unilateral_2",
+          "name": "Matchbox Arranging",
+          "description": "Sit facing the table with the affected arm supported. Place multiple matchboxes marked with numbers or colours on the table within reach of the affected hand. Using only the affected hand, pick up one matchbox at a time and sort them by number or colour, placing each in the correct group. Emphasize controlled grasp, lift, release, and placement. Repeat 5–10 times.",
+          "category": "unilateral",
+          "dosage": "5–10 reps",
+          "items": "Empty matchboxes (sorted by size, colour, or orientation), table, chair"
+        },
+        {
+          "id": "vcg3_unilateral_3",
+          "name": "Wall Slides",
+          "description": "Sit facing a wall at arm's length. Place a towel or pad under the palm of the affected hand, resting it gently on the wall at shoulder height. Slide the hand up the wall as high as possible using active shoulder flexion and elbow extension. Hold for 2–3 seconds at the top. Slowly slide the hand back down to starting position. Repeat 8–10 times, 1–3 sets.",
+          "category": "unilateral",
+          "dosage": "8–10 reps, 1–3 sets",
+          "items": "Smooth wall surface, towel under the hand, chair"
+        },
+        {
+          "id": "vcg3_unilateral_4",
+          "name": "Lift and Sip",
+          "description": "Sit with the affected arm and forearm supported on the table. Reach forward with the affected arm and grasp the tumbler using a functional (cylindrical) grip. Slowly lift the tumbler while keeping the elbow flexed and wrist stable. Bring the tumbler toward the mouth, simulating the motion of drinking. Pause briefly near the mouth, then lower the arm and return the tumbler to its starting position. Repeat 8–12 reps.",
+          "category": "unilateral",
+          "dosage": "8–12 reps",
+          "items": "Chair, table, lightweight plastic or steel tumbler"
+        },
+        {
+          "id": "vcg3_unilateral_5",
+          "name": "Table Wipe (Straight Elbow)",
+          "description": "Sit at the table with the affected arm extended forward, elbow kept straight but not locked, and a small towel placed under the palm. Slide the hand side to side across the table surface in a horizontal wiping motion, reaching right and left as far as possible without losing control or altering posture. Maintain the elbow extended throughout. Avoid trunk compensation. Repeat 10–15 reps per direction, 2–3 sets.",
+          "category": "unilateral",
+          "dosage": "10–15 reps per direction, 2–3 sets",
+          "items": "Small towel, chair, table"
+        },
+        {
+          "id": "vcg3_unilateral_6",
+          "name": "Table Wipe (Bent Elbow)",
+          "description": "Sit with the affected forearm resting on the table surface, palm down, and a small towel placed under the hand. Slide the affected hand forward (elbow extension) and then pull it back (elbow flexion) along the tabletop, always keeping the elbow in contact with the surface. Emphasize movement at the elbow, not the shoulder. Encourage full range without pain. Movement should be rhythmic and functional. Repeat 10–15 reps forward and backward, 2–3 sets.",
+          "category": "unilateral",
+          "dosage": "10–15 reps forward and backward, 2–3 sets",
+          "items": "Table at elbow height, chair, small towel"
+        },
+        {
+          "id": "vcg3_unilateral_7",
+          "name": "Paper Crumpling",
+          "description": "Sit with feet flat and the paper placed on the table. Ensure proper posture with upright trunk and forearm of the affected hand resting on the table. Reach out with the affected hand to touch the paper. Begin crumpling the paper slowly using the affected hand, maintaining control to form a compact ball. Once fully crumpled, place the paper ball to the side of the table. Repeat 8–12 times, 2–3 sets.",
+          "category": "unilateral",
+          "dosage": "8–12 reps, 2–3 sets",
+          "items": "Sheets of wastepaper, newspaper, or tissue paper, table, chair"
+        },
+        {
+          "id": "vcg3_unilateral_8",
+          "name": "Target Hit",
+          "description": "Sit in front of a target placed on the wall at shoulder height. Touch the target using the affected hand. Set up large targets (paper dots, shapes, coloured dots, or numbered markers) on a wall at eye level, placed right, left, up, and down. Reach out and touch or tap the targets. Repeat the task and rest in between. Repeat 5–10 targets per round, 2–3 rounds.",
+          "category": "unilateral",
+          "dosage": "5–10 targets per round, 2–3 rounds",
+          "items": "Large targets (paper dots, shapes, or numbered markers), chair"
+        },
+        {
+          "id": "vcg3_unilateral_9",
+          "name": "Balloon Tap",
+          "description": "Sit with the affected arm and elbow supported on the table. A larger balloon is taped on the table at a reachable distance. Actively lift the affected hand toward the balloon and tap it using fingers or palm. Emphasize active shoulder flexion, elbow extension, and hand opening. The balloon is allowed to move slightly; follow and tap it again. Bring the affected hand back to resting position. Repeat 8–12 taps, 1–2 sets.",
+          "category": "unilateral",
+          "dosage": "8–12 taps, 1–2 sets",
+          "items": "Balloon taped to table, chair, table"
+        },
+        {
+          "id": "vcg3_unilateral_10",
+          "name": "Wall Wipe",
+          "description": "Sit facing a wall with the affected hand holding a small towel, placed flat against the wall at shoulder height. Move the affected hand in different directions: up and down (vertical), side to side (horizontal), and circular or figure-eight shapes. If needed, draw or tape simple shapes on the wall to follow. Keep the elbow slightly bent and avoid shrugging shoulders. Repeat 10 reps per direction, 2 sets.",
+          "category": "unilateral",
+          "dosage": "10 reps per direction, 2 sets",
+          "items": "Smooth wall surface at shoulder-to-head height, small towel, pre-drawn shapes, chair"
+        },
+        {
+          "id": "vcg3_bilateral_1",
+          "name": "Hold and Open the Cap",
+          "description": "Sit facing the table with both arms and forearms supported. Place a bottle on the table within comfortable reach. Stabilize the bottle with the affected hand using a cylindrical grasp. With the unaffected hand, reach over and twist the cap open. Once the cap is opened, return it and repeat the motion. Focus on keeping the grip firm and avoiding slippage. Repeat 8–10 times, 2–3 sets.",
+          "category": "bilateral",
+          "dosage": "8–10 reps (opening and closing), 2–3 sets",
+          "items": "1-litre water bottle, table, chair"
+        },
+        {
+          "id": "vcg3_bilateral_2",
+          "name": "Towel Fold",
+          "description": "Sit facing the table with both arms and forearms supported, towel placed at midline. Horizontal fold: both hands grasp the top two corners and bring them down to meet the bottom edge; smooth out with both hands. Vertical fold: grasp new top corners and bring together to match the side edge; align and flatten. Optional final fold to make the towel smaller. Repeat 8–10 folds, 2 sets.",
+          "category": "bilateral",
+          "dosage": "8–10 folds, 2 sets",
+          "items": "Medium or large towel, chair, table"
+        },
+        {
+          "id": "vcg3_bilateral_3",
+          "name": "Dispenser Bottle Press",
+          "description": "Sit upright with a dispenser bottle placed at midline or toward the affected side on the table. Position the affected hand over the dispenser nozzle. Use the unaffected hand to stabilize the base of the bottle and the affected hand's index or middle fingers to press the dispenser. Press down fully and slowly, then release, allowing the dispenser to return to its resting position. Focus on controlled activation without wrist deviation. Repeat 10–15 presses, 1–3 sets.",
+          "category": "bilateral",
+          "dosage": "10–15 presses, 1–3 sets",
+          "items": "Empty dispenser bottle (hand sanitizer, lotion, or soap dispenser), table, chair"
+        },
+        {
+          "id": "vcg3_bilateral_4",
+          "name": "Remote Manipulation",
+          "description": "Sit upright with a remote control held in the affected hand. The affected hand holds the remote steady while the unaffected hand presses buttons to navigate (power, volume, channel buttons). Reach forward, grasp the remote using the affected hand, and focus on maintaining grip and postural stability. Repeat the task and rest between repetitions. Repeat 5–10 targeted presses, 1–3 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 targeted presses, 1–3 sets",
+          "items": "TV or AC remote control (real or dummy), table, chair"
+        },
+        {
+          "id": "vcg3_bilateral_5",
+          "name": "Hold and Pour",
+          "description": "Sit facing the table with both arms and forearms supported. Place one empty and one partially filled steel tumbler on the table. Hold and stabilize the empty glass using the affected hand. The unaffected hand holds the partially filled tumbler and slowly pours water into the empty one. Focus on maintaining the grip and position of the glass in the affected hand. Encourage controlled, slow pouring. Place both tumblers down, relax, and repeat. Repeat 8–10 times, 2–3 sets.",
+          "category": "bilateral",
+          "dosage": "8–10 reps, 2–3 sets",
+          "items": "Two lightweight steel tumblers, partially filled water, table, chair"
+        },
+        {
+          "id": "vcg3_bilateral_6",
+          "name": "Lift and Drink",
+          "description": "Sit on a chair with feet flat and both hands resting on the table, maintaining upright posture. Using both hands, reach forward and grasp the glass firmly. Lift the glass slowly and steadily with both hands, elbows flexing symmetrically. Bring the glass to the mouth with controlled motion and sip a small amount of water. After sipping, move the glass away and return it gently to the table without spilling. Repeat 3–5 times, 3 sets.",
+          "category": "bilateral",
+          "dosage": "3–5 reps, 3 sets",
+          "items": "Lightweight plastic or steel tumbler half-filled with water, table, chair"
+        },
+        {
+          "id": "vcg3_bilateral_7",
+          "name": "Scoop and Transfer",
+          "description": "Sit facing the table with both arms and forearms supported. Bowl A is filled with rice, dal, or beads; Bowl B is empty. A spoon is placed near Bowl A. Patient holds the spoon using the affected hand while the unaffected hand stabilizes the bowl. Scoop material from Bowl A, lift carefully, and transfer it into Bowl B placed approximately 30 cm apart. Emphasize smooth scooping, wrist control, and controlled release. Repeat 5–10 scoops, 1–3 sets.",
+          "category": "bilateral",
+          "dosage": "5–10 scoops, 1–3 sets",
+          "items": "Two bowls or containers, spoon or cup, dry rice, dal, sand, or beads, table, chair"
+        },
+        {
+          "id": "vcg3_bilateral_8",
+          "name": "Spoon Stirring",
+          "description": "Sit facing the table with both arms and forearms supported. A bowl with a small amount of material is placed on a non-slip surface. Patient grasps the spoon with the affected hand and the unaffected hand stabilizes the bowl. Stir the contents in a circular motion clockwise and counterclockwise. Use smooth wrist and elbow movement with minimal compensation from shoulder or trunk. May start with bilateral support and progress to unilateral stirring. Repeat 10–15 circles per direction, 2–3 sets.",
+          "category": "bilateral",
+          "dosage": "10–15 circles per direction (clockwise/counterclockwise), 2–3 sets",
+          "items": "Spoon, lightweight non-breakable mixing bowl or cup, stirring medium (water, dry rice, lentils, or beads), chair, table"
+        },
+        {
+          "id": "vcg3_bilateral_9",
+          "name": "Peel Fruits",
+          "description": "Sit facing the table with both arms supported and fruit placed on a non-slip board. The non-affected hand stabilizes the fruit. With the affected hand, use fingers to remove the fruit's skin in a controlled, repetitive motion. For easier tasks like banana or boiled potato, peel manually with fingers. Peel 1–2 fruits.",
+          "category": "bilateral",
+          "dosage": "Peel 1–2 fruits",
+          "items": "Soft fruits with removable skin (banana, boiled potato, orange, or apple), bowl or plate for discarded peels, chair, table"
+        },
+        {
+          "id": "vcg3_bilateral_10",
+          "name": "Guided Cutting of Fruits",
+          "description": "Sit facing the table with both arms supported and a banana placed on a stable cutting board. The non-affected hand holds the banana. The affected hand grips a spoon and cuts the banana into small slices. Emphasize safe, controlled cutting using a downward motion with appropriate wrist positioning. Cut the entire banana into 8–10 slices.",
+          "category": "bilateral",
+          "dosage": "Cut entire banana into 8–10 slices",
+          "items": "Peeled banana on cutting board, spoon for cutting, plate for collecting slices, chair, table, non-slip cutting board"
+        },
+        {
+          "id": "vcg3_bilateral_11",
+          "name": "Arm Lifts",
+          "description": "Sit upright holding a cane with both hands, elbows away from the body. Hold the cane horizontally at waist level. Lift both shoulders together and bring the cane toward neck level; the unaffected arm guides the movement. Hold for 2–3 seconds. Slowly bring it down and hold for 2–3 seconds. Bring back to starting and repeat. Repeat 5–10 times.",
+          "category": "bilateral",
+          "dosage": "5–10 reps",
+          "items": "Chair, cane or stick or plastic rod"
+        },
+        {
+          "id": "vcg3_bilateral_12",
+          "name": "Shoulder Shrugs",
+          "description": "Sit upright with neutral spine, chin gently tucked, and arms relaxed by the sides holding lightweight bags in each hand. Slowly lift both shoulders up toward the ears. Hold the elevated position for 3–5 seconds. Slowly lower the shoulders back to starting position. Encourage equal movement on both sides. Repeat 8–10 reps, 2–3 sets.",
+          "category": "bilateral",
+          "dosage": "8–10 reps, 2–3 sets",
+          "items": "Chair, lightweight bags in both hands (optional: mirror for visual feedback)"
+        }
+      ]
+    },
+    "vcg4_5": {
+      "name": "VCG 4 & 5",
+      "description": "Voluntary Control Group 4–5 — advanced exercises for patients with greater voluntary control, focusing on fine motor skills, bilateral coordination, and functional independence.",
+      "exercises": [
+        {
+          "id": "vcg45_unilateral_1",
+          "name": "One-Hand Cup Lift",
+          "description": "Sit upright with table at elbow height, hips and shoulders square, and affected hand on the table. A tumbler is placed at midline within reachable distance. Move the affected arm forward toward the tumbler. Spread fingers and prepare to grasp it using a cylindrical grip. Bend the elbow, stabilize the wrist, and lift the tumbler off the table. Move the tumbler steadily toward the mouth (with or without a sip). Slightly tilt the tumbler for drinking or simulating the action. Lower the tumbler back to the table in control. Return the hand to starting position. Repeat 6–10 reps, 1–3 sets.",
+          "category": "unilateral",
+          "dosage": "6–10 reps, 1–3 sets",
+          "items": "Large lightweight steel tumbler, table at elbow height, chair with back support"
+        },
+        {
+          "id": "vcg45_unilateral_2",
+          "name": "Hold and Release",
+          "description": "Sit upright with a tennis ball placed within easy reach of the affected hand on the table. Extend the affected arm forward toward the ball. Open fingers and grasp the ball using a palmar or tripod grasp (thumb + two fingers). Lift and stabilize the ball, holding it for 3–5 seconds. Open the hand slowly to release the ball into a box or onto a marked target area for accuracy. Return the hand to starting position and relax before repeating. Repeat 8–12 reps, 3 sets.",
+          "category": "unilateral",
+          "dosage": "8–12 reps, 3 sets",
+          "items": "Standard tennis ball (~6 cm diameter), table at elbow height, chair with back support, box or marked target area"
+        },
+        {
+          "id": "vcg45_unilateral_3",
+          "name": "Coin Sorting",
+          "description": "Sit upright with feet flat and table at elbow height. A mix of coins is placed at midline or slightly toward the affected side. Identify the type of coin (size, denomination). Open fingers and bring thumb and index together. Use index fingertip and thumb-tip to pinch the coin edge and lift it straight up (or use lateral pinch: thumb pad against side of index finger if pinching is hard). Move the coin slowly to the correct denomination cup or tray and open fingers to let it drop gently. Rest briefly, then pick the next coin. Continue until all coins are sorted. Repeat 2 sets of 10 coins.",
+          "category": "unilateral",
+          "dosage": "2 sets of 10 coins",
+          "items": "Mixed denomination coins, separate labeled containers (1 Rupee, 5 Rupee, 10 Rupee), chair, table"
+        },
+        {
+          "id": "vcg45_unilateral_4",
+          "name": "Grain Sorting",
+          "description": "Sit comfortably with a bowl of mixed grains on the table and empty bowls nearby for sorted grains. Look at the grains and choose one type to separate first. Use the thumb and fingers of the affected hand to pick one grain at a time. Carry it carefully and drop it into the correct bowl. Continue until all grains are sorted. Repeat for prescribed repetitions. Start with 10–15 grains (1 set); progress to 20–30 grains, 1–2 sets per day.",
+          "category": "unilateral",
+          "dosage": "10–15 grains per set; progress to 20–30 grains, 1–2 sets/day",
+          "items": "Bowl of mixed cereals or grains (different sizes and shapes), 2–3 small bowls for separated grains, table, chair with back support"
+        },
+        {
+          "id": "vcg45_unilateral_5",
+          "name": "Torch Pointing",
+          "description": "Sit comfortably with feet flat and table at elbow height. A lightweight torch is placed on the table toward the affected hand. Ensure proper grip and wrist position. Place visual targets (stickers, dots, or marked points) on the wall or table within the patient's field of view. Switch on the torch using the affected hand and point the light toward each target. Encourage controlled movements of the shoulder, elbow, and wrist to accurately direct the beam. Rest in between and repeat. Repeat 10–15 targets per session.",
+          "category": "unilateral",
+          "dosage": "10–15 repetitions or target points per session",
+          "items": "Lightweight torch (flashlight), visual targets (stickers, dots, small objects, or marked points), chair with back support, table or clear space"
+        },
+        {
+          "id": "vcg45_unilateral_6",
+          "name": "Cloth Clipping Practice",
+          "description": "Sit upright with forearm supported or free depending on ability. A rope at eye level or a ruler attached to the table is placed at midline or slightly to the affected side. Cloth clips are kept beside the patient in a bowl or scattered flat. Using thumb and index finger (tripod grip if needed): pick up a clip, squeeze it open using a pincer grasp, and attach it onto the rope or ruler. Continue until all clips are placed. Reverse: remove clips one by one, encouraging smooth grasp-pull-release movement. Place in the bowl or scatter flat. Repeat 8–15 clips per set, 1–3 sets.",
+          "category": "unilateral",
+          "dosage": "8–15 clips per set, 1–3 sets",
+          "items": "Plastic or wooden cloth clips (medium resistance), rope or wooden/plastic ruler or scale, table, chair"
+        },
+        {
+          "id": "vcg45_unilateral_7",
+          "name": "Spoon Use",
+          "description": "Sit with table at elbow height. Place a bowl with rice or beans at midline or toward the affected side. Hold the spoon in the affected hand. Dip the spoon into the bowl and scoop a small amount. Lift the spoon slowly, keeping it steady. Move it toward an empty bowl kept on the unaffected side. Release contents into the bowl by tilting or controlled wrist movement. Return the spoon to the starting bowl and repeat. Repeat 8–10 scoops.",
+          "category": "unilateral",
+          "dosage": "8–10 scoops",
+          "items": "Lightweight non-slip handle spoon, two bowls (one with rice or beans, one empty), table, chair"
+        },
+        {
+          "id": "vcg45_unilateral_8",
+          "name": "Reach and Touch (Multi-directional)",
+          "description": "Sit with table at elbow height. Place objects (cups, blocks, or cones) at arm's length in different directions: straight ahead (12 o'clock), diagonals (10 and 2 o'clock), and to the side (3 or 9 o'clock), starting 20–30 cm from the body's midline. With the affected hand, reach slowly to each target with shoulder relaxed and elbow slightly bent. Allow the trunk to lean slightly toward the target from the hips (no slouching). Touch the object and bring the body back. Repeat for each target direction, alternating directions for multi-planar control. Take 20–40 seconds rest as needed. Repeat 8–10 reaches total, 1 set per day.",
+          "category": "unilateral",
+          "dosage": "8–10 reaches total, 1 set/day",
+          "items": "Stable chair, table, 5 light objects (cups, blocks, or cones)"
+        },
+        {
+          "id": "vcg45_bilateral_1",
+          "name": "Laundry Folding",
+          "description": "Sit comfortably at a chair and table. Place a towel or napkin unfolded in front. Use both hands — the affected hand actively grasps, aligns, and releases fabric with minimal compensatory movement. Start with simple folds (in half). Progress to more complex folds (quarter, rectangular, or triangular). Encourage smooth alignment of edges using both hands. Repeat with different sizes and textures. Repeat 10 folds per session, 2–3 sets.",
+          "category": "bilateral",
+          "dosage": "10 folds per session, 2–3 sets",
+          "items": "Towels, napkins, or small clothing pieces (lightweight first, heavier later), table, chair"
+        },
+        {
+          "id": "vcg45_bilateral_2",
+          "name": "Ball Throw and Catch",
+          "description": "Sit with back supported and feet flat. Caregiver holds ball with both hands at midline. Caregiver or attendant performs a small underarm toss (30–60 cm) toward the patient. Patient tracks the ball and catches with both hands, bringing it to midline and releasing back with a gentle toss to the caregiver. Repeat the task. Progress from light to heavy ball. Repeat 2 sets of 8–10 reps.",
+          "category": "bilateral",
+          "dosage": "2 sets × 8–10 reps, 8–12 minutes/session",
+          "items": "Lightweight foam ball, chair with back support, caregiver (optional)"
+        },
+        {
+          "id": "vcg45_bilateral_3",
+          "name": "Zipping Practice",
+          "description": "Sit upright with forearms resting on the table. Use the affected hand for zipper manipulation and the unaffected hand for stabilizing the bag. Place the bag on the table within easy reach. Hold the bag firmly with the unaffected hand. Guide the affected hand to locate and grasp the zipper tab. Pull the zipper open with the affected hand, arrange things inside, and close the zipper. Open again and remove items from the bag. Encourage controlled, slow movements focusing on coordination and grip. Repeat 10 reps of zipping and unzipping, 2–3 sets with rest between sets.",
+          "category": "bilateral",
+          "dosage": "10 reps (zipping and unzipping), 2–3 sets",
+          "items": "Handbag or backpack with a functional zipper, chair with back support, table"
+        },
+        {
+          "id": "vcg45_bilateral_4",
+          "name": "Hang Clothes",
+          "description": "Sit in front of a clothesline or rope at shoulder or eye level (or use window bars or chair back rest). A basket of cloth pieces and clothespins is placed nearby. Pick up one cloth item from the basket at the same level near the chair using both hands. Reach toward the line to place the cloth over it and spread the cloth. Pick up a cloth clip and use thumb-finger opposition to open it. Attach the clothespin to secure the cloth on the line. Hang 3–6 items, 1–3 sets.",
+          "category": "bilateral",
+          "dosage": "Hang 3–6 items per set, 1–3 sets",
+          "items": "Clothesline or rope (or window bars or chair back rest), plastic or wooden cloth clips, light clothing items (small towels, handkerchiefs, socks), basket or container, chair"
+        },
+        {
+          "id": "vcg45_bilateral_5",
+          "name": "Pack and Unpack",
+          "description": "Sit at a chair with an open backpack in front on the table. Pack: given a set of daily-use items, pick up each item and place it inside the backpack one by one. Use the unaffected hand to stabilize the bag and the affected hand for grasping and positioning items inside the bag. Once all items are packed, zip or close the bag. Unpack: unzip the backpack, open it, and remove each item slowly and with control. Place items in a designated spot on the table, shelf, or basket. Pack and unpack 3–6 items per round, 1–3 rounds.",
+          "category": "bilateral",
+          "dosage": "Pack and unpack 3–6 items per round, 1–3 rounds",
+          "items": "Backpack, lightweight daily items (water bottle, towel, book, food items), table, chair"
+        },
+        {
+          "id": "vcg45_bilateral_6",
+          "name": "Writing Practice",
+          "description": "Sit upright with feet supported and forearm resting on the table. Encourage use of tripod grip (thumb, index, middle finger) on the pen or pencil using the affected hand. Stabilize the paper with the unaffected hand. Practice simple lines, circles, and loops before letters. Begin with tracing over large letters or shapes. Progress to copying letters, numbers, and short words. Write your own name, date, or short sentences. Practice filling forms, signing, or writing grocery lists. Progression: increase writing speed, reduce letter size, and practice longer passages. Repeat 8–10 lines per set, 2–3 sets, 10–15 minutes per session.",
+          "category": "bilateral",
+          "dosage": "8–10 lines per set, 2–3 sets, 10–15 minutes/session",
+          "items": "Paper, pen or pencil, table, chair"
+        },
+        {
+          "id": "vcg45_bilateral_7",
+          "name": "Typing Practice",
+          "description": "Sit upright with elbows at approximately 90 degrees and wrists neutral on the desk. Show keyboard layout and highlight home row keys. Single-finger practice: press large keys (Enter, Spacebar) using the affected hand. Guided keystrokes: practice pressing home row keys one by one with affected fingers. Typing simple sequences: start with repeated letters (aaa, sss), then short words. Functional typing: progress to typing name, numbers, and email address. For speed and accuracy, use timed exercises. Repeat 8–10 short typing drills per set, 2–3 sets, 8–12 minutes per session.",
+          "category": "bilateral",
+          "dosage": "8–10 drills per set, 2–3 sets, 8–12 minutes/session",
+          "items": "Computer, laptop, or tablet with external keyboard, supportive chair, desk"
+        },
+        {
+          "id": "vcg45_bilateral_8",
+          "name": "Stacking and Unstacking",
+          "description": "Sit upright with feet supported, hips at approximately 90 degrees, trunk supported, and wrist in neutral. Keep objects close to midline initially to reduce excessive reach. Place coins or wooden blocks on the table. Using the affected hand, pick one coin or block at a time. Use the unaffected hand to stabilize the base or assist alignment if needed. Stacking: pick up the object with the affected hand, bring to the centre, and place it on top of the other object. Use tripod or pincer grip (thumb to tip of index finger) to pick up and place on the pile. Use palmar or whole-hand grasp if pincer is weak. Encourage controlled release. Unstacking: reverse sequence to train controlled release. Repeat 2 sets of 6–8 attempts, 8–10 minutes total.",
+          "category": "bilateral",
+          "dosage": "2 sets × 6–8 attempts, 8–10 minutes total",
+          "items": "Small objects (coins or wooden blocks), table, supportive chair"
+        },
+        {
+          "id": "vcg45_bilateral_9",
+          "name": "Jar Opening",
+          "description": "Sit facing the table with back supported and both feet flat. Both hands share the task. The affected hand grips the lid or cap using a cylindrical or spherical grasp. The unaffected hand stabilizes the jar. Practice rotation of the wrist while twisting the lid or cap. Start with loosely fitted lids and progress to tighter ones. Once open, release the lid with controlled movement. Repeat with different containers. Progression: move from large wide lids (easy) to smaller narrower caps (more challenging). Repeat 6–10 opening/closing attempts, 2–3 sets, 8–12 minutes.",
+          "category": "bilateral",
+          "dosage": "6–10 opening/closing attempts, 2–3 sets, 8–12 minutes",
+          "items": "Plastic jars with large screw lids, small bottles with twist-off caps, table, chair"
+        },
+        {
+          "id": "vcg45_bilateral_10",
+          "name": "Dish Washing",
+          "description": "Sit upright with feet supported and trunk stable. The affected hand is the manipulator (holds sponge and scrubs) and the unaffected hand is the stabilizer (holds bowl or plate); encourage progressive affected-hand use. Start with small items (2 cups, 2 plates, 2 spoons). Place plate or bowl at midline and sponge within easy reach of the affected hand. Unaffected hand holds and stabilizes the plate on the table. Affected hand grasps the sponge using palmar grasp with active finger flexion and wrist movement. Perform circular or back-and-forth scrubbing movements on the plate. Both hands coordinate to rotate or slide the plate to clean different areas. Encourage smooth, controlled bilateral movements. Place the plate aside and repeat. Repeat 5–10 items, 10 minutes per session.",
+          "category": "bilateral",
+          "dosage": "5–10 items to start, 10 minutes/session",
+          "items": "Sponge or soft scrub brush, table, chair, utensils (plate, cups, spoon)"
+        },
+        {
+          "id": "vcg45_bilateral_11",
+          "name": "Paper Smoothing",
+          "description": "Sit upright with feet flat and the affected arm resting on the table. Crumpled paper is placed in front of the patient. Place the palm or fingers of the affected hand on the crumpled paper. The unaffected hand stabilizes the paper. Press the paper flat with the palm. Slide the hand over the paper to stretch and flatten it forward, sideways, or diagonally. Encourage long, slow strokes with even pressure. Reposition the hand on another wrinkled section and repeat the smoothing motion until most wrinkles are flattened. Lift the hand, rest briefly, then repeat for the next set. Repeat 8–10 smoothing strokes per attempt, 3 sets, 5–7 minutes total.",
+          "category": "bilateral",
+          "dosage": "8–10 smoothing strokes per attempt, 3 sets, 5–7 minutes total",
+          "items": "Crumpled paper, stable table at elbow height, chair with back support"
+        },
+        {
+          "id": "vcg45_bilateral_12",
+          "name": "Namaste Position",
+          "description": "Sit upright with hips and knees at 90 degrees, feet flat, and trunk supported. Hands start on the lap at waist height. Bring both hands toward the midline with palms aligned facing each other. Gently place both palms together in front of the chest in the Namaste position. Extend and align fingers as much as possible with wrists remaining neutral. Gently press both palms together with equal pressure from both hands, emphasizing activation of the affected hand. Maintain the Namaste position for 5–10 seconds, focusing on symmetry and steady posture. Slowly separate the hands and return to resting position. Repeat for the prescribed number of repetitions. Repeat 8–12 reps, hold 5–8 seconds, 2–3 sets, 1 session/day.",
+          "category": "bilateral",
+          "dosage": "8–12 reps, hold 5–8 seconds, 2–3 sets, 1 session/day",
+          "items": "Chair with back support (optional: mirror for visual feedback)"
+        },
+        {
+          "id": "vcg45_bilateral_13",
+          "name": "Pouring Water",
+          "description": "Sit upright with feet flat, hips and knees at 90 degrees, and table at elbow height. Glass placed at midline; bottle placed within comfortable reach on the affected side. Unaffected hand places the palm or fingers around the base of the glass to steady it, kept on an absorbent mat. Using the affected hand, take a secure cylindrical grasp around the bottle with wrist neutral. Lift the bottle 5–10 cm off the table using elbow and shoulder control. Bring the bottle above the centre of the glass rim. Slowly tilt the bottle to allow a small, controlled stream into the glass; hold the tilt for 1–3 seconds. Slowly bring the bottle back to vertical and lower it to the table. Open fingers to release the bottle and rest. Repeat 8–12 reps, 3 sets, hold 3–5 seconds, 1–2 sessions/day.",
+          "category": "bilateral",
+          "dosage": "8–12 reps, 3 sets, 1–2 sessions/day",
+          "items": "Lightweight plastic bottle (start empty or with very small volume), glass or wide-rim cup, table at elbow height, chair with back support, towel or absorbent mat"
+        },
+        {
+          "id": "vcg45_bilateral_14",
+          "name": "Knot Opening",
+          "description": "Sit upright with feet flat and forearm supported on the table. A towel with a knot is placed at midline or slightly toward the affected side. Hold one end of the towel in each hand, ensuring both hands are actively involved. Visually locate the knot and bring both hands closer to it. Using bilateral coordinated movements, manipulate the towel by: pulling the towel ends in opposite directions, twisting or rotating the towel, and adjusting finger placement to loosen the knot. The affected hand takes an active role in stabilizing, pulling, and manipulating the towel rather than being passive. Continue manipulating until the knot is completely opened. Once opened, reset the towel and repeat. Perform in a controlled, purposeful manner, avoiding excessive speed or compensatory trunk movements. Repeat 6–8 reps, 1–2 sets, once daily.",
+          "category": "bilateral",
+          "dosage": "6–8 reps × 1–2 sets, once daily",
+          "items": "Towel, table, chair with back support"
+        },
+        {
+          "id": "vcg45_bilateral_15",
+          "name": "Wear and Remove Accessories",
+          "description": "Sit upright with hips and knees at 90 degrees, feet flat, trunk supported, and forearm on the table at comfortable height (elbow 60–90 degrees). Donning (putting on watch): pick up the watch using both hands; position the watch face over the wrist; the unaffected hand stabilizes the watch face and strap while the affected hand guides the free end of the strap through the buckle; align the strap holes and insert the pin into the appropriate hole using controlled finger movements; thread the strap end through the keeper loop to secure the watch. Doffing (removing watch): use the unaffected hand to stabilize the wrist and watch face; the affected hand disengages the strap from the keeper loop; carefully release the pin from the strap hole; loosen the strap and remove the watch using bilateral coordinated movements. Place the watch back on the table in an organized manner. Repeat 6–8 don/doff cycles, 1 set, once daily.",
+          "category": "bilateral",
+          "dosage": "6–8 don/doff cycles × 1 set, once daily",
+          "items": "Watch with buckle fastening, chair with back support, table"
+        },
+        {
+          "id": "vcg45_bilateral_16",
+          "name": "Battery Changing",
+          "description": "Sit upright with feet flat, trunk supported, and forearm on the table. Ensure good lighting and place the device at midline on the table. Hold the device steady with the unaffected hand. Open the battery cover using the affected hand (slide, press, or twist depending on the device). Take out old batteries one by one and place them safely in a container. Look at the + and – signs inside the device. Put new batteries in the same direction (spring end touches the flat end of the battery). Close the cover until it clicks or screws tight. Test the device (press button or switch on flashlight). Repeat the task. Repeat 3–4 times (open → remove → insert → close), 1 session per day.",
+          "category": "bilateral",
+          "dosage": "3–4 cycles (open → remove → insert → close), 1 session/day",
+          "items": "Flashlight or TV remote, correct batteries (AA, AAA, or coin cell)"
+        },
+        {
+          "id": "vcg45_bilateral_17",
+          "name": "Manipulating Mobile Keys",
+          "description": "Sit upright with feet flat and forearm supported on the table so only the wrist and fingers move. Phone placed at midline or slightly toward the affected side at a comfortable distance. Place the phone on the table. Hold the phone steady with the unaffected hand. Look at the key to be pressed. With the affected hand, point a finger or thumb toward the key. Press the key gently. Try pressing different keys one by one. Practice short numbers (e.g., 123 or phone PIN). Repeat 5 repetitions on the same key, 1 set per session.",
+          "category": "bilateral",
+          "dosage": "5 reps on same key × 1 set/session",
+          "items": "Available mobile phone, chair with back support, table"
+        },
+        {
+          "id": "vcg45_bilateral_18",
+          "name": "Lock and Key",
+          "description": "Sit upright with feet flat and forearm supported on the table so the wrist and fingers do the work. Lock placed at comfortable midline height (table level). Place the lock on the table with the keyhole facing you. Pick a large, easy key and hold it between thumb and index finger. Use the non-affected hand to hold the lock steady. Look at the key and keyhole; line up the key's teeth the correct way. Gently push the key straight into the keyhole. Rotate the key slowly in the required direction until it turns (lock or unlock) using wrist rotation and finger pinch — avoid large shoulder movement. Rotate back to starting position. Pull the key straight out with a controlled pinch. Reinsert and repeat the full cycle. Repeat 5 full cycles (insert → turn → return → remove), 1 set, once daily.",
+          "category": "bilateral",
+          "dosage": "5 full cycles (insert → turn → return → remove) × 1 set, once daily",
+          "items": "Practice lock set, large easy-to-hold keys, chair with back support, table"
+        },
+        {
+          "id": "vcg45_bilateral_19",
+          "name": "Colouring or Dot-to-Dot",
+          "description": "Sit upright on a chair with feet supported, in front of the table. Paper is placed on the table at midline. Colouring activity: select a colouring tool based on hand strength and grip. Use the affected hand to colour within boundaries. Encourage slow, controlled strokes, filling sections one by one. Promote use of the unaffected hand for stabilizing the sheet. Dot-to-dot activity: the patient receives a numbered dot-to-dot worksheet. Connect dots in sequential order (1-2-3…). Use a pencil or pen, keeping the wrist stable and motion smooth. After forming the image, optionally colour the final picture. Repeat: Colouring — 2 sets of 2–3 large simple shapes; Dot-to-dot — 2 sets of 2–3 simple dot patterns (5–10 dots).",
+          "category": "bilateral",
+          "dosage": "Colouring: 2 sets × 2–3 reps; Dot-to-dot: 2 sets × 2–3 reps",
+          "items": "Colouring sheets (simple to complex patterns), dot-to-dot worksheets, crayons or colour pencils or markers, pencil or pen, chair, table"
+        }
+      ]
+    }
+  }
+}

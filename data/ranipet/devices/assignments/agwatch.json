@@ -19,6 +19,26 @@
       "returned_date": null,
       "assigned_by": "RP-HS-ADMIN",
       "notes": "Started therapy. Everything went well. Patient seems comfortable with the devices and the ADL exercies."
+    },
+    {
+      "id": "a0b4914c-b961-4e5f-b187-588db028041a",
+      "device_id": "RAGWATCH003",
+      "homer_id": "HOMCMCV003",
+      "limb": "right",
+      "assigned_date": "2026-03-21T19:45",
+      "returned_date": null,
+      "assigned_by": "RP-HS-ADMIN",
+      "notes": "All good. VCG and ADL exercies prescribed."
+    },
+    {
+      "id": "2f7959a2-c5ff-40cf-aa06-6819edba3366",
+      "device_id": "RAGWATCH004",
+      "homer_id": "HOMCMCV003",
+      "limb": "left",
+      "assigned_date": "2026-03-21T19:45",
+      "returned_date": null,
+      "assigned_by": "RP-HS-ADMIN",
+      "notes": "All good. VCG and ADL exercies prescribed."
     }
   ]
 }

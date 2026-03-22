@@ -307,6 +307,10 @@ const EVENT_OPENERS = {
   exp_device_install:       (ev) => openDeviceSetupModal(ev.id),
   activation:               (ev) => openActivationModal(ev.id),
   discontinuation_reminder: (_ev) => openDiscontinueModal(),
+  adl_prescription_d1:      (ev) => openAdlPrescriptionModal(ev),
+  adl_prescription_d15:     (ev) => openAdlPrescriptionModal(ev),
+  vcg_prescription_d1:      (ev) => openVcgPrescriptionModal(ev),
+  vcg_prescription_d15:     (ev) => openVcgPrescriptionModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -419,6 +423,13 @@ async function openActivationModal(evId) {
   document.getElementById('activation-notes').value = '';
   setError('activation-error', '');
 
+  // Show VCG group row for control patients only
+  const vcgRow = document.getElementById('activation-vcg-group-row');
+  const vcgSel = document.getElementById('activation-vcg-group');
+  const isControl = patientData?.group === 'control';
+  if (vcgRow) vcgRow.classList.toggle('hidden', !isControl);
+  if (vcgSel) vcgSel.value = '';
+
   const affectedSel   = document.getElementById('activation-watch-right');
   const unaffectedSel = document.getElementById('activation-watch-left');
   affectedSel.innerHTML   = '<option value="">Loading…</option>';
@@ -456,26 +467,358 @@ async function openActivationModal(evId) {
 }
 
 async function submitActivation() {
-  const activationDate      = document.getElementById('activation-date').value;
-  const agWatchRightId   = document.getElementById('activation-watch-right').value;
-  const agWatchLeftId = document.getElementById('activation-watch-left').value;
-  const notes               = document.getElementById('activation-notes').value;
+  const activationDate = document.getElementById('activation-date').value;
+  const agWatchRightId = document.getElementById('activation-watch-right').value;
+  const agWatchLeftId  = document.getElementById('activation-watch-left').value;
+  const notes          = document.getElementById('activation-notes').value;
 
-  if (!activationDate)      { setError('activation-error', 'Please select an activation date.'); return; }
-  if (!agWatchRightId)   { setError('activation-error', 'Please select a watch for the affected limb.'); return; }
-  if (!agWatchLeftId) { setError('activation-error', 'Please select a watch for the unaffected limb.'); return; }
-  if (agWatchRightId === agWatchLeftId) { setError('activation-error', 'Affected and unaffected limb watches must be different.'); return; }
+  if (!activationDate)  { setError('activation-error', 'Please select an activation date.'); return; }
+  if (!agWatchRightId)  { setError('activation-error', 'Please select a watch for the right limb.'); return; }
+  if (!agWatchLeftId)   { setError('activation-error', 'Please select a watch for the left limb.'); return; }
+  if (agWatchRightId === agWatchLeftId) { setError('activation-error', 'Right and left limb watches must be different.'); return; }
+
+  const body = { activationDate, agWatchRightID: agWatchRightId, agWatchLeftID: agWatchLeftId, notes };
+  if (patientData?.group === 'control') {
+    const vcgGroup = document.getElementById('activation-vcg-group').value;
+    if (!vcgGroup) { setError('activation-error', 'Please select a VCG group.'); return; }
+    body.vcgGroup = vcgGroup;
+  }
 
   setLoading('activation-submit', true);
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/activate`, {
-    activationDate, agWatchRightID: agWatchRightId,
-    agWatchLeftID: agWatchLeftId, notes,
-  });
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/activate`, body);
   setLoading('activation-submit', false);
 
   if (!ok) { setError('activation-error', data.error || 'Failed to activate patient.'); return; }
   hideModal('activation-modal');
   await loadPatient();
+  loadPatientEvents();
+}
+
+// ── Prescription modals (shared helpers) ──────────────────────────────────────
+
+let _adlPrescEventId = null;
+let _adlExercises    = [];
+let _adlSelected     = [];  // { exercise, blocks, reps, notes, state: 'editing'|'compact' }
+
+let _vcgPrescEventId = null;
+let _vcgExercises    = [];
+let _vcgSelected     = [];  // { exercise, blocks, reps, notes, state: 'editing'|'compact' }
+
+const VCG_GROUP_LABELS = { vcg2: 'VCG 2', vcg3: 'VCG 3', vcg4_5: 'VCG 4–5' };
+
+function _prescState(prefix) {
+  return prefix === 'adl'
+    ? { evId: _adlPrescEventId, exercises: _adlExercises, selected: _adlSelected }
+    : { evId: _vcgPrescEventId, exercises: _vcgExercises, selected: _vcgSelected };
+}
+
+// Flush current editing-state DOM inputs into the data array.
+// Must be called before any operation that changes array indices.
+function _saveDOMValues(prefix) {
+  const selected = prefix === 'adl' ? _adlSelected : _vcgSelected;
+  selected.forEach((s, i) => {
+    if (s.state !== 'editing') return;
+    const blocksEl = document.getElementById(`${prefix}-blocks-${i}`);
+    const repsEl   = document.getElementById(`${prefix}-reps-${i}`);
+    const notesEl  = document.getElementById(`${prefix}-notes-${i}`);
+    if (blocksEl) s.blocks = +blocksEl.value || s.blocks;
+    if (repsEl)   s.reps   = +repsEl.value   || s.reps;
+    if (notesEl)  s.notes  = notesEl.value;
+  });
+}
+
+function _updatePrescSubmitBtn(prefix) {
+  const selected = prefix === 'adl' ? _adlSelected : _vcgSelected;
+  const btn = document.getElementById(`${prefix}-prescription-submit`);
+  if (!btn) return;
+  const anyEditing = selected.some(s => s.state === 'editing');
+  btn.disabled = anyEditing;
+  btn.classList.toggle('opacity-50', anyEditing);
+  btn.classList.toggle('cursor-not-allowed', anyEditing);
+}
+
+function renderPrescSelected(prefix) {
+  const { selected } = _prescState(prefix);
+  const container = document.getElementById(`${prefix}-prescription-selected`);
+  if (!container) return;
+  if (!selected.length) {
+    container.innerHTML = '<p class="text-xs text-slate-400 text-center py-3">No exercises selected. Use the search bar above to add exercises.</p>';
+    _updatePrescSubmitBtn(prefix);
+    return;
+  }
+  container.innerHTML = selected.map((s, i) => {
+    if (s.state === 'editing') {
+      return `
+        <div class="border-2 border-blue-300 rounded-xl p-3 bg-blue-50">
+          <div class="flex items-start justify-between mb-2">
+            <span class="text-sm font-semibold text-slate-800">
+              <span class="text-blue-500 mr-1">${i + 1}.</span>${s.exercise.name}
+            </span>
+            <button type="button" onclick="removeExercise('${prefix}',${i})"
+                    class="text-slate-400 hover:text-red-500 ml-2 flex-shrink-0">
+              <i class="fas fa-times text-sm"></i>
+            </button>
+          </div>
+          <div class="grid grid-cols-2 gap-2 mb-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Blocks</label>
+              <input id="${prefix}-blocks-${i}" type="number" min="1" value="${s.blocks}"
+                     class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Repetitions</label>
+              <input id="${prefix}-reps-${i}" type="number" min="1" value="${s.reps}"
+                     class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+          </div>
+          <textarea id="${prefix}-notes-${i}" rows="2" placeholder="Notes for this exercise…"
+                    class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none">${s.notes}</textarea>
+          <div class="mt-2 flex justify-end">
+            <button type="button" onclick="saveExercise('${prefix}',${i})"
+                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg">
+              Save
+            </button>
+          </div>
+        </div>`;
+    } else {
+      return `
+        <div class="border border-slate-200 rounded-xl px-4 py-3 bg-white flex items-center gap-3">
+          <span class="flex-1 text-sm font-medium text-slate-800">
+            <span class="text-slate-400 mr-1">${i + 1}.</span>${s.exercise.name}
+          </span>
+          <span class="text-xs text-slate-500 whitespace-nowrap">${s.blocks} blocks × ${s.reps} reps</span>
+          <button type="button" onclick="editExercise('${prefix}',${i})"
+                  class="text-slate-400 hover:text-blue-600 text-xs font-medium px-2 py-1 rounded border border-slate-200 hover:border-blue-300">
+            Edit
+          </button>
+          <button type="button" onclick="removeExercise('${prefix}',${i})"
+                  class="text-slate-400 hover:text-red-500 flex-shrink-0">
+            <i class="fas fa-times text-sm"></i>
+          </button>
+        </div>`;
+    }
+  }).join('');
+  _updatePrescSubmitBtn(prefix);
+}
+
+function saveExercise(prefix, i) {
+  const selected = prefix === 'adl' ? _adlSelected : _vcgSelected;
+  const s = selected[i];
+  if (!s) return;
+  const blocksEl = document.getElementById(`${prefix}-blocks-${i}`);
+  const repsEl   = document.getElementById(`${prefix}-reps-${i}`);
+  const notesEl  = document.getElementById(`${prefix}-notes-${i}`);
+  const blocks = blocksEl ? (+blocksEl.value || 0) : s.blocks;
+  const reps   = repsEl   ? (+repsEl.value   || 0) : s.reps;
+  if (!blocks || !reps) {
+    if (blocksEl && !+blocksEl.value) blocksEl.classList.add('border-red-400');
+    if (repsEl   && !+repsEl.value)   repsEl.classList.add('border-red-400');
+    return;
+  }
+  s.blocks = blocks;
+  s.reps   = reps;
+  s.notes  = notesEl ? notesEl.value : s.notes;
+  s.state  = 'compact';
+  renderPrescSelected(prefix);
+}
+
+function editExercise(prefix, i) {
+  const selected = prefix === 'adl' ? _adlSelected : _vcgSelected;
+  if (!selected[i]) return;
+  selected[i].state = 'editing';
+  renderPrescSelected(prefix);
+}
+
+function removeExercise(prefix, i) {
+  const selected  = prefix === 'adl' ? _adlSelected : _vcgSelected;
+  const container = document.getElementById(`${prefix}-prescription-selected`);
+  _saveDOMValues(prefix);
+  if (container) container.innerHTML = '';
+  selected.splice(i, 1);
+  renderPrescSelected(prefix);
+}
+
+function addExercise(prefix, exerciseId) {
+  const exercises = prefix === 'adl' ? _adlExercises : _vcgExercises;
+  const selected  = prefix === 'adl' ? _adlSelected  : _vcgSelected;
+  const ex = exercises.find(e => e.id === exerciseId);
+  if (!ex) return;
+  selected.push({ exercise: ex, blocks: 1, reps: 10, notes: '', state: 'editing' });
+  renderPrescSelected(prefix);
+  const searchEl  = document.getElementById(`${prefix}-prescription-search`);
+  const resultsEl = document.getElementById(`${prefix}-prescription-results`);
+  if (searchEl)  searchEl.value = '';
+  if (resultsEl) resultsEl.classList.add('hidden');
+}
+
+function _filterExercises(prefix, query) {
+  const exercises = prefix === 'adl' ? _adlExercises : _vcgExercises;
+  const selected  = prefix === 'adl' ? _adlSelected  : _vcgSelected;
+  const selIds    = new Set(selected.map(s => s.exercise.id));
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  return exercises.filter(e => e.name.toLowerCase().includes(q) && !selIds.has(e.id)).slice(0, 6);
+}
+
+function _setupPrescSearchListener(prefix) {
+  const searchEl  = document.getElementById(`${prefix}-prescription-search`);
+  const resultsEl = document.getElementById(`${prefix}-prescription-results`);
+  if (!searchEl) return;
+  searchEl.addEventListener('input', () => {
+    const matches = _filterExercises(prefix, searchEl.value);
+    if (!matches.length) { resultsEl.classList.add('hidden'); return; }
+    resultsEl.innerHTML = matches.map(e =>
+      `<div class="px-3 py-2 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 border-b border-slate-100 last:border-b-0"
+            onmousedown="addExercise('${prefix}','${e.id}')">${e.name}</div>`
+    ).join('');
+    resultsEl.classList.remove('hidden');
+  });
+  searchEl.addEventListener('blur', () => {
+    setTimeout(() => resultsEl.classList.add('hidden'), 150);
+  });
+}
+
+// ── ADL Prescription modal ─────────────────────────────────────────────────────
+
+async function openAdlPrescriptionModal(ev) {
+  _adlPrescEventId = typeof ev === 'object' ? ev.id : ev;
+  const protocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
+
+  document.getElementById('adl-prescription-homer-id').textContent = PATIENT_HOMER_ID;
+  document.getElementById('adl-prescription-date').value = patientData?.activationDate || '';
+  document.getElementById('adl-prescription-notes').value = '';
+  setError('adl-prescription-error', '');
+  _adlSelected = [];
+  renderPrescSelected('adl');
+  showModal('adl-prescription-modal');
+
+  try {
+    if (!_adlExercises.length) {
+      const res = await fetch('/api/exercises?type=adl');
+      if (!res.ok) throw new Error();
+      _adlExercises = await res.json();
+    }
+    // Pre-populate for d15 revision
+    if (protocolId === 'adl_prescription_d15') {
+      const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d1`);
+      if (res.ok) {
+        const prev = await res.json();
+        _adlSelected = (prev.prescribed_exercises || []).map(pe => {
+          const ex = _adlExercises.find(e => e.id === pe.exercise_id);
+          return ex ? { exercise: ex, blocks: pe.blocks || 1, reps: pe.repetitions || 1, notes: pe.notes || '', state: 'compact' } : null;
+        }).filter(Boolean);
+        document.getElementById('adl-prescription-notes').value = prev.notes || '';
+        renderPrescSelected('adl');
+      }
+    }
+  } catch (_) {
+    setError('adl-prescription-error', 'Failed to load exercises.');
+  }
+}
+
+async function submitAdlPrescription() {
+  if (!_adlSelected.length) { setError('adl-prescription-error', 'Please select at least one exercise.'); return; }
+  if (_adlSelected.some(s => s.state === 'editing')) { setError('adl-prescription-error', 'Please save all exercise cards before submitting.'); return; }
+  for (const s of _adlSelected) {
+    if (!s.blocks || !s.reps) { setError('adl-prescription-error', 'Please enter blocks and repetitions for all exercises.'); return; }
+  }
+
+  const ev = eventsCache.find(e => e.id === _adlPrescEventId);
+  const exercises = _adlSelected.map(s => ({
+    exercise_id: s.exercise.id,
+    blocks:      s.blocks,
+    repetitions: s.reps,
+    notes:       s.notes,
+  }));
+  const notes = document.getElementById('adl-prescription-notes').value.trim();
+
+  setLoading('adl-prescription-submit', true);
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/adl-prescription`, {
+    event_id:          _adlPrescEventId,
+    protocol_event_id: ev?.protocol_event_id,
+    exercises,
+    notes,
+  });
+  setLoading('adl-prescription-submit', false);
+
+  if (!ok) { setError('adl-prescription-error', data.error || 'Failed to save prescription.'); return; }
+  hideModal('adl-prescription-modal');
+  loadPatientEvents();
+}
+
+// ── VCG Prescription modal ─────────────────────────────────────────────────────
+
+async function openVcgPrescriptionModal(ev) {
+  _vcgPrescEventId = typeof ev === 'object' ? ev.id : ev;
+  const protocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
+  const vcgGroup   = patientData?.vcgGroup || '';
+
+  document.getElementById('vcg-prescription-homer-id').textContent = PATIENT_HOMER_ID;
+  document.getElementById('vcg-prescription-date').value = patientData?.activationDate || '';
+  document.getElementById('vcg-prescription-group-label').textContent = VCG_GROUP_LABELS[vcgGroup] || vcgGroup || '—';
+  document.getElementById('vcg-prescription-notes').value = '';
+  setError('vcg-prescription-error', '');
+  _vcgSelected = [];
+  renderPrescSelected('vcg');
+  showModal('vcg-prescription-modal');
+
+  if (!vcgGroup) {
+    setError('vcg-prescription-error', 'No VCG group assigned to this patient.');
+    return;
+  }
+
+  try {
+    if (!_vcgExercises.length || _vcgExercises._group !== vcgGroup) {
+      const res = await fetch(`/api/exercises?type=vcg&group=${vcgGroup}`);
+      if (!res.ok) throw new Error();
+      _vcgExercises = await res.json();
+      _vcgExercises._group = vcgGroup;
+    }
+    // Pre-populate for d15 revision
+    if (protocolId === 'vcg_prescription_d15') {
+      const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d1`);
+      if (res.ok) {
+        const prev = await res.json();
+        _vcgSelected = (prev.prescribed_exercises || []).map(pe => {
+          const ex = _vcgExercises.find(e => e.id === pe.exercise_id);
+          return ex ? { exercise: ex, blocks: pe.blocks || 1, reps: pe.repetitions || 1, notes: pe.notes || '', state: 'compact' } : null;
+        }).filter(Boolean);
+        document.getElementById('vcg-prescription-notes').value = prev.notes || '';
+        renderPrescSelected('vcg');
+      }
+    }
+  } catch (_) {
+    setError('vcg-prescription-error', 'Failed to load exercises.');
+  }
+}
+
+async function submitVcgPrescription() {
+  if (!_vcgSelected.length) { setError('vcg-prescription-error', 'Please select at least one exercise.'); return; }
+  if (_vcgSelected.some(s => s.state === 'editing')) { setError('vcg-prescription-error', 'Please save all exercise cards before submitting.'); return; }
+  for (const s of _vcgSelected) {
+    if (!s.blocks || !s.reps) { setError('vcg-prescription-error', 'Please enter blocks and repetitions for all exercises.'); return; }
+  }
+
+  const ev = eventsCache.find(e => e.id === _vcgPrescEventId);
+  const exercises = _vcgSelected.map(s => ({
+    exercise_id: s.exercise.id,
+    blocks:      s.blocks,
+    repetitions: s.reps,
+    notes:       s.notes,
+  }));
+  const notes = document.getElementById('vcg-prescription-notes').value.trim();
+
+  setLoading('vcg-prescription-submit', true);
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/vcg-prescription`, {
+    event_id:          _vcgPrescEventId,
+    protocol_event_id: ev?.protocol_event_id,
+    exercises,
+    notes,
+  });
+  setLoading('vcg-prescription-submit', false);
+
+  if (!ok) { setError('vcg-prescription-error', data.error || 'Failed to save prescription.'); return; }
+  hideModal('vcg-prescription-modal');
   loadPatientEvents();
 }
 
@@ -509,10 +852,18 @@ async function loadPrivilege() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Store submit button labels for loading state
-  ['complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit', 'device-setup-submit', 'activation-submit'].forEach(id => {
+  [
+    'complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit',
+    'device-setup-submit', 'activation-submit',
+    'adl-prescription-submit', 'vcg-prescription-submit',
+  ].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.dataset.label = btn.textContent;
   });
+
+  // Set up prescription search bar listeners
+  _setupPrescSearchListener('adl');
+  _setupPrescSearchListener('vcg');
 
   await loadPrivilege();
   await loadPatient();

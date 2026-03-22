@@ -1,8 +1,9 @@
 from flask import Blueprint, request, jsonify, render_template, redirect, url_for, session as flask_session
+from pathlib import Path
 from utils.data_access import (
     get_patients_for_user, derive_status, get_hospital_folder, find_patient_folder,
     read_patient_meta, write_patient_meta, create_patient_folders, generate_homer_id,
-    create_patient_log, write_patient_log,
+    create_patient_log, write_patient_log, get_patients_path,
     get_available_devices, read_device_assignments, write_device_assignments, write_device_log,
 )
 from utils.protocol_events import (
@@ -281,8 +282,9 @@ def api_create_patient():
         'trainingPausedDate':         None,
         'cumulativePauseDays':        0,
         'brokenProtocolDate':         None,
-        'agWatchRightID':      None,
-        'agWatchLeftID':    None,
+        'vcgGroup':                   None,
+        'agWatchRightID':             None,
+        'agWatchLeftID':              None,
     }
     write_patient_meta(folder, homer_id, patient_data)
     create_patient_folders(folder, homer_id, 'unassigned')
@@ -412,10 +414,11 @@ def api_activate_patient(homer_id):
     if flask_session.get('privilege') not in ('admin', 'therapist'):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json() or {}
-    activation_date        = (data.get('activationDate') or '').strip()
-    ag_watch_right_id   = (data.get('agWatchRightID') or '').strip()
-    ag_watch_left_id = (data.get('agWatchLeftID') or '').strip()
-    notes                  = (data.get('notes') or '').strip()
+    activation_date   = (data.get('activationDate') or '').strip()
+    ag_watch_right_id = (data.get('agWatchRightID') or '').strip()
+    ag_watch_left_id  = (data.get('agWatchLeftID') or '').strip()
+    vcg_group         = (data.get('vcgGroup') or '').strip() or None
+    notes             = (data.get('notes') or '').strip()
     if not activation_date:
         return jsonify({'error': 'activationDate is required'}), 400
     if not ag_watch_right_id:
@@ -438,6 +441,13 @@ def api_activate_patient(homer_id):
     if derive_status(patient) != 'inactive':
         return jsonify({'error': 'Patient must be inactive to activate'}), 409
 
+    # Control patients must have a VCG group selected at activation
+    if patient.get('group') == 'control':
+        if not vcg_group:
+            return jsonify({'error': 'VCG group is required for control patients'}), 400
+        if vcg_group not in ('vcg2', 'vcg3', 'vcg4_5'):
+            return jsonify({'error': 'vcgGroup must be vcg2, vcg3, or vcg4_5'}), 400
+
     # Check depends_on prerequisites for activation
     protocol = load_study_protocol()
     activation_def = next(
@@ -457,9 +467,11 @@ def api_activate_patient(homer_id):
             return jsonify({'error': f'Cannot activate: complete these first — {names}'}), 409
 
     # Update patient record
-    patient['activationDate']         = activation_date
+    patient['activationDate']  = activation_date
     patient['agWatchRightID']  = ag_watch_right_id
-    patient['agWatchLeftID'] = ag_watch_left_id
+    patient['agWatchLeftID']   = ag_watch_left_id
+    if vcg_group:
+        patient['vcgGroup'] = vcg_group
     write_patient_meta(folder, homer_id, patient)
 
     # Move activation event from incomplete to complete
@@ -2389,3 +2401,229 @@ def auto_activate_experimental_api(patient_id):
             })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+# ── Exercise catalogue ─────────────────────────────────────────────────────────
+
+_EXERCISES_PATH = Path(__file__).parent.parent / 'config' / 'homer_exercises.json'
+_exercises_cache: dict = {}
+
+
+def _load_exercises() -> dict:
+    global _exercises_cache
+    if not _exercises_cache:
+        try:
+            with open(_EXERCISES_PATH, encoding='utf-8') as f:
+                _exercises_cache = json.load(f)
+        except Exception:
+            _exercises_cache = {}
+    return _exercises_cache
+
+
+@bp.route('/api/exercises', methods=['GET'])
+def api_exercises():
+    """Return exercise list from homer_exercises.json.
+    ?type=adl           → ADL exercises
+    ?type=vcg&group=vcg3 → VCG exercises for a specific group
+    """
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    ex_type = request.args.get('type', 'adl')
+    group   = request.args.get('group', '')
+    data    = _load_exercises()
+    if ex_type == 'adl':
+        return jsonify(data.get('adl', {}).get('exercises', []))
+    if ex_type == 'vcg':
+        vcg = data.get('vcg', {})
+        if group not in vcg:
+            return jsonify({'error': f'Unknown VCG group: {group}'}), 400
+        return jsonify(vcg[group].get('exercises', []))
+    return jsonify({'error': 'type must be adl or vcg'}), 400
+
+
+# ── Prescription file helpers ──────────────────────────────────────────────────
+
+_PRESCRIPTION_FILES = {
+    'adl_prescription_d1':  'adl/adl_prescription_d1.json',
+    'adl_prescription_d15': 'adl/adl_prescription_d15.json',
+    'vcg_prescription_d1':  'vcg_exercise/vcg_prescription_d1.json',
+    'vcg_prescription_d15': 'vcg_exercise/vcg_prescription_d15.json',
+}
+
+
+def _write_prescription(folder: str, homer_id: str, rel_path: str, content: dict) -> None:
+    path = get_patients_path(folder) / homer_id / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(content, f, indent=2)
+    os.replace(tmp, path)
+
+
+def _read_prescription(folder: str, homer_id: str, rel_path: str):
+    path = get_patients_path(folder) / homer_id / rel_path
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+@bp.route('/api/patients/<homer_id>/prescription/<event_id>', methods=['GET'])
+def api_get_prescription(homer_id, event_id):
+    """Return an existing prescription file (used to pre-populate d15 revision modals)."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+    rel_path = _PRESCRIPTION_FILES.get(event_id)
+    if not rel_path:
+        return jsonify({'error': 'Unknown prescription event'}), 400
+    data = _read_prescription(folder, homer_id, rel_path)
+    if data is None:
+        return jsonify({'error': 'Prescription not found'}), 404
+    return jsonify(data)
+
+
+def _complete_prescription_event(folder, homer_id, event_id, presc_file,
+                                  loginid, session_id, extra_fields, log_msg):
+    """Move a prescription event from incomplete→complete and write the prescription file."""
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return False, 'Protocol events not found.'
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e['protocol_event_id'] == event_id
+         and (extra_fields.get('_event_uuid') is None
+              or e['id'] == extra_fields.get('_event_uuid'))),
+        None
+    )
+    if not entry:
+        return False, f'{event_id} not found in incomplete list.'
+
+    filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    complete_entry = {
+        **entry,
+        'completion_date':   entry['scheduled_date'],
+        'filed_at':          filed_at,
+        'prescription_file': presc_file,
+    }
+    events_data['incomplete'] = [e for e in incomplete if e['id'] != entry['id']]
+    events_data.setdefault('complete', []).append(complete_entry)
+    write_protocol_events(folder, homer_id, events_data)
+    write_patient_log(folder, homer_id, loginid, session_id, log_msg, presc_file)
+    return True, None
+
+
+@bp.route('/api/patients/<homer_id>/adl-prescription', methods=['POST'])
+def api_adl_prescription(homer_id):
+    """Complete adl_prescription_d1 or adl_prescription_d15."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body       = request.get_json() or {}
+    event_uuid = body.get('event_id')
+    event_id   = body.get('protocol_event_id', '').strip()
+    exercises  = body.get('exercises', [])
+    notes      = body.get('notes', '').strip()
+
+    if event_id not in ('adl_prescription_d1', 'adl_prescription_d15'):
+        return jsonify({'error': 'protocol_event_id must be adl_prescription_d1 or adl_prescription_d15'}), 400
+    if not exercises:
+        return jsonify({'error': 'At least one exercise is required.'}), 400
+    for ex in exercises:
+        if not ex.get('exercise_id'):
+            return jsonify({'error': 'Each exercise must have an exercise_id.'}), 400
+        if not ex.get('blocks') or not ex.get('repetitions'):
+            return jsonify({'error': 'Each exercise must have blocks and repetitions.'}), 400
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    filed_at   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    presc_file = _PRESCRIPTION_FILES[event_id]
+    log_msg    = 'ADL prescription recorded' if event_id.endswith('d1') else 'ADL prescription revised'
+
+    presc_data = {
+        'filed_at':             filed_at,
+        'filed_by':             loginid,
+        'prescribed_exercises': exercises,
+        'notes':                notes,
+    }
+    _write_prescription(folder, homer_id, presc_file, presc_data)
+
+    ok, err = _complete_prescription_event(
+        folder, homer_id, event_id, presc_file, loginid, session_id,
+        {'_event_uuid': event_uuid}, log_msg
+    )
+    if not ok:
+        return jsonify({'error': err}), 404
+
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/patients/<homer_id>/vcg-prescription', methods=['POST'])
+def api_vcg_prescription(homer_id):
+    """Complete vcg_prescription_d1 or vcg_prescription_d15."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body       = request.get_json() or {}
+    event_uuid = body.get('event_id')
+    event_id   = body.get('protocol_event_id', '').strip()
+    exercises  = body.get('exercises', [])
+    notes      = body.get('notes', '').strip()
+
+    if event_id not in ('vcg_prescription_d1', 'vcg_prescription_d15'):
+        return jsonify({'error': 'protocol_event_id must be vcg_prescription_d1 or vcg_prescription_d15'}), 400
+    if not exercises:
+        return jsonify({'error': 'At least one exercise is required.'}), 400
+    for ex in exercises:
+        if not ex.get('exercise_id'):
+            return jsonify({'error': 'Each exercise must have an exercise_id.'}), 400
+        if not ex.get('blocks') or not ex.get('repetitions'):
+            return jsonify({'error': 'Each exercise must have blocks and repetitions.'}), 400
+
+    patient = read_patient_meta(folder, homer_id)
+    vcg_group = (patient or {}).get('vcgGroup', '')
+    if not vcg_group:
+        return jsonify({'error': 'Patient has no VCG group assigned.'}), 409
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    filed_at   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    presc_file = _PRESCRIPTION_FILES[event_id]
+    log_msg    = 'VCG prescription recorded' if event_id.endswith('d1') else 'VCG prescription revised'
+
+    presc_data = {
+        'filed_at':             filed_at,
+        'filed_by':             loginid,
+        'vcg_group':            vcg_group,
+        'prescribed_exercises': exercises,
+        'notes':                notes,
+    }
+    _write_prescription(folder, homer_id, presc_file, presc_data)
+
+    ok, err = _complete_prescription_event(
+        folder, homer_id, event_id, presc_file, loginid, session_id,
+        {'_event_uuid': event_uuid}, log_msg
+    )
+    if not ok:
+        return jsonify({'error': err}), 404
+
+    return jsonify({'ok': True})

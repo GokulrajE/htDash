@@ -342,6 +342,16 @@
       <input type="datetime-local" id="activation-date" required
              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
+    <div id="activation-vcg-group-row" class="mb-4 hidden">
+      <label class="block text-sm font-medium text-slate-700 mb-2">VCG Group <span class="text-red-500">*</span></label>
+      <select id="activation-vcg-group"
+              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">Select VCG group…</option>
+        <option value="vcg2">VCG 2</option>
+        <option value="vcg3">VCG 3</option>
+        <option value="vcg4_5">VCG 4–5</option>
+      </select>
+    </div>
     <div class="mb-4">
       <label class="block text-sm font-medium text-slate-700 mb-2">AG Watch — Right <span class="text-red-500">*</span></label>
       <select id="activation-watch-right" required
@@ -392,6 +402,88 @@
     <div class="flex gap-3">
       <button type="button" onclick="hideModal('discontinue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
       <button type="button" id="discontinue-submit" onclick="submitDiscontinue()" class="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600">Discontinue</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADL Prescription -->
+<div id="adl-prescription-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 overflow-y-auto max-h-[90vh]">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-bold text-slate-800">ADL Exercise Prescription</h3>
+      <button onclick="hideModal('adl-prescription-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="mb-4 px-4 py-3 bg-slate-50 rounded-xl">
+      <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
+      <p id="adl-prescription-homer-id" class="text-base font-semibold text-slate-800"></p>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Activation Date</label>
+      <input type="datetime-local" id="adl-prescription-date" readonly
+             class="w-full px-4 py-3 bg-slate-100 border border-slate-200 rounded-xl text-sm text-slate-500 cursor-not-allowed">
+    </div>
+    <div class="mb-4 relative">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Add Exercise</label>
+      <input type="text" id="adl-prescription-search" autocomplete="off"
+             placeholder="Type to search exercises…"
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <div id="adl-prescription-results"
+           class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-10 overflow-hidden"></div>
+    </div>
+    <div id="adl-prescription-selected" class="mb-4 space-y-3 max-h-72 overflow-y-auto"></div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">General Notes</label>
+      <textarea id="adl-prescription-notes" rows="4"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                placeholder="Optional general notes…"></textarea>
+    </div>
+    <p id="adl-prescription-error" class="text-sm text-red-500 hidden mb-3"></p>
+    <div class="flex gap-3">
+      <button type="button" onclick="hideModal('adl-prescription-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+      <button type="button" id="adl-prescription-submit" data-label="Save Prescription" onclick="submitAdlPrescription()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Save Prescription</button>
+    </div>
+  </div>
+</div>
+
+<!-- VCG Prescription -->
+<div id="vcg-prescription-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 overflow-y-auto max-h-[90vh]">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-bold text-slate-800">VCG Exercise Prescription</h3>
+      <button onclick="hideModal('vcg-prescription-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="mb-4 px-4 py-3 bg-slate-50 rounded-xl">
+      <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
+      <p id="vcg-prescription-homer-id" class="text-base font-semibold text-slate-800"></p>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Activation Date</label>
+      <input type="datetime-local" id="vcg-prescription-date" readonly
+             class="w-full px-4 py-3 bg-slate-100 border border-slate-200 rounded-xl text-sm text-slate-500 cursor-not-allowed">
+    </div>
+    <div class="mb-4 px-4 py-3 bg-blue-50 border border-blue-100 rounded-xl">
+      <p class="text-xs text-blue-500 font-medium mb-0.5">VCG Group</p>
+      <p id="vcg-prescription-group-label" class="text-sm font-semibold text-slate-800">—</p>
+    </div>
+    <div class="mb-4 relative">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Add Exercise</label>
+      <input type="text" id="vcg-prescription-search" autocomplete="off"
+             placeholder="Type to search exercises…"
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <div id="vcg-prescription-results"
+           class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-10 overflow-hidden"></div>
+    </div>
+    <div id="vcg-prescription-selected" class="mb-4 space-y-3 max-h-72 overflow-y-auto"></div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">General Notes</label>
+      <textarea id="vcg-prescription-notes" rows="4"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                placeholder="Optional general notes…"></textarea>
+    </div>
+    <p id="vcg-prescription-error" class="text-sm text-red-500 hidden mb-3"></p>
+    <div class="flex gap-3">
+      <button type="button" onclick="hideModal('vcg-prescription-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+      <button type="button" id="vcg-prescription-submit" data-label="Save Prescription" onclick="submitVcgPrescription()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Save Prescription</button>
     </div>
   </div>
 </div>
