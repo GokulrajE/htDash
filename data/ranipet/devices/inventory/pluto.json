@@ -1,9 +1,0 @@
-{
-  "devices": [
-    { "id": "RPLUTO001", "serial": "SN-RP-P001", "clinic_only": true,  "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RPLUTO002", "serial": "SN-RP-P002", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RPLUTO003", "serial": "SN-RP-P003", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RPLUTO004", "serial": "SN-RP-P004", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RPLUTO005", "serial": "SN-RP-P005", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null }
-  ]
-}

@@ -52,36 +52,49 @@
     }
 
     function eventRow(ev) {
-      const d = new Date(ev.scheduled_date);
-      const dateStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
-      const isOverdue = ev.days < 0;
+      const sched = ev.scheduled_date;
+      const isActiveWindow = !!ev.active_window;
+      const isOverdue = !isActiveWindow && ev.days <= 0;
+      const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
+      const d = new Date((refDate || '').replace(' ', 'T'));
+      const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
       const abs = Math.abs(ev.days);
-      const whenLabel = ev.days === 0 ? 'Today'
-                      : isOverdue    ? `${abs}d overdue`
-                      : ev.days === 1 ? 'Tomorrow'
-                      : `In ${ev.days} days`;
-      const urgency   = isOverdue ? 'border-red-200 bg-red-50'
-                      : ev.days === 0 ? 'border-red-200 bg-red-50'
-                      : ev.days <= 2  ? 'border-orange-200 bg-orange-50'
+      let whenLabel;
+      if (isActiveWindow) {
+        whenLabel = ev.days === 0 ? 'Due today' : `Due now · ${ev.days}d left`;
+      } else if (isOverdue) {
+        whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+      } else {
+        whenLabel = ev.days === 1 ? 'Tomorrow' : `In ${ev.days} days`;
+      }
+      const urgency   = isOverdue      ? 'border-red-200 bg-red-50'
+                      : isActiveWindow  ? 'border-amber-200 bg-amber-50'
+                      : ev.days <= 2   ? 'border-orange-200 bg-orange-50'
                       : 'border-slate-100 bg-slate-50';
-      const textColor = (isOverdue || ev.days === 0) ? 'text-red-600'
-                      : ev.days <= 2 ? 'text-orange-600' : 'text-slate-500';
+      const textColor = isOverdue      ? 'text-red-600'
+                      : isActiveWindow  ? 'text-amber-700'
+                      : ev.days <= 2   ? 'text-orange-600'
+                      : 'text-slate-500';
 
       const blocked = ev.blocked_by && ev.blocked_by.length > 0;
       const tag     = blocked ? 'div' : 'a';
       const href    = blocked ? '' : `href="/patients/${ev.homer_id}?action=${ev.id}"`;
       const extra   = blocked ? '' : 'hover:shadow-md transition-shadow';
-      const eventName = blocked
-        ? `<div class="font-medium text-slate-800 text-sm truncate flex items-center gap-1"><i class="fas fa-lock text-slate-400 text-[10px]"></i>${ev.event_name}</div>`
-        : `<div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>`;
+      const lockIcon = blocked ? `<i class="fas fa-lock text-slate-400 text-[10px] mr-1"></i>` : '';
+      const mainLine = `
+        <div class="text-sm truncate flex items-center gap-1">
+          ${lockIcon}<span class="font-semibold text-blue-700">${ev.homer_id}</span>
+          <span class="text-slate-400">·</span>
+          <span class="font-medium text-slate-800">${ev.event_name}</span>
+        </div>`;
       const rightLabel = blocked
         ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
         : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>`;
       return `
         <${tag} ${href} class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 ${extra}">
           <div class="min-w-0">
-            ${eventName}
-            <div class="text-xs text-slate-500 mt-0.5">${ev.homer_id} · ${dateStr}</div>
+            ${mainLine}
+            <div class="text-xs text-slate-500 mt-0.5">${dateStr}</div>
           </div>
           <div class="flex-shrink-0">
             ${rightLabel}

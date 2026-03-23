@@ -97,7 +97,7 @@ def api_patient_events(homer_id):
                 'days':              (broken_sched - today).days,
                 'blocked_by':        [],
             })
-        return jsonify({'overdue': overdue, 'upcoming': upcoming})
+        return jsonify({'overdue': overdue, 'upcoming': [], 'complete': []})
 
     # Build set of completed event IDs for dependency checking
     completed_ids = {e['protocol_event_id'] for e in events_data.get('complete', [])}
@@ -106,13 +106,13 @@ def api_patient_events(homer_id):
 
     for entry in events_data.get('incomplete', []):
         sched = entry.get('scheduled_date')
-        if not sched:
+        if not sched or not isinstance(sched, list) or len(sched) < 2:
             continue
         try:
-            sched_date = datetime.fromisoformat(sched).date()
+            start_date = datetime.fromisoformat(sched[0]).date()
+            end_date   = datetime.fromisoformat(sched[1]).date()
         except Exception:
             continue
-        diff = (sched_date - today).days
 
         # Compute blocked_by: depends_on entries that are applicable and not yet complete
         dep_ids = event_defs.get(entry['protocol_event_id'], {}).get('depends_on') or []
@@ -126,17 +126,35 @@ def api_patient_events(homer_id):
             'protocol_event_id': entry['protocol_event_id'],
             'event_name':        event_defs.get(entry['protocol_event_id'], {}).get('name', entry['protocol_event_id']),
             'scheduled_date':    sched,
-            'days':              diff,
             'blocked_by':        blocked_by,
         }
-        if diff < 0:
+
+        if start_date > today:
+            record['days'] = (start_date - today).days
+            record['active_window'] = False
+            upcoming.append(record)
+        elif end_date >= today:
+            record['days'] = (end_date - today).days
+            record['active_window'] = True
             overdue.append(record)
         else:
-            upcoming.append(record)
+            record['days'] = (end_date - today).days  # negative
+            record['active_window'] = False
+            overdue.append(record)
 
-    overdue.sort(key=lambda x: x['scheduled_date'])
-    upcoming.sort(key=lambda x: x['scheduled_date'])
-    return jsonify({'overdue': overdue, 'upcoming': upcoming})
+    # Active-window sub-group first, then past-due; both ascending by end date
+    overdue.sort(key=lambda x: (0 if x.get('active_window') else 1, x['scheduled_date'][1]))
+    upcoming.sort(key=lambda x: x['scheduled_date'][0])
+
+    complete_list = []
+    for entry in events_data.get('complete', []):
+        pid = entry.get('protocol_event_id', '')
+        item = {k: v for k, v in entry.items() if k != 'id'}
+        item['event_name'] = event_defs.get(pid, {}).get('name', pid)
+        complete_list.append(item)
+    complete_list.sort(key=lambda x: x.get('filed_at') or x.get('completion_date') or '', reverse=True)
+
+    return jsonify({'overdue': overdue, 'upcoming': upcoming, 'complete': complete_list})
 
 
 @bp.route('/api/patients/<homer_id>/available-devices', methods=['GET'])
@@ -203,7 +221,7 @@ def api_complete_device_install(homer_id):
     if not entry:
         return jsonify({'error': 'Event not found in incomplete list.'}), 404
 
-    filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     complete_entry = {
         **entry,
         'completion_date': event_date,
@@ -415,17 +433,15 @@ def api_activate_patient(homer_id):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json() or {}
     activation_date   = (data.get('activationDate') or '').strip()
-    ag_watch_right_id = (data.get('agWatchRightID') or '').strip()
-    ag_watch_left_id  = (data.get('agWatchLeftID') or '').strip()
+    _raw_right        = data.get('agWatchRightID')
+    _raw_left         = data.get('agWatchLeftID')
+    ag_watch_right_id = (_raw_right.strip() if isinstance(_raw_right, str) else None) or None
+    ag_watch_left_id  = (_raw_left.strip()  if isinstance(_raw_left,  str) else None) or None
     vcg_group         = (data.get('vcgGroup') or '').strip() or None
     notes             = (data.get('notes') or '').strip()
     if not activation_date:
         return jsonify({'error': 'activationDate is required'}), 400
-    if not ag_watch_right_id:
-        return jsonify({'error': 'AG Watch (Right) is required'}), 400
-    if not ag_watch_left_id:
-        return jsonify({'error': 'AG Watch (Left) is required'}), 400
-    if ag_watch_right_id == ag_watch_left_id:
+    if ag_watch_right_id and ag_watch_left_id and ag_watch_right_id == ag_watch_left_id:
         return jsonify({'error': 'Right and left limb watches must be different'}), 400
     try:
         if datetime.strptime(activation_date, '%Y-%m-%dT%H:%M') > datetime.now():
@@ -479,7 +495,7 @@ def api_activate_patient(homer_id):
         incomplete = events_data.get('incomplete', [])
         entry = next((e for e in incomplete if e.get('protocol_event_id') == 'activation'), None)
         if entry:
-            filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
             complete_entry = {**entry, 'completion_date': activation_date, 'filed_at': filed_at, 'notes': notes}
             events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
             events_data.setdefault('complete', []).append(complete_entry)
@@ -499,7 +515,7 @@ def api_activate_patient(homer_id):
             incomplete = ev_data.get('incomplete', [])
             wr_entry = next((e for e in incomplete if e.get('protocol_event_id') == 'watch_record'), None)
             if wr_entry:
-                filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
                 ev_data['incomplete'] = [e for e in incomplete if e.get('id') != wr_entry['id']]
                 ev_data.setdefault('complete', []).append({
                     **wr_entry,
@@ -513,10 +529,12 @@ def api_activate_patient(homer_id):
     except Exception as e:
         print(f'Warning: could not complete initial watch_record: {e}')
 
-    # Record agwatch assignments
+    # Record agwatch assignments (skip if no watch was available)
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
     for label, watch_id in (('right', ag_watch_right_id), ('left', ag_watch_left_id)):
+        if not watch_id:
+            continue
         assignments = read_device_assignments(folder, 'agwatch')
         assignments.append({
             'id':            str(uuid.uuid4()),
@@ -2505,7 +2523,7 @@ def _complete_prescription_event(folder, homer_id, event_id, presc_file,
     if not entry:
         return False, f'{event_id} not found in incomplete list.'
 
-    filed_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     complete_entry = {
         **entry,
         'completion_date':   entry['scheduled_date'],
@@ -2549,7 +2567,7 @@ def api_adl_prescription(homer_id):
 
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
-    filed_at   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     presc_file = _PRESCRIPTION_FILES[event_id]
     log_msg    = 'ADL prescription recorded' if event_id.endswith('d1') else 'ADL prescription revised'
 
@@ -2606,7 +2624,7 @@ def api_vcg_prescription(homer_id):
 
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
-    filed_at   = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     presc_file = _PRESCRIPTION_FILES[event_id]
     log_msg    = 'VCG prescription recorded' if event_id.endswith('d1') else 'VCG prescription revised'
 

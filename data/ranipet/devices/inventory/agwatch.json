@@ -1,9 +1,0 @@
-{
-  "devices": [
-    { "id": "RAGWATCH001", "serial": "SN-RP-W001", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RAGWATCH002", "serial": "SN-RP-W002", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RAGWATCH003", "serial": "SN-RP-W003", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RAGWATCH004", "serial": "SN-RP-W004", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RAGWATCH005", "serial": "SN-RP-W005", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null }
-  ]
-}

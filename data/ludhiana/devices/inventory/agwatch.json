@@ -1,9 +1,0 @@
-{
-  "devices": [
-    { "id": "LAGWATCH001", "serial": "SN-LD-W001", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "LAGWATCH002", "serial": "SN-LD-W002", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "LAGWATCH003", "serial": "SN-LD-W003", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "LAGWATCH004", "serial": "SN-LD-W004", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "LAGWATCH005", "serial": "SN-LD-W005", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null }
-  ]
-}

@@ -1,6 +1,0 @@
-:Location: Ranipet
-:HomerId: HOMCMCV003
-[2026-03-21 18:18:20]   RP-HS-ADMIN     #35   Created new patient : HOMCMCV003.json
-[2026-03-21 18:18:27]   RP-HS-ADMIN     #35   Assigned group: control
-[2026-03-21 19:46:21]   RP-HS-ADMIN     #41   Patient activated
-[2026-03-22 21:38:18]   RP-HS-ADMIN     #44   VCG prescription recorded | vcg_exercise/vcg_prescription_d1.json

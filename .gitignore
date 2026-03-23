@@ -34,3 +34,6 @@ htmlcov/
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+# Patient and clinical data
+data/

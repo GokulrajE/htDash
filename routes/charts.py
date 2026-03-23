@@ -328,7 +328,7 @@ def get_patient_mechanisms(hospital_id):
             {
                 "mechanisms": mechanisms,
                 "hospital_id": hospital_id,
-                "last_updated": last_updated.strftime("%Y-%m-%d %H:%M:%S")
+                "last_updated": last_updated.strftime("%Y-%m-%dT%H:%M:%S")
                 if last_updated
                 else None,
             }

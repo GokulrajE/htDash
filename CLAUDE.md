@@ -51,7 +51,7 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 5. ✅ Patient detail page — overview, key dates, events panels
 6. ✅ Device setup modal (`exp_device_install`)
 7. ✅ Activation modal (`activation`) — including agwatch assignment
-8. ⬜ Remaining protocol event modals (prescriptions, home visits, calls, assessments)
+8. ✅ Prescription modals (ADL + VCG d1 and d15) — ⬜ Remaining modals (home visits, calls, assessments)
 9. ⬜ Devices page
 10. ⬜ SIMs page
 11. ⬜ Cleanup — remove old `dashboard.html` and unused JS
@@ -87,7 +87,8 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 - Keep all existing API endpoint URLs intact
 - Preserve exact visual appearance (Tailwind classes, layout)
 - Do not add new features during this refactor — functionality parity only
-- All date fields stored as ISO 8601 datetime (`YYYY-MM-DDTHH:MM`); event-level comparisons use date only (call `.date()` before comparing)
+- All datetimes stored in ISO 8601 format with `T` separator. User-entered dates: minute resolution (`YYYY-MM-DDTHH:MM`). System-generated timestamps (`filed_at`): seconds resolution (`YYYY-MM-DDTHH:MM:SS`). Event-level comparisons use date only (call `.date()` before comparing).
+- `scheduled_date` in `protocol_events.json` is always a **two-element list** `[start, end]` (both `"YYYY-MM-DDTHH:MM"`). Point-in-time events have `start == end`. `null` for free/unscheduled events. Categorisation uses `start` for upcoming, `end` for overdue and broken-protocol detection.
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
 
 ---

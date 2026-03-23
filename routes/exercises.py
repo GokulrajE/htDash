@@ -132,7 +132,7 @@ def save_vcg_prescription():
             "user_id": user_id,
             "vcg_type": vcg_type,
             "selected_exercises": selected_exercises,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "version": timestamp,
         }
 
@@ -380,7 +380,7 @@ def save_controller_exercises():
         prescription_data = {
             "user_id": user_id,
             "exercise_type": exercise_type,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "exercises": selected_exercises,
         }
 

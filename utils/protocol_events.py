@@ -54,11 +54,11 @@ def _date_add(base_iso: str, days: int) -> str:
     return (base + timedelta(days=days)).strftime('%Y-%m-%dT%H:%M')
 
 
-def _make_incomplete_entry(event: dict, scheduled_date: Optional[str]) -> dict:
+def _make_incomplete_entry(event: dict, scheduled_date) -> dict:
     return {
         'id':                str(uuid.uuid4()),
         'protocol_event_id': event['id'],
-        'scheduled_date':    scheduled_date,
+        'scheduled_date':    scheduled_date,  # [start_iso, end_iso] list or None
         'flagged':           False,
         'notes':             '',
     }
@@ -69,7 +69,7 @@ def create_protocol_events(hospital_folder: str, homer_id: str,
     """Create protocol_events.json at group assignment.
 
     Pre-populates incomplete with all timed events (strict, point_in_time, windowed):
-    - reference=assignment → scheduled_date computed from a0_date immediately
+    - reference=assignment → scheduled_date = [start_iso, end_iso] computed from a0_date
     - reference=activation → scheduled_date=null (filled at activation)
 
     free section initialised to zero state.
@@ -88,10 +88,11 @@ def create_protocol_events(hospital_folder: str, homer_id: str,
             continue
         reference = event.get('reference')
         window    = event.get('window') or {}
-        end_day   = window.get('end_day', window.get('start_day', 0))
+        start_day = window.get('start_day', 0)
+        end_day   = window.get('end_day', start_day)
 
         if reference == 'assignment':
-            scheduled_date = _date_add(a0_date, end_day)
+            scheduled_date = [_date_add(a0_date, start_day), _date_add(a0_date, end_day)]
         else:
             scheduled_date = None  # filled at activation
 
@@ -137,15 +138,19 @@ def populate_activation_dates(hospital_folder: str, homer_id: str,
         event_def = events_by_id.get(entry['protocol_event_id'], {})
         if event_def.get('reference') != 'activation':
             continue
-        window  = event_def.get('window') or {}
-        end_day = window.get('end_day', window.get('start_day', 0))
-        entry['scheduled_date'] = _date_add(activation_date, end_day)
+        window    = event_def.get('window') or {}
+        start_day = window.get('start_day', 0)
+        end_day   = window.get('end_day', start_day)
+        entry['scheduled_date'] = [
+            _date_add(activation_date, start_day),
+            _date_add(activation_date, end_day),
+        ]
 
     # Seed first watch_record
     watch_entry = {
         'id':                str(uuid.uuid4()),
         'protocol_event_id': 'watch_record',
-        'scheduled_date':    activation_date,
+        'scheduled_date':    [activation_date, activation_date],
         'flagged':           False,
         'notes':             '',
     }

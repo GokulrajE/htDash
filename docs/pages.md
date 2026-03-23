@@ -64,6 +64,11 @@ Numbers are derived from `homer_id.json` files across all visible patients. Site
 
 Below the stats: **Overdue** and **Upcoming** event panels showing protocol events across all non-terminal patients. Fetched from `GET /api/dashboard/events`.
 
+- **Overdue** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`) sorted ascending by end date, then (2) past-due events (`end` < today) sorted ascending by end date.
+- **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, within 7 days, sorted ascending by start date.
+- The two lists are mutually exclusive.
+- Each event row displays the **Homer ID** prominently alongside the event name (e.g. `HOMCMCV003 · ADL Prescription D1`), since rows span multiple patients.
+
 **Actions:** None
 
 ---
@@ -129,10 +134,28 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 - **Overview tab** (default):
   1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date, Pluto ID *(experimental group)*, Mars ID *(experimental group)*, AG Watch Right ID *(both groups)*, AG Watch Left ID *(both groups)*,
   2. **Key Dates card** — A0, Activation, Training Completion, A1, A2, Discontinuation dates. A separate **Days card** sits alongside showing days elapsed since activation (Day 1 = activation date). Displays `—` until activated. Hidden for terminal states (discontinued, all_completed, pre_discontinued). Calculated client-side in `patient_detail.js`.
-  3. **Events panels** — Overdue (past deadline, red) and Upcoming (future, urgency-coded) protocol events. Fetched from `GET /api/patients/<homer_id>/events`. Clickable if today ≥ event's window start date.
-     - **Blocked events** (unmet `depends_on`): rendered as a non-clickable `<div>` with an amber badge on the right reading "Needs: \<event name\>" instead of the date/urgency label. A muted lock icon appears next to the event name.
+  3. **Events panels** — Three columns: Completed | Overdue | Upcoming. Fetched from `GET /api/patients/<homer_id>/events`.
+     - **Completed** — compact vertical timeline, most recent first. Green circle markers on a vertical line. Shows event name + completion date. Read-only.
+     - **Overdue column** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`), label `Due now · N days left`, sorted ascending by end date; then (2) past-due events (`end` < today), label `Nd overdue`, sorted ascending by end date. Active-window events appear above past-due events.
+     - **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, sorted ascending by start date. No cap (all future events shown).
+     - The three states are mutually exclusive. Categorisation always uses `start` for upcoming and `end` for overdue/broken-protocol.
+     - **Blocked events** (unmet `depends_on`): rendered as a non-clickable `<div>` with an amber badge on the right reading "Needs: \<event name\>". A muted lock icon appears next to the event name.
 
-- **Stub tabs** — Devices, ADL, VCG, Timeline, Adverse Events, Call Logs show "Coming soon"
+- **Timeline tab** — full-width vertical timeline, most recent first. Combines completed protocol events with two synthetic patient milestones injected client-side:
+  - **Patient Enrolled** — from `enrollDate` in `<homer_id>.json`
+  - **A0 Assessment** — from `a0CompletionDate` in `<homer_id>.json`
+  - Synthetic events use **blue circles**; protocol events use **green circles**.
+  - All events sorted descending by `filed_at` / `completion_date`.
+  - Alternating row backgrounds for readability.
+
+  **Split layout** (3-column CSS grid: `1fr 20px 1fr`):
+  - *Left column* (right-aligned): event name (bold), scheduled date (`start – end` for windowed, single date if `start == end`, `—` if `null`; omitted for synthetic events), **Day N** relative to `activationDate` (negative for events before activation; omitted if patient not yet activated).
+  - *Centre column*: circle marker + connecting vertical line.
+  - *Right column*: completion datetime, filed-at timestamp, then extra event-specific fields in order: Pluto Device, Mars Device, Demo Done, Right Watch, Left Watch, Prescription File, any additional fields, **Notes always last**. Empty/false fields are omitted.
+
+  Data from the `complete` array in `GET /api/patients/<homer_id>/events` (all fields except `id` are returned).
+
+- **Stub tabs** — Devices, Adverse Events, Call Logs show "Coming soon"
 
 
 **Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d1), [VCG Prescription](#vcg-prescription-vcg_prescription_d1), [Prescription Printout](#prescription-printout-prescription_printout_d1), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call), [Training Completion](#training-completion-training_completion_d29), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
@@ -211,8 +234,8 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Prerequisites: all events listed in `depends_on` for `activation` in `study_protocol.json` must be in `complete` (e.g. `exp_device_install` for experimental patients)
 - Modal fields:
   - Event Date (datetime, required; cannot be in the future)
-  - AG Watch Right (dropdown — active, unassigned watch from inventory; required)
-  - AG Watch Left (dropdown — active, unassigned watch from inventory; required)
+  - AG Watch Right (dropdown — active, unassigned watches from inventory + **"No Watch Available"** option; required). Selecting "No Watch Available" sets `agWatchRightID` to `null`.
+  - AG Watch Left (dropdown — same options; required). Selecting "No Watch Available" sets `agWatchLeftID` to `null`.
   - **VCG Group** (dropdown: VCG 2 / VCG 3 / VCG 4–5; required; **control patients only**) — therapist selects the patient's VCG level at the activation visit; fixed for the entire study duration
   - Notes (textarea, optional). The notes text area must be large enough for the user to write the their notes comfortably.
 - Server actions:
@@ -385,3 +408,20 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Append assignment record to `devices/assignments/pluto.json` and `devices/assignments/mars.json`
   - Append to `devices/logs/<pluto_id>.log` and `devices/logs/<mars_id>.log`
 - Log message: `Device setup completed — Pluto: <pluto_id>, Mars: <mars_id>`
+
+---
+
+### Watch Record (`watch_record`)
+- Trigger: `watch_record` event row on patient detail (both groups, chained — first entry seeded at activation; further entries added after each watch swap)
+- Allowed users: `admin`, `engineer`
+- Modal fields:
+  - Event Date (datetime, required; cannot be in the future)
+  - AG Watch Right (dropdown — active, unassigned watches from inventory + **"No Watch Available"** option; required). Selecting "No Watch Available" sets `ag_watch_right_id` to `null`.
+  - AG Watch Left (dropdown — same options; required). Selecting "No Watch Available" sets `ag_watch_left_id` to `null`.
+  - Notes (textarea, optional)
+- Server actions:
+  - Move `watch_record` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `ag_watch_right_id`, `ag_watch_left_id`, `notes`
+  - Update `agWatchRightID` and `agWatchLeftID` in `<homer_id>.json`
+  - Append assignment record to `devices/assignments/agwatch.json`
+  - Seed a new `watch_record` entry in `incomplete` for the next swap
+- Log message: `Watch record filed`

@@ -117,6 +117,7 @@ All fields are factual — status is never stored but always derived.
 - `group`: `null` | `"experimental"` | `"control"`
 - `trainingSide`: `"Right"` | `"Left"` | `null` (only set for experimental group)
 - `vcgGroup`: `null` | `"vcg2"` | `"vcg3"` | `"vcg4_5"` — set at activation for control patients; `null` for experimental patients; fixed for the entire study duration once set
+- `agWatchRightID`, `agWatchLeftID`: watch device ID string, or `null` if no watch was available at activation. Set at the activation event via dropdown; selecting "No Watch Available" stores `null`.
 - All date fields use ISO 8601 datetime format (`YYYY-MM-DDTHH:MM`). `null` means the event has not occurred.
 - Date fields cannot exceed the current local time — no future datetimes are allowed.
 
@@ -259,9 +260,9 @@ complete    — scheduled events that have been completed
 free        — unscheduled events (adverse_event, patient_call, etc.)
 ```
 
-**On group assignment:** `incomplete` pre-populated with all timed events for that group + shared. `reference: "assignment"` events get `scheduled_date` computed as `a0CompletionDate + end_day`. `reference: "activation"` events are placeholders with `scheduled_date: null`.
+**On group assignment:** `incomplete` pre-populated with all timed events for that group + shared. `reference: "assignment"` events get `scheduled_date = [a0CompletionDate + start_day, a0CompletionDate + end_day]`. `reference: "activation"` events are placeholders with `scheduled_date: null`.
 
-**On activation:** all `reference: "activation"` placeholders get `scheduled_date = activationDate + end_day`. First `watch_record` chained entry created with `scheduled_date = activationDate`.
+**On activation:** all `reference: "activation"` placeholders get `scheduled_date = [activationDate + start_day, activationDate + end_day]`. First `watch_record` chained entry created with `scheduled_date = [activationDate, activationDate]`.
 
 > **Date comparison convention:** All event-level date comparisons (overdue/upcoming, window flagging, broken_protocol detection) compare **date only** — always call `.date()` on ISO 8601 datetimes before comparing.
 
@@ -273,7 +274,7 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 {
   "id": "<uuid>",
   "protocol_event_id": "<id from study_protocol.json>",
-  "scheduled_date": "YYYY-MM-DDTHH:MM",
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
   "flagged": false,
   "notes": ""
 }
@@ -287,7 +288,9 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 }
 ```
 
-- `scheduled_date` — deadline: `reference_date + end_day`. `null` for activation placeholders. `activationDate` for first `watch_record`.
+- `scheduled_date` — always a two-element list `[start, end]` where both are `"YYYY-MM-DDTHH:MM"`. For point-in-time events `start == end`. For windowed events (e.g. `a1_assessment` days 30–37) `start` and `end` differ. `null` for activation placeholders and free events. `[activationDate, activationDate]` for first `watch_record`.
+  - `start` = `reference_date + start_day`, `end` = `reference_date + end_day`
+  - Categorisation always uses `start` for upcoming, `end` for overdue and broken-protocol detection.
 - `flagged` — `true` if `completion_date` falls outside the event's window (auto-set).
 
 ### Type-specific extra fields on `complete` entries
@@ -347,7 +350,7 @@ The complete entry stores only a relative path reference. The prescription data 
   "protocol_event_id": "training_pause_followup",
   "triggered_by": "<uuid>",
   "triggered_by_type": "adverse_event | technical_fault",
-  "scheduled_date": "YYYY-MM-DDTHH:MM",
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
   "flagged": false,
   "notes": ""
 }
@@ -446,7 +449,7 @@ Written by htDash when the therapist completes an ADL prescription event. The d1
 
 ```json
 {
-  "filed_at": "YYYY-MM-DD HH:MM:SS",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "filed_by": "<user_id>",
   "prescribed_exercises": [
     {
@@ -466,7 +469,7 @@ Written by htDash when the therapist completes a VCG prescription event. `vcg_gr
 
 ```json
 {
-  "filed_at": "YYYY-MM-DD HH:MM:SS",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "filed_by": "<user_id>",
   "vcg_group": "vcg3",
   "prescribed_exercises": [

@@ -220,7 +220,7 @@ def open_session(hospital_folder: str, user_id: str) -> int:
     dashboard_dir = _dashboard_path(hospital_folder)
     dashboard_dir.mkdir(parents=True, exist_ok=True)
     csv_path = dashboard_dir / f'{_safe_id(user_id)}.csv'
-    login_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    login_time = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
     preheader = [
         f':Location: {hospital_folder.capitalize()}\n',
@@ -255,7 +255,7 @@ def close_session(hospital_folder: str, user_id: str, session_id: int, reason: s
     csv_path = _dashboard_path(hospital_folder) / f'{_safe_id(user_id)}.csv'
     if not csv_path.exists():
         return
-    logout_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    logout_time = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     try:
         with open(csv_path, encoding='utf-8') as f:
             lines = f.readlines()
@@ -293,7 +293,7 @@ def write_patient_log(hospital_folder: str, homer_id: str, user_id: str,
         [YYYY-MM-DD HH:MM:SS]   <user_id>    #<session_id>    <action> | <detail_file>
     """
     log_path = get_patients_path(hospital_folder) / homer_id / f'{homer_id}.log'
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     detail = f' | {detail_file}' if detail_file else ''
     line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}{detail}\n'
     try:
@@ -357,7 +357,7 @@ def write_device_log(hospital_folder: str, device_id: str, user_id: str,
     logs_dir = _devices_path(hospital_folder) / 'logs'
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / f'{device_id}.log'
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}\n'
     is_new = not log_path.exists()
     try:

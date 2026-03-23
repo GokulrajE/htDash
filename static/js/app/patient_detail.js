@@ -58,8 +58,9 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-pane').forEach(pane => {
     pane.classList.toggle('hidden', pane.id !== `tab-${tab}`);
   });
-  if (tab === 'adl') loadAdlTab();
-  if (tab === 'vcg') loadVcgTab();
+  if (tab === 'adl')      loadAdlTab();
+  if (tab === 'vcg')      loadVcgTab();
+  if (tab === 'timeline') renderTimelineTab();
 }
 
 // ── Modal helpers ─────────────────────────────────────────────────────────────
@@ -79,6 +80,31 @@ function setError(id, msg) {
   if (!el) return;
   if (msg) { el.textContent = msg; el.classList.remove('hidden'); }
   else      { el.textContent = '';  el.classList.add('hidden'); }
+}
+
+function _nowForInput() {
+  // Returns current local datetime truncated to minutes in YYYY-MM-DDTHH:MM format
+  const d = new Date();
+  d.setSeconds(0, 0);
+  return d.toISOString().slice(0, 16);
+}
+
+function _attachDateGuard(inputId, errorId) {
+  // Sets max=now on the input and shows an inline error immediately on change if future date picked
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.max = _nowForInput();
+  // Remove any previously attached guard listener to avoid duplicates
+  if (input._dateGuard) input.removeEventListener('change', input._dateGuard);
+  input._dateGuard = () => {
+    if (input.value && input.value > input.max) {
+      setError(errorId, 'Date cannot be in the future.');
+      input.value = '';
+    } else {
+      setError(errorId, '');
+    }
+  };
+  input.addEventListener('change', input._dateGuard);
 }
 
 function setLoading(btnId, loading) {
@@ -157,9 +183,18 @@ function renderOverview(p) {
     }
   }
 
-  // Show VCG tab for control group only
+  // Show VCG tab for control group only; position it before ADL
   const vcgBtn = document.getElementById('tab-btn-vcg');
-  if (vcgBtn) vcgBtn.classList.toggle('hidden', p.group !== 'control');
+  if (vcgBtn) {
+    const isControl = p.group === 'control';
+    vcgBtn.classList.toggle('hidden', !isControl);
+    if (isControl) {
+      const adlBtn = document.querySelector('[data-tab="adl"]');
+      if (adlBtn && vcgBtn.nextElementSibling !== adlBtn) {
+        adlBtn.parentNode.insertBefore(vcgBtn, adlBtn);
+      }
+    }
+  }
 
   renderActions(p);
 }
@@ -217,6 +252,7 @@ function openCompleteTrainingModal() {
   document.getElementById('complete-training-homer-id').textContent = PATIENT_HOMER_ID;
   document.getElementById('complete-training-date').value = '';
   setError('complete-training-error', '');
+  _attachDateGuard('complete-training-date', 'complete-training-error');
   showModal('complete-training-modal');
 }
 
@@ -224,6 +260,7 @@ function openA1Modal() {
   document.getElementById('a1-homer-id').textContent = PATIENT_HOMER_ID;
   document.getElementById('a1-date').value = '';
   setError('a1-error', '');
+  _attachDateGuard('a1-date', 'a1-error');
   showModal('a1-modal');
 }
 
@@ -231,6 +268,7 @@ function openA2Modal() {
   document.getElementById('a2-homer-id').textContent = PATIENT_HOMER_ID;
   document.getElementById('a2-date').value = '';
   setError('a2-error', '');
+  _attachDateGuard('a2-date', 'a2-error');
   showModal('a2-modal');
 }
 
@@ -281,27 +319,217 @@ async function submitDiscontinue() {
 
 // ── Patient events ────────────────────────────────────────────────────────────
 
+let _completeEventsCache = null;  // null = not yet loaded
+
 async function loadPatientEvents() {
-  const overdueEl  = document.getElementById('patient-overdue-events');
-  const upcomingEl = document.getElementById('patient-upcoming-events');
+  const completedEl = document.getElementById('patient-completed-events');
+  const overdueEl   = document.getElementById('patient-overdue-events');
+  const upcomingEl  = document.getElementById('patient-upcoming-events');
   try {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/events`);
     if (!res.ok) throw new Error('Failed to load events');
-    const { overdue, upcoming } = await res.json();
+    const { overdue, upcoming, complete } = await res.json();
     eventsCache = [...overdue, ...upcoming];
+    _completeEventsCache = complete || [];
+    renderTimelineTab();
 
-    document.getElementById('patient-overdue-count').textContent  = overdue.length;
-    document.getElementById('patient-upcoming-count').textContent = upcoming.length;
+    document.getElementById('patient-completed-count').textContent = (complete || []).length;
+    document.getElementById('patient-overdue-count').textContent   = overdue.length;
+    document.getElementById('patient-upcoming-count').textContent  = upcoming.length;
 
+    completedEl.innerHTML = complete && complete.length
+      ? completedTimeline(complete)
+      : emptyEventState('hourglass-start', 'text-slate-300', 'No events completed yet');
     overdueEl.innerHTML  = overdue.length  ? overdue.map(patientEventRow).join('')
                                            : emptyEventState('check-circle', 'text-green-500', 'No overdue events');
     upcomingEl.innerHTML = upcoming.length ? upcoming.map(patientEventRow).join('')
                                            : emptyEventState('calendar-check', 'text-slate-400', 'No upcoming events');
   } catch (e) {
     console.error('Error loading patient events:', e);
-    overdueEl.innerHTML  = '<p class="text-xs text-red-500 text-center py-4">Error loading events</p>';
-    upcomingEl.innerHTML = '<p class="text-xs text-red-500 text-center py-4">Error loading events</p>';
+    completedEl.innerHTML = '<p class="text-xs text-red-500 text-center py-4">Error loading events</p>';
+    overdueEl.innerHTML   = '<p class="text-xs text-red-500 text-center py-4">Error loading events</p>';
+    upcomingEl.innerHTML  = '<p class="text-xs text-red-500 text-center py-4">Error loading events</p>';
   }
+}
+
+function _dayNumber(completionDate) {
+  const actRaw = patientData?.activationDate;
+  if (!actRaw || !completionDate) return null;
+  const act  = new Date(actRaw.replace(' ', 'T'));
+  const comp = new Date(completionDate.replace(' ', 'T'));
+  if (isNaN(act) || isNaN(comp)) return null;
+  return Math.round((comp - act) / 86400000);
+}
+
+function _fmtDateTime(raw) {
+  if (!raw) return '—';
+  const d = new Date(raw.replace(' ', 'T'));
+  if (isNaN(d)) return raw;
+  const date = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
+function _fmtDate(raw) {
+  if (!raw) return '—';
+  if (Array.isArray(raw)) {
+    const start = _fmtDate(raw[0]);
+    const end   = _fmtDate(raw[1]);
+    return raw[0] === raw[1] ? start : `${start} – ${end}`;
+  }
+  const d = new Date(raw.replace(' ', 'T'));
+  return isNaN(d) ? raw : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+// Fields always rendered in the main timeline layout — skip in extra fields
+const _TIMELINE_BASE_FIELDS = new Set([
+  'protocol_event_id', 'event_name', 'scheduled_date',
+  'completion_date', 'filed_at', 'flagged', '_synthetic',
+]);
+
+// Preferred display order for known extra fields. 'notes' is always rendered last.
+const _FIELD_ORDER = [
+  'pluto_id', 'mars_id', 'demo_done',
+  'ag_watch_right_id', 'ag_watch_left_id',
+  'prescription_file', 'attachments',
+];
+
+const _FIELD_LABELS = {
+  ag_watch_right_id: 'Right Watch',
+  ag_watch_left_id:  'Left Watch',
+  pluto_id:          'Pluto Device',
+  mars_id:           'Mars Device',
+  demo_done:         'Demo Done',
+  prescription_file: 'Prescription File',
+  notes:             'Notes',
+  attachments:       'Attachments',
+};
+
+function _timelineExtraFields(ev) {
+  const known   = new Set(_FIELD_ORDER);
+  const ordered = [
+    ..._FIELD_ORDER,
+    ...Object.keys(ev).filter(k => !known.has(k) && k !== 'notes'),
+    'notes',
+  ];
+
+  const rows = [];
+  for (const key of ordered) {
+    if (_TIMELINE_BASE_FIELDS.has(key) || !(key in ev)) continue;
+    const val = ev[key];
+    if (val === null || val === undefined || val === '' || val === false) continue;
+    if (Array.isArray(val) && val.length === 0) continue;
+    const label = _FIELD_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    let display;
+    if (typeof val === 'boolean') {
+      display = val ? 'Yes' : 'No';
+    } else if (Array.isArray(val)) {
+      display = val.join(', ');
+    } else if (typeof val === 'string' && val.includes('/')) {
+      display = val.split('/').pop();
+    } else {
+      display = String(val);
+    }
+    rows.push(`<div class="flex gap-1.5 text-xs"><span class="text-slate-400 shrink-0">${label}:</span><span class="text-slate-700">${display}</span></div>`);
+  }
+  return rows.length
+    ? `<div class="mt-2 space-y-0.5 border-t border-slate-100 pt-2">${rows.join('')}</div>`
+    : '';
+}
+
+function _syntheticPatientEvents() {
+  const synthetic = [];
+  if (patientData?.enrollDate) {
+    synthetic.push({
+      event_name:      'Patient Enrolled',
+      completion_date: patientData.enrollDate,
+      filed_at:        patientData.enrollDate,
+      scheduled_date:  null,
+      _synthetic:      true,
+    });
+  }
+  if (patientData?.a0CompletionDate) {
+    synthetic.push({
+      event_name:      'A0 Assessment',
+      completion_date: patientData.a0CompletionDate,
+      filed_at:        patientData.a0CompletionDate,
+      scheduled_date:  null,
+      _synthetic:      true,
+    });
+  }
+  return synthetic;
+}
+
+function renderTimelineTab() {
+  const container = document.getElementById('timeline-tab-content');
+  if (!container) return;
+
+  // Merge protocol events with synthetic patient milestones, sort most-recent first
+  const all = [...(  _completeEventsCache || []), ..._syntheticPatientEvents()];
+  all.sort((a, b) => {
+    const ta = a.filed_at || a.completion_date || '';
+    const tb = b.filed_at || b.completion_date || '';
+    return tb.localeCompare(ta);
+  });
+
+  const events = all;
+  if (!events.length) {
+    container.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-16 text-slate-300">
+        <i class="fas fa-stream text-3xl mb-3"></i>
+        <p class="text-sm">No completed events yet.</p>
+      </div>`;
+    return;
+  }
+  const items = events.map((ev, i) => {
+    const isLast   = i === events.length - 1;
+    const schedStr = _fmtDate(ev.scheduled_date);
+    const compStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
+    const filedStr = ev.filed_at ? _fmtDateTime(ev.filed_at) : '';
+    const extra    = _timelineExtraFields(ev);
+    const rowBg    = i % 2 === 1 ? 'bg-slate-100 rounded-lg' : '';
+    const dayNum   = _dayNumber(ev.completion_date);
+    const dayLabel = dayNum !== null ? `Day ${dayNum}` : null;
+    const isSynthetic = !!ev._synthetic;
+    const circleCls = isSynthetic
+      ? 'bg-blue-500 ring-blue-300'
+      : 'bg-green-500 ring-green-300';
+    return `
+      <div class="grid gap-x-4 px-2 -mx-2 ${rowBg}" style="grid-template-columns:1fr 20px 1fr">
+        <div class="text-right pb-${isLast ? '2' : '7'} pt-2">
+          <p class="text-sm font-semibold text-slate-800">${ev.event_name}</p>
+          ${!isSynthetic ? `<p class="text-xs text-slate-400 mt-0.5">Scheduled: ${schedStr}</p>` : ''}
+          ${dayLabel ? `<p class="text-sm font-semibold text-indigo-500 mt-1">${dayLabel}</p>` : ''}
+        </div>
+        <div class="flex flex-col items-center pt-2">
+          <div class="w-3 h-3 rounded-full ${circleCls} border-2 border-white ring-1 z-10 flex-shrink-0"></div>
+          ${isLast ? '' : '<div class="flex-1 w-0.5 bg-green-200 -mb-2"></div>'}
+        </div>
+        <div class="pb-${isLast ? '2' : '7'} pt-2">
+          <p class="text-xs font-medium text-slate-700">${compStr}</p>
+          ${filedStr ? `<p class="text-xs text-slate-400 mt-0.5">Filed: ${filedStr}</p>` : ''}
+          ${extra}
+        </div>
+      </div>`;
+  }).join('');
+  container.innerHTML = `<div>${items}</div>`;
+}
+
+function completedTimeline(events) {
+  const items = events.map((ev, i) => {
+    const raw = ev.completion_date || ev.filed_at || '';
+    const d   = raw ? new Date(raw) : null;
+    const dateStr = d ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—';
+    const isLast  = i === events.length - 1;
+    return `
+      <div class="relative pl-7 ${isLast ? '' : 'pb-4'}">
+        <div class="absolute left-[3px] top-1.5 w-3 h-3 rounded-full bg-green-500 border-2 border-white ring-1 ring-green-300 z-10"></div>
+        ${isLast ? '' : '<div class="absolute left-[8px] top-4 bottom-0 w-0.5 bg-green-100"></div>'}
+        <p class="text-sm font-medium text-slate-800 leading-tight">${ev.event_name}</p>
+        <p class="text-xs text-slate-400 mt-0.5">${dateStr}</p>
+      </div>`;
+  }).join('');
+  return `<div class="relative">${items}</div>`;
 }
 
 // Map protocol_event_id → opener function name
@@ -316,19 +544,30 @@ const EVENT_OPENERS = {
 };
 
 function patientEventRow(ev) {
-  const d = new Date(ev.scheduled_date);
-  const dateStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
-  const isOverdue = ev.days < 0;
+  const sched = ev.scheduled_date;
+  const isActiveWindow = !!ev.active_window;
+  const isOverdue = !isActiveWindow && ev.days <= 0;
+  // For display date: upcoming → start, active-window or past-due → end
+  const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
+  const d = new Date((refDate || '').replace(' ', 'T'));
+  const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
   const abs = Math.abs(ev.days);
-  const whenLabel = ev.days === 0 ? 'Today'
-                  : isOverdue    ? `${abs}d overdue`
-                  : ev.days === 1 ? 'Tomorrow'
-                  : `In ${ev.days} days`;
-  const urgency   = isOverdue || ev.days === 0 ? 'border-red-200 bg-red-50'
-                  : ev.days <= 2 ? 'border-orange-200 bg-orange-50'
+  let whenLabel;
+  if (isActiveWindow) {
+    whenLabel = ev.days === 0 ? 'Due today' : `Due now · ${ev.days}d left`;
+  } else if (isOverdue) {
+    whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+  } else {
+    whenLabel = ev.days === 1 ? 'Tomorrow' : `In ${ev.days} days`;
+  }
+  const urgency   = isOverdue      ? 'border-red-200 bg-red-50'
+                  : isActiveWindow  ? 'border-amber-200 bg-amber-50'
+                  : ev.days <= 2   ? 'border-orange-200 bg-orange-50'
                   : 'border-slate-100 bg-slate-50';
-  const textColor = isOverdue || ev.days === 0 ? 'text-red-600'
-                  : ev.days <= 2 ? 'text-orange-600' : 'text-slate-500';
+  const textColor = isOverdue      ? 'text-red-600'
+                  : isActiveWindow  ? 'text-amber-700'
+                  : ev.days <= 2   ? 'text-orange-600'
+                  : 'text-slate-500';
 
   const blocked   = ev.blocked_by && ev.blocked_by.length > 0;
   const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
@@ -370,6 +609,7 @@ async function openDeviceSetupModal(ev) {
   document.getElementById('device-setup-demo').checked = false;
   document.getElementById('device-setup-notes').value = '';
   setError('device-setup-error', '');
+  _attachDateGuard('device-setup-date', 'device-setup-error');
 
   const plutoSel = document.getElementById('device-setup-pluto');
   const marsSel  = document.getElementById('device-setup-mars');
@@ -424,6 +664,7 @@ async function openActivationModal(evId) {
   document.getElementById('activation-date').value = '';
   document.getElementById('activation-notes').value = '';
   setError('activation-error', '');
+  _attachDateGuard('activation-date', 'activation-error');
 
   // Show VCG group row for control patients only
   const vcgRow = document.getElementById('activation-vcg-group-row');
@@ -442,12 +683,13 @@ async function openActivationModal(evId) {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-agwatches`);
     const { agwatch } = await res.json();
 
+    const NO_WATCH_OPT = '<option value="__none__">No Watch Available</option>';
+
     function buildWatchOpts(watches, excludeId) {
-      if (!watches.length) return '<option value="" disabled>No watches available</option>';
+      const available = watches.filter(d => d.id !== excludeId);
       return '<option value="">Select watch…</option>' +
-        watches.filter(d => d.id !== excludeId)
-               .map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`)
-               .join('');
+        available.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('') +
+        NO_WATCH_OPT;
     }
 
     affectedSel.innerHTML   = buildWatchOpts(agwatch, null);
@@ -474,12 +716,20 @@ async function submitActivation() {
   const agWatchLeftId  = document.getElementById('activation-watch-left').value;
   const notes          = document.getElementById('activation-notes').value;
 
-  if (!activationDate)  { setError('activation-error', 'Please select an activation date.'); return; }
-  if (!agWatchRightId)  { setError('activation-error', 'Please select a watch for the right limb.'); return; }
-  if (!agWatchLeftId)   { setError('activation-error', 'Please select a watch for the left limb.'); return; }
-  if (agWatchRightId === agWatchLeftId) { setError('activation-error', 'Right and left limb watches must be different.'); return; }
+  const NO_WATCH = '__none__';
+  if (!activationDate)   { setError('activation-error', 'Please select an activation date.'); return; }
+  if (!agWatchRightId)   { setError('activation-error', 'Please select a watch or "No Watch Available" for the right limb.'); return; }
+  if (!agWatchLeftId)    { setError('activation-error', 'Please select a watch or "No Watch Available" for the left limb.'); return; }
+  if (agWatchRightId !== NO_WATCH && agWatchRightId === agWatchLeftId) {
+    setError('activation-error', 'Right and left limb watches must be different.'); return;
+  }
 
-  const body = { activationDate, agWatchRightID: agWatchRightId, agWatchLeftID: agWatchLeftId, notes };
+  const body = {
+    activationDate,
+    agWatchRightID: agWatchRightId === NO_WATCH ? null : agWatchRightId,
+    agWatchLeftID:  agWatchLeftId  === NO_WATCH ? null : agWatchLeftId,
+    notes,
+  };
   if (patientData?.group === 'control') {
     const vcgGroup = document.getElementById('activation-vcg-group').value;
     if (!vcgGroup) { setError('activation-error', 'Please select a VCG group.'); return; }

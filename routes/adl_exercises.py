@@ -242,7 +242,7 @@ def save_adl_prescription():
             "user_id": user_id,
             # "selected_exercises": selected_exercises,
             "exercises": selected_exercises,  # Include for frontend compatibility
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "version": timestamp,
         }
 

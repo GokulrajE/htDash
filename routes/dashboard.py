@@ -85,13 +85,13 @@ def events():
 
         for entry in events_data.get('incomplete', []):
             sched = entry.get('scheduled_date')
-            if not sched:
+            if not sched or not isinstance(sched, list) or len(sched) < 2:
                 continue
             try:
-                sched_date = datetime.fromisoformat(sched).date()
+                start_date = datetime.fromisoformat(sched[0]).date()
+                end_date   = datetime.fromisoformat(sched[1]).date()
             except Exception:
                 continue
-            diff = (sched_date - today).days
 
             dep_ids    = event_defs.get(entry['protocol_event_id'], {}).get('depends_on') or []
             blocked_by = [event_defs[d]['name'] for d in dep_ids if d in known_ids and d not in completed_ids]
@@ -102,16 +102,26 @@ def events():
                 'homer_id':          homer_id,
                 'event_name':        event_names.get(entry['protocol_event_id'], entry['protocol_event_id']),
                 'scheduled_date':    sched,
-                'days':              diff,
                 'blocked_by':        blocked_by,
             }
-            if diff < 0:
+
+            if start_date > today:
+                diff = (start_date - today).days
+                if diff <= 7:
+                    record['days'] = diff
+                    record['active_window'] = False
+                    upcoming.append(record)
+            elif end_date >= today:
+                record['days'] = (end_date - today).days
+                record['active_window'] = True
                 overdue.append(record)
-            elif diff <= 7:
-                upcoming.append(record)
+            else:
+                record['days'] = (end_date - today).days  # negative
+                record['active_window'] = False
+                overdue.append(record)
 
-
-    overdue.sort(key=lambda x: x['scheduled_date'])
-    upcoming.sort(key=lambda x: x['scheduled_date'])
+    # Active-window sub-group first, then past-due; both ascending by end date
+    overdue.sort(key=lambda x: (0 if x.get('active_window') else 1, x['scheduled_date'][1]))
+    upcoming.sort(key=lambda x: x['scheduled_date'][0])
 
     return jsonify({'overdue': overdue, 'upcoming': upcoming})
