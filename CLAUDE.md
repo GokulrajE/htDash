@@ -89,6 +89,12 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 - Do not add new features during this refactor — functionality parity only
 - All datetimes stored in ISO 8601 format with `T` separator. User-entered dates: minute resolution (`YYYY-MM-DDTHH:MM`). System-generated timestamps (`filed_at`): seconds resolution (`YYYY-MM-DDTHH:MM:SS`). Event-level comparisons use date only (call `.date()` before comparing).
 - `scheduled_date` in `protocol_events.json` is always a **two-element list** `[start, end]` (both `"YYYY-MM-DDTHH:MM"`). Point-in-time events have `start == end`. `null` for free/unscheduled events. Categorisation uses `start` for upcoming, `end` for overdue and broken-protocol detection.
+- `window.start_day` / `window.end_day` in `study_protocol.json` use **1-based day numbers**: Day 1 = the reference date itself (a0 for `reference=assignment`, activation for `reference=activation`). Code converts to a 0-based offset with `start_day - 1`. All event IDs (`d1`, `d02`, `d15`, …) reflect this naming convention.
+- Every protocol event has a **`date source`** that determines how `completion_date` is obtained. Three possible values:
+  - `user` — therapist enters the date; editable datetime input with future-date guard
+  - `= <event_id>` — copied from another completed event's `completion_date`; read-only in the modal
+  - `prefill: <event_id>` — pre-filled from another completed event's `completion_date` but editable; future-date guard applies
+  - The source for each event is documented in the event catalogue in `docs/data_schemas.md`. For `=` and `prefill` sources, the referenced event is always complete by the time the modal opens (enforced by `depends_on`).
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
 
 ---
@@ -106,13 +112,17 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 
 When adding or modifying any feature that touches event rows or protocol events, verify ALL of the following locations are updated consistently:
 
-### Event row rendering (blocked events)
-Both pages that show event rows must render blocked events identically: lock icon next to event name, amber badge "Needs: \<event name\>" on the right, non-clickable `<div>`.
+### Event row rendering (blocked and upcoming events)
+Both pages that show event rows must render blocked and upcoming events identically.
+
+**Blocked events:** lock icon next to event name, amber badge "Needs: \<event name\>" on the right, non-clickable `<div>`.
+
+**Upcoming events** (window start > today, `!active_window && days > 0`): non-clickable `<div>`, slate "Available from \<date\>" label on the right. No lock icon.
 
 | Location | Function | Notes |
 |---|---|---|
 | `static/js/app/patient_detail.js` | `patientEventRow()` | Calls `EVENT_OPENERS` to determine clickability |
-| `static/js/app/dashboard.js` | `eventRow()` | Always links to `/patients/<homer_id>?action=<id>` unless blocked |
+| `static/js/app/dashboard.js` | `eventRow()` | Non-clickable for blocked or upcoming; links otherwise |
 
 ### blocked_by computation (server-side)
 Both event APIs must compute `blocked_by` using the same logic (depends_on entries that are applicable and not yet complete).

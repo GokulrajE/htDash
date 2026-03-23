@@ -174,14 +174,14 @@ def get_patients_for_user(login_place: str) -> list:
 
 
 _HOMER_ID_PREFIXES = {
-    'manipal':  'HOMAHE',
-    'ranipet':  'HOMCMCV',
-    'ludhiana': 'HOMCMCL',
+    'manipal':  'HOMCHP',
+    'ranipet':  'HOCMCV',
+    'ludhiana': 'HOCMCL',
 }
 
 
 def generate_homer_id(hospital_folder: str) -> str:
-    """Auto-generate the next homerID for a hospital (e.g. HOMAHE004)."""
+    """Auto-generate the next homerID for a hospital (e.g. HOMCHP004)."""
     prefix = _HOMER_ID_PREFIXES.get(hospital_folder, 'HOMUNK')
     existing = list_patient_ids(hospital_folder)
     nums = []

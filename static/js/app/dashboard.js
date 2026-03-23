@@ -55,6 +55,7 @@
       const sched = ev.scheduled_date;
       const isActiveWindow = !!ev.active_window;
       const isOverdue = !isActiveWindow && ev.days <= 0;
+      const isUpcoming = !isActiveWindow && ev.days > 0;
       const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
       const d = new Date((refDate || '').replace(' ', 'T'));
       const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
@@ -65,21 +66,22 @@
       } else if (isOverdue) {
         whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
       } else {
-        whenLabel = ev.days === 1 ? 'Tomorrow' : `In ${ev.days} days`;
+        whenLabel = `Available from ${dateStr}`;
       }
       const urgency   = isOverdue      ? 'border-red-200 bg-red-50'
                       : isActiveWindow  ? 'border-amber-200 bg-amber-50'
-                      : ev.days <= 2   ? 'border-orange-200 bg-orange-50'
+                      : isUpcoming     ? 'border-slate-100 bg-slate-50'
                       : 'border-slate-100 bg-slate-50';
       const textColor = isOverdue      ? 'text-red-600'
                       : isActiveWindow  ? 'text-amber-700'
-                      : ev.days <= 2   ? 'text-orange-600'
+                      : isUpcoming     ? 'text-slate-400'
                       : 'text-slate-500';
 
       const blocked = ev.blocked_by && ev.blocked_by.length > 0;
-      const tag     = blocked ? 'div' : 'a';
-      const href    = blocked ? '' : `href="/patients/${ev.homer_id}?action=${ev.id}"`;
-      const extra   = blocked ? '' : 'hover:shadow-md transition-shadow';
+      const nonClickable = blocked || isUpcoming;
+      const tag     = nonClickable ? 'div' : 'a';
+      const href    = nonClickable ? '' : `href="/patients/${ev.homer_id}?action=${ev.id}"`;
+      const extra   = nonClickable ? '' : 'hover:shadow-md transition-shadow';
       const lockIcon = blocked ? `<i class="fas fa-lock text-slate-400 text-[10px] mr-1"></i>` : '';
       const mainLine = `
         <div class="text-sm truncate flex items-center gap-1">

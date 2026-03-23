@@ -390,14 +390,14 @@ const _TIMELINE_BASE_FIELDS = new Set([
 // Preferred display order for known extra fields. 'notes' is always rendered last.
 const _FIELD_ORDER = [
   'pluto_id', 'mars_id', 'demo_done',
-  'ag_watch_right_id', 'ag_watch_left_id',
+  'ag_watch_right', 'ag_watch_left',
   'prescription_file', 'attachments',
 ];
 
 const _FIELD_LABELS = {
-  ag_watch_right_id: 'Right Watch',
-  ag_watch_left_id:  'Left Watch',
-  pluto_id:          'Pluto Device',
+  ag_watch_right: 'Right Watch',
+  ag_watch_left:  'Left Watch',
+  pluto_id:       'Pluto Device',
   mars_id:           'Mars Device',
   demo_done:         'Demo Done',
   prescription_file: 'Prescription File',
@@ -425,6 +425,9 @@ function _timelineExtraFields(ev) {
       display = val ? 'Yes' : 'No';
     } else if (Array.isArray(val)) {
       display = val.join(', ');
+    } else if (val && typeof val === 'object' && 'new_id' in val) {
+      const nw = val.new_id ?? 'None';
+      display = val.old_id ? `${val.old_id} → ${nw}` : nw;
     } else if (typeof val === 'string' && val.includes('/')) {
       display = val.split('/').pop();
     } else {
@@ -534,19 +537,22 @@ function completedTimeline(events) {
 
 // Map protocol_event_id → opener function name
 const EVENT_OPENERS = {
-  exp_device_install:       (ev) => openDeviceSetupModal(ev.id),
-  activation:               (ev) => openActivationModal(ev.id),
-  discontinuation_reminder: (_ev) => openDiscontinueModal(),
-  adl_prescription_d1:      (ev) => openAdlPrescriptionModal(ev),
-  adl_prescription_d15:     (ev) => openAdlPrescriptionModal(ev),
-  vcg_prescription_d1:      (ev) => openVcgPrescriptionModal(ev),
-  vcg_prescription_d15:     (ev) => openVcgPrescriptionModal(ev),
+  exp_device_install:        (ev) => openDeviceSetupModal(ev.id),
+  activation:                (ev) => openActivationModal(ev.id),
+  discontinuation_reminder:  (_ev) => openDiscontinueModal(),
+  adl_prescription_d1:       (ev) => openAdlPrescriptionModal(ev),
+  adl_prescription_d15:      (ev) => openAdlPrescriptionModal(ev),
+  vcg_prescription_d1:       (ev) => openVcgPrescriptionModal(ev),
+  vcg_prescription_d15:      (ev) => openVcgPrescriptionModal(ev),
+  prescription_printout_d1:  (ev) => openPrescriptionPrintoutModal(ev),
+  prescription_printout_d15: (ev) => openPrescriptionPrintoutModal(ev),
 };
 
 function patientEventRow(ev) {
   const sched = ev.scheduled_date;
   const isActiveWindow = !!ev.active_window;
-  const isOverdue = !isActiveWindow && ev.days <= 0;
+  const isOverdue   = !isActiveWindow && ev.days <= 0;
+  const isUpcoming  = !isActiveWindow && ev.days > 0;
   // For display date: upcoming → start, active-window or past-due → end
   const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
   const d = new Date((refDate || '').replace(' ', 'T'));
@@ -558,7 +564,7 @@ function patientEventRow(ev) {
   } else if (isOverdue) {
     whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
   } else {
-    whenLabel = ev.days === 1 ? 'Tomorrow' : `In ${ev.days} days`;
+    whenLabel = `Available from ${dateStr}`;
   }
   const urgency   = isOverdue      ? 'border-red-200 bg-red-50'
                   : isActiveWindow  ? 'border-amber-200 bg-amber-50'
@@ -571,7 +577,7 @@ function patientEventRow(ev) {
 
   const blocked   = ev.blocked_by && ev.blocked_by.length > 0;
   const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
-  const clickable = hasOpener && !blocked;
+  const clickable = hasOpener && !blocked && !isUpcoming;
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
@@ -695,16 +701,16 @@ async function openActivationModal(evId) {
     affectedSel.innerHTML   = buildWatchOpts(agwatch, null);
     unaffectedSel.innerHTML = buildWatchOpts(agwatch, null);
 
-    affectedSel.addEventListener('change', () => {
+    affectedSel.onchange = () => {
       const prev = unaffectedSel.value;
       unaffectedSel.innerHTML = buildWatchOpts(agwatch, affectedSel.value);
-      if (prev && prev !== affectedSel.value) unaffectedSel.value = prev;
-    });
-    unaffectedSel.addEventListener('change', () => {
+      if (prev && [...unaffectedSel.options].some(o => o.value === prev)) unaffectedSel.value = prev;
+    };
+    unaffectedSel.onchange = () => {
       const prev = affectedSel.value;
       affectedSel.innerHTML = buildWatchOpts(agwatch, unaffectedSel.value);
-      if (prev && prev !== unaffectedSel.value) affectedSel.value = prev;
-    });
+      if (prev && [...affectedSel.options].some(o => o.value === prev)) affectedSel.value = prev;
+    };
   } catch (e) {
     setError('activation-error', 'Failed to load available watches.');
   }
@@ -936,8 +942,19 @@ async function openAdlPrescriptionModal(ev) {
   _adlPrescEventId = typeof ev === 'object' ? ev.id : ev;
   const protocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
 
+  let dateValue, dateLabel;
+  if (protocolId === 'adl_prescription_d15') {
+    const hvEvent = (_completeEventsCache || []).find(e => e.protocol_event_id === 'home_visit_d15');
+    dateValue = hvEvent?.completion_date || '';
+    dateLabel = 'Home Visit Date';
+  } else {
+    dateValue = patientData?.activationDate || '';
+    dateLabel = 'Activation Date';
+  }
+
   document.getElementById('adl-prescription-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('adl-prescription-date').value = patientData?.activationDate || '';
+  document.getElementById('adl-prescription-date-label').textContent = dateLabel;
+  document.getElementById('adl-prescription-date').value = dateValue;
   document.getElementById('adl-prescription-notes').value = '';
   setError('adl-prescription-error', '');
   _adlSelected = [];
@@ -1006,8 +1023,19 @@ async function openVcgPrescriptionModal(ev) {
   const protocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
   const vcgGroup   = patientData?.vcgGroup || '';
 
+  let vcgDateValue, vcgDateLabel;
+  if (protocolId === 'vcg_prescription_d15') {
+    const hvEvent = (_completeEventsCache || []).find(e => e.protocol_event_id === 'home_visit_d15');
+    vcgDateValue = hvEvent?.completion_date || '';
+    vcgDateLabel = 'Home Visit Date';
+  } else {
+    vcgDateValue = patientData?.activationDate || '';
+    vcgDateLabel = 'Activation Date';
+  }
+
   document.getElementById('vcg-prescription-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('vcg-prescription-date').value = patientData?.activationDate || '';
+  document.getElementById('vcg-prescription-date-label').textContent = vcgDateLabel;
+  document.getElementById('vcg-prescription-date').value = vcgDateValue;
   document.getElementById('vcg-prescription-group-label').textContent = VCG_GROUP_LABELS[vcgGroup] || vcgGroup || '—';
   document.getElementById('vcg-prescription-notes').value = '';
   setError('vcg-prescription-error', '');
@@ -1081,7 +1109,7 @@ async function submitVcgPrescription() {
 let _adlTabLoaded = false;
 let _vcgTabLoaded = false;
 
-function _prescriptionCard(data, exercises, dayLabel, headerClass) {
+function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath) {
   const exMap = Object.fromEntries(exercises.map(e => [e.id, e]));
   const rows = (data.prescribed_exercises || []).map((pe, i) => {
     const name = exMap[pe.exercise_id]?.name || pe.exercise_id;
@@ -1104,13 +1132,23 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass) {
       <p class="text-sm text-slate-600">${data.notes}</p>
     </div>` : '';
 
+  const downloadLink = attachmentPath ? `
+    <a href="/api/patients/${PATIENT_HOMER_ID}/attachment/${attachmentPath}"
+       download
+       class="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-800">
+      <i class="fas fa-file-pdf"></i> Download PDF
+    </a>` : '';
+
   return `
     <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
       <div class="flex items-center justify-between px-5 py-4 ${headerClass} border-b border-slate-100">
         <h3 class="text-sm font-bold">${dayLabel}</h3>
-        <div class="text-right">
-          <p class="text-xs opacity-70">Filed ${data.filed_at}</p>
-          <p class="text-xs opacity-50">by ${data.filed_by}</p>
+        <div class="flex items-center gap-4">
+          ${downloadLink}
+          <div class="text-right">
+            <p class="text-xs opacity-70">Filed ${data.filed_at}</p>
+            <p class="text-xs opacity-50">by ${data.filed_by}</p>
+          </div>
         </div>
       </div>
       <div class="px-5 py-2">
@@ -1142,9 +1180,11 @@ async function loadAdlTab() {
           <p class="font-medium">No ADL prescriptions recorded yet.</p>
         </div>`;
     } else {
+      const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d1');
+      const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-50 text-blue-800');
-      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-slate-50 text-slate-700');
+      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-50 text-blue-800',  printD15?.attachment);
+      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-slate-50 text-slate-700', printD1?.attachment);
       container.innerHTML = html;
     }
     _adlTabLoaded = true;
@@ -1178,15 +1218,71 @@ async function loadVcgTab() {
           <p class="font-medium">No VCG prescriptions recorded yet.</p>
         </div>`;
     } else {
+      const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d1');
+      const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       const suffix = groupLabel ? ` · <span class="font-normal opacity-70">${groupLabel}</span>` : '';
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-50 text-teal-800');
-      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-slate-50 text-slate-700');
+      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-50 text-teal-800',  printD15?.attachment);
+      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-slate-50 text-slate-700', printD1?.attachment);
       container.innerHTML = html;
     }
     _vcgTabLoaded = true;
   } catch (_) {
     container.innerHTML = `<p class="text-sm text-red-500 p-4">Failed to load VCG prescriptions.</p>`;
+  }
+}
+
+// ── Prescription Printout modal ────────────────────────────────────────────────
+
+let _prescPrintoutEventId     = null;
+let _prescPrintoutProtocolId  = null;
+
+function openPrescriptionPrintoutModal(ev) {
+  _prescPrintoutEventId    = typeof ev === 'object' ? ev.id : ev;
+  _prescPrintoutProtocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
+
+  const title = _prescPrintoutProtocolId === 'prescription_printout_d15'
+    ? 'Revised Therapy Prescription Printout'
+    : 'Therapy Prescription Printout';
+
+  document.getElementById('prescription-printout-title').textContent = title;
+  document.getElementById('prescription-printout-homer-id').textContent = PATIENT_HOMER_ID;
+  setError('prescription-printout-error', '');
+  showModal('prescription-printout-modal');
+}
+
+async function _completePrescriptionPrintout() {
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
+    { event_id: _prescPrintoutEventId, protocol_event_id: _prescPrintoutProtocolId }
+  );
+  if (!ok) {
+    setError('prescription-printout-error', data.error || 'Failed to record printout.');
+    return null;
+  }
+  hideModal('prescription-printout-modal');
+  loadPatientEvents();
+  return data.attachment;
+}
+
+async function savePrescriptionPrintout() {
+  setLoading('prescription-printout-save', true);
+  const attachment = await _completePrescriptionPrintout();
+  setLoading('prescription-printout-save', false);
+  if (attachment) {
+    const a = document.createElement('a');
+    a.href = `/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`;
+    a.download = attachment.split('/').pop();
+    a.click();
+  }
+}
+
+async function printPrescriptionPrintout() {
+  setLoading('prescription-printout-print', true);
+  const attachment = await _completePrescriptionPrintout();
+  setLoading('prescription-printout-print', false);
+  if (attachment) {
+    window.open(`/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`, '_blank');
   }
 }
 
@@ -1224,6 +1320,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     'complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit',
     'device-setup-submit', 'activation-submit',
     'adl-prescription-submit', 'vcg-prescription-submit',
+    'prescription-printout-save', 'prescription-printout-print',
   ].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.dataset.label = btn.textContent;
@@ -1238,9 +1335,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadPatientEvents();
   switchTab('overview');
 
-  // Auto-open modal if ?action=<event_id> is in the URL
+  // Auto-open modal if ?action=<event_id> is in the URL, then clean up the URL
   const actionId = new URLSearchParams(window.location.search).get('action');
   if (actionId) {
+    history.replaceState(null, '', window.location.pathname);
     const ev = eventsCache.find(e => e.id === actionId);
     if (ev) {
       const opener = EVENT_OPENERS[ev.protocol_event_id];

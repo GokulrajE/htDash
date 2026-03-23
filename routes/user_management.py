@@ -466,9 +466,9 @@ def api_activate_patient(homer_id):
 
     # Check depends_on prerequisites for activation
     protocol = load_study_protocol()
+    patient_group = patient.get('group', '')
     activation_def = next(
-        (e for section in ('shared', 'experimental', 'control')
-         for e in protocol.get(section, []) if e['id'] == 'activation'),
+        (e for e in protocol.get(patient_group, []) if e['id'] == 'activation'),
         None
     )
     dep_ids = (activation_def or {}).get('depends_on') or []
@@ -521,8 +521,8 @@ def api_activate_patient(homer_id):
                     **wr_entry,
                     'completion_date':      activation_date,
                     'filed_at':             filed_at,
-                    'ag_watch_right_id': ag_watch_right_id,
-                    'ag_watch_left_id': ag_watch_left_id,
+                    'ag_watch_right': {'old_id': None, 'new_id': ag_watch_right_id},
+                    'ag_watch_left':  {'old_id': None, 'new_id': ag_watch_left_id},
                     'notes':                notes,
                 })
                 write_protocol_events(folder, homer_id, ev_data)
@@ -553,6 +553,107 @@ def api_activate_patient(homer_id):
     except Exception as e:
         print(f'Warning: could not write patient log: {e}')
     return jsonify({'status': 'success', 'homerID': homer_id})
+
+
+_PRINTOUT_PDF_FILES = {
+    'prescription_printout_d1':  'attachments/prescription_d1.pdf',
+    'prescription_printout_d15': 'attachments/prescription_d15.pdf',
+}
+
+
+def _generate_placeholder_pdf(homer_id: str, title: str) -> bytes:
+    """Generate a minimal placeholder PDF using reportlab."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    import io
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setFont('Helvetica-Bold', 16)
+    c.drawString(72, 750, title)
+    c.setFont('Helvetica', 12)
+    c.drawString(72, 720, f'Patient: {homer_id}')
+    c.drawString(72, 700, 'TODO: prescription content to be generated here.')
+    c.save()
+    return buf.getvalue()
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/prescription-printout', methods=['POST'])
+def api_complete_prescription_printout(homer_id):
+    """Generate prescription PDF, save it, and mark the printout event complete."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    data              = request.get_json() or {}
+    event_id          = data.get('event_id')
+    protocol_event_id = data.get('protocol_event_id', '')
+
+    if protocol_event_id not in _PRINTOUT_PDF_FILES:
+        return jsonify({'error': 'Invalid protocol event ID.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == protocol_event_id
+         and (event_id is None or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Event not found in incomplete list.'}), 404
+
+    # Generate and save the PDF
+    rel_path = _PRINTOUT_PDF_FILES[protocol_event_id]
+    pdf_path = get_patients_path(folder) / homer_id / rel_path
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    title = ('Revised Therapy Prescription Printout'
+             if protocol_event_id == 'prescription_printout_d15'
+             else 'Therapy Prescription Printout')
+    pdf_bytes = _generate_placeholder_pdf(homer_id, title)
+    pdf_path.write_bytes(pdf_bytes)
+
+    now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    complete_entry = {
+        **entry,
+        'completion_date': now,
+        'filed_at':        now,
+        'attachment':      rel_path,
+    }
+
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    log_msg = ('Revised prescription printout generated'
+               if protocol_event_id == 'prescription_printout_d15'
+               else 'Prescription printout generated')
+    write_patient_log(folder, homer_id, loginid, session_id, log_msg)
+
+    return jsonify({'ok': True, 'attachment': rel_path})
+
+
+@bp.route('/api/patients/<homer_id>/attachment/<path:rel_path>', methods=['GET'])
+def api_get_attachment(homer_id, rel_path):
+    """Serve a file from the patient's attachments folder."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+    file_path = get_patients_path(folder) / homer_id / rel_path
+    if not file_path.exists() or not file_path.is_file():
+        return jsonify({'error': 'File not found'}), 404
+    from flask import send_file
+    return send_file(file_path, as_attachment=True, download_name=file_path.name)
 
 
 @bp.route('/api/patients/<homer_id>/complete-training', methods=['POST'])
@@ -2505,6 +2606,15 @@ def api_get_prescription(homer_id, event_id):
     return jsonify(data)
 
 
+# Maps prescription event_id → the completed event whose completion_date it inherits
+_PRESCRIPTION_DATE_SOURCE = {
+    'adl_prescription_d1':  'activation',
+    'vcg_prescription_d1':  'activation',
+    'adl_prescription_d15': 'home_visit_d15',
+    'vcg_prescription_d15': 'home_visit_d15',
+}
+
+
 def _complete_prescription_event(folder, homer_id, event_id, presc_file,
                                   loginid, session_id, extra_fields, log_msg):
     """Move a prescription event from incomplete→complete and write the prescription file."""
@@ -2523,10 +2633,21 @@ def _complete_prescription_event(folder, homer_id, event_id, presc_file,
     if not entry:
         return False, f'{event_id} not found in incomplete list.'
 
+    # completion_date is copied from the reference event (activation or home_visit_d15)
+    ref_event_id = _PRESCRIPTION_DATE_SOURCE.get(event_id)
+    ref_event = next(
+        (e for e in events_data.get('complete', [])
+         if e.get('protocol_event_id') == ref_event_id),
+        None
+    )
+    if not ref_event:
+        return False, f'Reference event {ref_event_id} not found in complete list.'
+    completion_date = ref_event['completion_date']
+
     filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     complete_entry = {
         **entry,
-        'completion_date':   entry['scheduled_date'],
+        'completion_date':   completion_date,
         'filed_at':          filed_at,
         'prescription_file': presc_file,
     }

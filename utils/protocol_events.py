@@ -92,7 +92,7 @@ def create_protocol_events(hospital_folder: str, homer_id: str,
         end_day   = window.get('end_day', start_day)
 
         if reference == 'assignment':
-            scheduled_date = [_date_add(a0_date, start_day), _date_add(a0_date, end_day)]
+            scheduled_date = [_date_add(a0_date, start_day - 1), _date_add(a0_date, end_day - 1)]
         else:
             scheduled_date = None  # filled at activation
 
@@ -142,8 +142,8 @@ def populate_activation_dates(hospital_folder: str, homer_id: str,
         start_day = window.get('start_day', 0)
         end_day   = window.get('end_day', start_day)
         entry['scheduled_date'] = [
-            _date_add(activation_date, start_day),
-            _date_add(activation_date, end_day),
+            _date_add(activation_date, start_day - 1),
+            _date_add(activation_date, end_day - 1),
         ]
 
     # Seed first watch_record

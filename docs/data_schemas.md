@@ -89,9 +89,17 @@ The patient folder and all subfolders are created when a new patient is enrolled
 
 All fields are factual — status is never stored but always derived.
 
+**Patient ID naming convention:** `HO` + site code + zero-padded sequence number (3 digits).
+
+| Site | Site code | Example |
+|------|-----------|---------|
+| Ranipet (CMC Vellore) | `CMCV` | `HOCMCV001` |
+| Manipal (MCHP) | `MCHP` | `HOMCHP001` |
+| Ludhiana (CMC Ludhiana) | `CMCL` | `HOCMCL001` |
+
 ```json
 {
-  "homerID":                    "HOMRP001",
+  "homerID":                    "HOCMCV001",
   "hospitalID":                 "RP-HS-001",
   "group":                      "experimental",
   "trainingSide":               "Right",
@@ -167,8 +175,8 @@ Append-only audit log of all clinical actions on this patient.
 
 ```
 :Location: Ranipet
-:HomerId: HOMCMCV001
-[2026-03-19 09:45:00]   siva    #1    Created new patient : HOMCMCV001.json
+:HomerId: HOCMCV001
+[2026-03-19 09:45:00]   siva    #1    Created new patient : HOCMCV001.json
 [2026-03-19 10:12:00]   siva    #1    Group assigned: experimental
 [2026-03-19 14:05:00]   siva    #2    ADL session recorded — 3 exercises | adl/2026-03-19.json
 ```
@@ -223,7 +231,7 @@ Written by htDash when a device is assigned or returned.
     {
       "id": "<uuid>",
       "device_id": "RPLUTO002",
-      "homer_id": "HOMCMCV001",
+      "homer_id": "HOCMCV001",
       "assigned_date": "2026-03-20T09:00",
       "returned_date": null,
       "assigned_by": "siva",
@@ -244,8 +252,8 @@ Per-device append-only log. Created on first assignment.
 ```
 :Location: Ranipet
 :DeviceId: RPLUTO002
-[2026-03-20 09:00:00]   siva             #3    Assigned to HOMCMCV001
-[2026-03-25 11:30:00]   siva             #5    Returned from HOMCMCV001
+[2026-03-20 09:00:00]   siva             #3    Assigned to HOCMCV001
+[2026-03-25 11:30:00]   siva             #5    Returned from HOCMCV001
 ```
 
 ---
@@ -260,13 +268,15 @@ complete    — scheduled events that have been completed
 free        — unscheduled events (adverse_event, patient_call, etc.)
 ```
 
-**On group assignment:** `incomplete` pre-populated with all timed events for that group + shared. `reference: "assignment"` events get `scheduled_date = [a0CompletionDate + start_day, a0CompletionDate + end_day]`. `reference: "activation"` events are placeholders with `scheduled_date: null`.
+**On group assignment:** `incomplete` pre-populated with all timed events for that group + shared. `reference: "assignment"` events get `scheduled_date = [a0CompletionDate + (start_day−1), a0CompletionDate + (end_day−1)]`. `reference: "activation"` events are placeholders with `scheduled_date: null`.
 
-**On activation:** all `reference: "activation"` placeholders get `scheduled_date = [activationDate + start_day, activationDate + end_day]`. First `watch_record` chained entry created with `scheduled_date = [activationDate, activationDate]`.
+**On activation:** all `reference: "activation"` placeholders get `scheduled_date = [activationDate + (start_day−1), activationDate + (end_day−1)]`. First `watch_record` chained entry created with `scheduled_date = [activationDate, activationDate]`.
+
+> **Day numbering:** `start_day`/`end_day` in `study_protocol.json` are **1-based** — Day 1 = the reference date itself. Code converts with `offset = day − 1`.
 
 > **Date comparison convention:** All event-level date comparisons (overdue/upcoming, window flagging, broken_protocol detection) compare **date only** — always call `.date()` on ISO 8601 datetimes before comparing.
 
-> **Terminology:** `completion_date` = user-entered event date (shown in UI as "Event Date"). `filed_at` = server timestamp when saved, set automatically.
+> **Terminology:** `completion_date` = the datetime of the clinical act (shown in UI as "Event Date"). `filed_at` = server timestamp when saved, set automatically. How `completion_date` is obtained varies per event — see the `date source` column in the Protocol Event Catalogue below.
 
 ### `incomplete` / `complete` base schema
 
@@ -313,15 +323,15 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 **`watch_record`**
 ```json
 {
-  "watch_1": { "old_id": null, "new_id": "" },
-  "watch_2": { "old_id": null, "new_id": "" },
+  "ag_watch_right": { "old_id": null, "new_id": "" },
+  "ag_watch_left":  { "old_id": null, "new_id": "" },
   "reason": "",
   "days_until_next": null,
   "attachments": []
 }
 ```
 
-Watch `old_id` → `new_id` transitions are the source of truth for data gaps:
+For the initial record (auto-completed at activation), `old_id` is always `null`. `old_id` → `new_id` transitions are the source of truth for data gaps:
 
 | `old_id` | `new_id` | Meaning |
 |----------|----------|---------|
@@ -342,6 +352,16 @@ Watch `old_id` → `new_id` transitions are the source of truth for data gaps:
 ```
 
 The complete entry stores only a relative path reference. The prescription data itself lives in the file — see [Prescription files](#prescription-files) below.
+
+**`prescription_printout_d1`** / **`prescription_printout_d15`**
+```json
+{ "attachment": "attachments/prescription_d1.pdf" }
+```
+```json
+{ "attachment": "attachments/prescription_d15.pdf" }
+```
+
+The `attachment` field is a relative path from the patient folder root. The PDF is generated server-side when the therapist clicks **Save PDF** or **Print** in the modal. If the printout is re-generated (modal re-opened and re-submitted), the file is overwritten and the `attachment` field is updated.
 
 **`training_pause_followup`** — synthetic event created when training is paused.
 ```json
@@ -496,13 +516,20 @@ Written by htDash when the therapist completes a VCG prescription event. `vcg_gr
 
 ## `attachments/`
 
-Flat folder at patient root. Filename convention:
+Flat folder at patient root. General filename convention:
 
 ```
 <protocol_event_id>_<ISO8601_datetime>_<description>.<ext>
 ```
 
 The datetime is the `completion_date` of the event, not the server filing time.
+
+**Exceptions** (fixed filenames, overwritten on re-generation):
+
+| File | Created by |
+|------|-----------|
+| `prescription_d1.pdf` | `prescription_printout_d1` event |
+| `prescription_d15.pdf` | `prescription_printout_d15` event |
 
 Every file in `attachments/` must be referenced in `protocol_events.json`.
 
@@ -592,7 +619,7 @@ Example: `activation` depends on `exp_device_install` — a patient cannot be ac
   "id": "activation",
   "name": "Patient Activation",
   "type": "strict",
-  "window": { "start_day": 0, "end_day": 5 },
+  "window": { "start_day": 1, "end_day": 5 },
   "reference": "assignment",
   "is_master": true,
   "repeatable": false,
@@ -600,7 +627,7 @@ Example: `activation` depends on `exp_device_install` — a patient cannot be ac
 }
 ```
 
-Dependencies only apply to experimental patients for `exp_device_install` — control patients have no device setup step. When checking `depends_on`, the server skips events that are not present in the patient's `incomplete` or `complete` list (i.e. events that were never applicable are not blocking).
+`activation` is defined separately in the `experimental` and `control` sections so that each group carries only its applicable dependencies — experimental requires `exp_device_install`, control has none. Events with group-specific dependencies (printout events) follow the same pattern. When checking `depends_on`, the server uses the patient's actual event file (`known_ids`) — events absent from the patient's file are ignored, so no special-case code is needed.
 
 **UI rendering of blocked events:**
 - If all `depends_on` events are complete → render as `<a href="?action=<id>">` (clickable)
@@ -618,40 +645,49 @@ Dependencies only apply to experimental patients for `exp_device_install` — co
 | `chained` | Recurring. Each completion creates next entry. `watch_record` is the only chained event. |
 
 ### Protocol Event Catalogue
-Each event's group, type, window, clinical purpose, and dependencies. Windows are in days relative to the reference date.
+Each event's group, type, window, clinical purpose, dependencies, and date source. Windows are in days relative to the reference date.
+
+**`date source` values:**
+- `user` — therapist enters the date; editable datetime input, future-date guard applied
+- `= <event_id>` — copied from another completed event's `completion_date`; read-only in the modal
+- `prefill: <event_id>` — pre-filled from another completed event's `completion_date` but editable; future-date guard applied
 
 #### Experimental only
 
-| ID | Name | Type | Reference | Window | `depends_on` | Purpose |
-|----|------|------|-----------|--------|-------------|---------|
-| `exp_device_install` | Device Installation + Demo | strict | assignment | day 0–5 | — | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
-| `technical_fault` | Technical Fault | anytime | — | — | `activation` | Document any device malfunction affecting therapy delivery. May trigger a training pause. |
+| ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
+|----|------|------|-----------|--------|--------------|--------------|---------|
+| `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
+| `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
+| `technical_fault` | Technical Fault | anytime | — | — | `activation` | `user` | Document any device malfunction affecting therapy delivery. May trigger a training pause. |
+| `prescription_printout_d1` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d1` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
+| `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
 
 #### Control only
 
-| ID | Name | Type | Reference | Window | `depends_on` | Purpose |
-|----|------|------|-----------|--------|-------------|---------|
-| `vcg_prescription_d1` | VCG Exercise Prescription | point_in_time | assignment | day 1 | — | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
-| `vcg_prescription_d15` | VCG Exercise Prescription Revision | point_in_time | activation | day 15 | — | Review and revise the VCG exercise programme at the mid-point of the intervention. |
+| ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
+|----|------|------|-----------|--------|--------------|--------------|---------|
+| `activation` | Patient Activation | strict | assignment | day 1–5 | — | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
+| `vcg_prescription_d1` | VCG Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
+| `vcg_prescription_d15` | VCG Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the VCG exercise programme at the mid-point of the intervention. |
+| `prescription_printout_d1` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d1`, `vcg_prescription_d1` | `= activation` | Provide the patient with a printed copy of their personalised ADL + VCG therapy prescription. |
+| `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15`, `vcg_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL + VCG therapy prescription. |
 
 #### Shared (both groups)
 
-| ID | Name | Type | Reference | Window | `depends_on` | Purpose |
-|----|------|------|-----------|--------|-------------|---------|
-| `activation` | Patient Activation | strict | assignment | day 0–5 | `exp_device_install` *(exp only)* | First home visit to begin the training intervention. Marks the official start of the therapy period. |
-| `adl_prescription_d1` | ADL Exercise Prescription | point_in_time | assignment | day 1 | — | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
-| `prescription_printout_d1` | Therapy Prescription Printout | point_in_time | assignment | day 1 | `adl_prescription_d1` *(both)*; `vcg_prescription_d1` *(ctrl only)* | Provide the patient with a printed copy of their personalised therapy prescription. |
-| `home_visit_d02` | Initial Home Visit Day 02 | point_in_time | activation | day 2 | — | Second home visit — review training progress and address any early questions or difficulties. |
-| `home_visit_d03` | Initial Home Visit Day 03 | point_in_time | activation | day 3 | — | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
-| `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
-| `home_visit_d15` | Mid Home Visit Day 15 | point_in_time | activation | day 15 | — | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
-| `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | — | Review and revise the ADL exercise programme at the mid-point of the intervention. |
-| `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
-| `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
-| `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | Post-training clinical outcome assessment conducted within one week of training completion. |
-| `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | Six-month follow-up clinical outcome assessment. |
-| `watch_record` | Watch Record | chained | — | — | — | Track actigraph watch assignments and swaps to ensure continuous activity monitoring throughout the study. |
-| `adverse_event` | Adverse Event | anytime | — | — | `activation` | Document any adverse event experienced by the patient during the intervention. May trigger a training pause. |
-| `patient_call` | Patient Call | anytime | — | — | — | Document any unscheduled contact with the patient or carer outside the protocol schedule. |
-| `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | Document withdrawal from the study before group assignment. |
-| `discontinuation` | Discontinuation | anytime | — | — | — | Document withdrawal from the study after group assignment. |
+| ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
+|----|------|------|-----------|--------|--------------|--------------|---------|
+| `adl_prescription_d1` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
+| `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | `user` | Second home visit — review training progress and address any early questions or difficulties. |
+| `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | `user` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
+| `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
+| `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
+| `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the ADL exercise programme at the mid-point of the intervention. |
+| `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | `user` | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
+| `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | `user` | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
+| `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |
+| `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | `user` | Six-month follow-up clinical outcome assessment. |
+| `watch_record` | Watch Record | chained | — | — | — | `user` | Track actigraph watch assignments and swaps to ensure continuous activity monitoring throughout the study. |
+| `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. May trigger a training pause. |
+| `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer outside the protocol schedule. |
+| `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study before group assignment. |
+| `discontinuation` | Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study after group assignment. |

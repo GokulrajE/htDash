@@ -53,21 +53,21 @@ Main dashboard. Stat bubbles in two rows (6 per row on large screens), in order:
 4. Unassigned
 5. Inactive
 6. Active
-7. Training Complete
-8. A1 Complete
-9. Paused
+7. Paused
+8. Training Complete
+9. A1 Complete
 10. Broken Protocol
 11. Discontinued
 12. All Complete
 
-Numbers are derived from `homer_id.json` files across all visible patients. Site users see their site only; admin sees all.
+Numbers are derived from `homer_id.json` files across all visible patients. Site users see their site only; admin sees all. `pre_discontinued` status is returned by the stats API but intentionally not shown as a bubble.
 
 Below the stats: **Overdue** and **Upcoming** event panels showing protocol events across all non-terminal patients. Fetched from `GET /api/dashboard/events`.
 
-- **Overdue** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`) sorted ascending by end date, then (2) past-due events (`end` < today) sorted ascending by end date.
-- **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, within 7 days, sorted ascending by start date.
+- **Overdue** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`) sorted ascending by end date, then (2) past-due events (`end` < today) sorted ascending by end date. Active-window and past-due events are clickable if `depends_on` is satisfied.
+- **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, within 7 days, sorted ascending by start date. **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
 - The two lists are mutually exclusive.
-- Each event row displays the **Homer ID** prominently alongside the event name (e.g. `HOMCMCV003 · ADL Prescription D1`), since rows span multiple patients.
+- Each event row displays the **Homer ID** prominently alongside the event name (e.g. `HOCMCV003 · ADL Prescription D1`), since rows span multiple patients.
 
 **Actions:** None
 
@@ -137,9 +137,9 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   3. **Events panels** — Three columns: Completed | Overdue | Upcoming. Fetched from `GET /api/patients/<homer_id>/events`.
      - **Completed** — compact vertical timeline, most recent first. Green circle markers on a vertical line. Shows event name + completion date. Read-only.
      - **Overdue column** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`), label `Due now · N days left`, sorted ascending by end date; then (2) past-due events (`end` < today), label `Nd overdue`, sorted ascending by end date. Active-window events appear above past-due events.
-     - **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, sorted ascending by start date. No cap (all future events shown).
+     - **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, sorted ascending by start date. No cap (all future events shown). **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
      - The three states are mutually exclusive. Categorisation always uses `start` for upcoming and `end` for overdue/broken-protocol.
-     - **Blocked events** (unmet `depends_on`): rendered as a non-clickable `<div>` with an amber badge on the right reading "Needs: \<event name\>". A muted lock icon appears next to the event name.
+     - **Blocked events** (unmet `depends_on`): rendered as a non-clickable `<div>` with an amber badge on the right reading "Needs: \<event name\>". A muted lock icon appears next to the event name. Applies only to overdue events — upcoming events use the "Available from" label regardless.
 
 - **Timeline tab** — full-width vertical timeline, most recent first. Combines completed protocol events with two synthetic patient milestones injected client-side:
   - **Patient Enrolled** — from `enrollDate` in `<homer_id>.json`
@@ -154,6 +154,14 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - *Right column*: completion datetime, filed-at timestamp, then extra event-specific fields in order: Pluto Device, Mars Device, Demo Done, Right Watch, Left Watch, Prescription File, any additional fields, **Notes always last**. Empty/false fields are omitted.
 
   Data from the `complete` array in `GET /api/patients/<homer_id>/events` (all fields except `id` are returned).
+
+- **ADL tab** — shows the ADL prescription history for the patient:
+  - **Day 1 prescription** — displayed if `adl_prescription_d1` is complete. Shows the prescribed exercise list and notes. If `prescription_printout_d1` is also complete, shows a **Download PDF** link for `attachments/prescription_d1.pdf`.
+  - **Day 15 revised prescription** — displayed if `adl_prescription_d15` is complete. Shows the revised exercise list and notes. If `prescription_printout_d15` is also complete, shows a **Download PDF** link for `attachments/prescription_d15.pdf`.
+
+- **VCG tab** *(control patients only)* — shows the VCG prescription history:
+  - **Day 1 prescription** — displayed if `vcg_prescription_d1` is complete. Shows the prescribed exercise list and notes. If `prescription_printout_d1` is also complete, shows a **Download PDF** link for `attachments/prescription_d1.pdf`.
+  - **Day 15 revised prescription** — displayed if `vcg_prescription_d15` is complete. Shows the revised exercise list and notes. If `prescription_printout_d15` is also complete, shows a **Download PDF** link for `attachments/prescription_d15.pdf`.
 
 - **Stub tabs** — Devices, Adverse Events, Call Logs show "Coming soon"
 
@@ -298,7 +306,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: `adl_prescription_d1` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - Modal fields:
-  - Event Date (datetime, pre-filled with `activationDate`, read-only)
+  - Event Date (read-only — auto-populated from the `activation` event's `completion_date`)
   - **Exercise search bar** — live-filters the ADL exercise list fetched from `GET /api/exercises?type=adl`; clicking a result adds it to the selected list; already-selected exercises are excluded from search results
   - **Selected exercises list** (scrollable if long) — each exercise exists in one of two states:
     - *Editing state* (entered when first added, or when Edit is pressed): exercise name + × (remove) button; Blocks field (number, required); Repetitions field (number, required); Notes field (textarea, optional); **Save** button — commits values and collapses to compact view
@@ -316,7 +324,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: `vcg_prescription_d1` event row on patient detail (control patients only, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - Modal fields:
-  - Event Date (datetime, pre-filled with `activationDate`, read-only)
+  - Event Date (read-only — auto-populated from the `activation` event's `completion_date`)
   - **VCG Group** (read-only display — pre-filled from `vcgGroup` in `<homer_id>.json`, set at activation)
   - **Exercise search bar** — live-filters the VCG exercise list fetched from `GET /api/exercises?type=vcg&group=<vcg_group>`; clicking a result adds it to the selected list; already-selected exercises are excluded
   - **Selected exercises list** (scrollable if long) — same two-state card behaviour as [ADL Prescription](#adl-prescription-adl_prescription_d1); **Save Prescription** button disabled while any card is in editing state
@@ -331,18 +339,45 @@ Each action is defined once here. Pages above reference which actions apply to t
 ### Prescription Printout (`prescription_printout_d1`)
 - Trigger: `prescription_printout_d1` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
-- `depends_on`: `adl_prescription_d1` (both); `vcg_prescription_d1` (ctrl only)
-- Modal fields: TBD
-- Server actions: TBD
+- `depends_on`: `adl_prescription_d1` (both groups); `vcg_prescription_d1` (control only)
+- Modal: `prescription-printout-modal`
+  - Title: "Therapy Prescription Printout"
+  - Patient ID display (read-only)
+  - PDF preview area (TODO: generate and render prescription PDF)
+  - **Save PDF** button — generates PDF, saves to `attachments/prescription_d1.pdf`, marks event complete, downloads file to browser
+  - **Print** button — generates PDF, saves to `attachments/prescription_d1.pdf`, marks event complete, sends to printer
+- Server actions:
+  - Generate prescription PDF (TODO)
+  - Save PDF to `attachments/prescription_d1.pdf` in the patient folder (overwrite if exists)
+  - Move `prescription_printout_d1` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date` (current datetime), `filed_at` (current datetime), `attachment: "attachments/prescription_d1.pdf"`
 - Log message: `Prescription printout generated`
+
+---
+
+### Revised Prescription Printout (`prescription_printout_d15`)
+- Trigger: `prescription_printout_d15` event row on patient detail (both groups, day 15 after activation)
+- Allowed users: `admin`, `therapist`
+- `depends_on`: `adl_prescription_d15` (both groups); `vcg_prescription_d15` (control only)
+- Modal: `prescription-printout-modal` (shared with d1)
+  - Title: "Revised Therapy Prescription Printout"
+  - Patient ID display (read-only)
+  - PDF preview area (TODO: generate and render revised prescription PDF)
+  - **Save PDF** button — generates PDF, saves to `attachments/prescription_d15.pdf`, marks event complete, downloads file to browser
+  - **Print** button — generates PDF, saves to `attachments/prescription_d15.pdf`, marks event complete, sends to printer
+- Server actions:
+  - Generate revised prescription PDF (TODO)
+  - Save PDF to `attachments/prescription_d15.pdf` in the patient folder (overwrite if exists)
+  - Move `prescription_printout_d15` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date` (current datetime), `filed_at` (current datetime), `attachment: "attachments/prescription_d15.pdf"`
+- Log message: `Revised prescription printout generated`
 
 ---
 
 ### ADL Prescription Revision (`adl_prescription_d15`)
 - Trigger: `adl_prescription_d15` event row on patient detail (both groups, day 15 after activation)
 - Allowed users: `admin`, `therapist`
+- `depends_on`: `home_visit_d15` (both groups)
 - Modal fields: same structure as [ADL Prescription](#adl-prescription-adl_prescription_d1), with:
-  - Event Date pre-filled with `activationDate + 15 days`, read-only
+  - Event Date (read-only — auto-populated from the `home_visit_d15` event's `completion_date`)
   - Exercise list and notes pre-populated from `adl/adl_prescription_d1.json` — all cards open in **compact state** (already saved); therapist edits individual cards as needed
 - Server actions:
   - Write revised prescription to `adl/adl_prescription_d15.json` in the patient folder
@@ -354,8 +389,9 @@ Each action is defined once here. Pages above reference which actions apply to t
 ### VCG Prescription Revision (`vcg_prescription_d15`)
 - Trigger: `vcg_prescription_d15` event row on patient detail (control patients only, day 15 after activation)
 - Allowed users: `admin`, `therapist`
+- `depends_on`: `home_visit_d15`
 - Modal fields: same structure as [VCG Prescription](#vcg-prescription-vcg_prescription_d1), with:
-  - Event Date pre-filled with `activationDate + 15 days`, read-only
+  - Event Date (read-only — auto-populated from the `home_visit_d15` event's `completion_date`)
   - VCG Group read-only (from `vcgGroup` in `<homer_id>.json` — fixed for entire study)
   - Exercise list and notes pre-populated from `vcg_exercise/vcg_prescription_d1.json` — all cards open in **compact state**; therapist edits individual cards as needed
 - Server actions:
@@ -416,11 +452,11 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Allowed users: `admin`, `engineer`
 - Modal fields:
   - Event Date (datetime, required; cannot be in the future)
-  - AG Watch Right (dropdown — active, unassigned watches from inventory + **"No Watch Available"** option; required). Selecting "No Watch Available" sets `ag_watch_right_id` to `null`.
-  - AG Watch Left (dropdown — same options; required). Selecting "No Watch Available" sets `ag_watch_left_id` to `null`.
+  - AG Watch Right (dropdown — active, unassigned watches from inventory + **"No Watch Available"** option; required). Selecting "No Watch Available" sets `ag_watch_right.new_id` to `null`.
+  - AG Watch Left (dropdown — same options; required). Selecting "No Watch Available" sets `ag_watch_left.new_id` to `null`.
   - Notes (textarea, optional)
 - Server actions:
-  - Move `watch_record` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `ag_watch_right_id`, `ag_watch_left_id`, `notes`
+  - Move `watch_record` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `ag_watch_right: {old_id, new_id}`, `ag_watch_left: {old_id, new_id}`, `notes`
   - Update `agWatchRightID` and `agWatchLeftID` in `<homer_id>.json`
   - Append assignment record to `devices/assignments/agwatch.json`
   - Seed a new `watch_record` entry in `incomplete` for the next swap
