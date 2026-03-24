@@ -7,6 +7,45 @@ from utils.protocol_events import read_protocol_events, load_study_protocol
 bp = Blueprint('dashboard', __name__)
 
 
+def _topo_sort_upcoming(events, event_defs):
+    """Sort upcoming events ascending by start date; within the same date, parents before dependents."""
+    events_by_date = {}
+    for ev in events:
+        date_key = ev['scheduled_date'][0][:10]
+        events_by_date.setdefault(date_key, []).append(ev)
+
+    result = []
+    for date_key in sorted(events_by_date):
+        group = events_by_date[date_key]
+        if len(group) <= 1:
+            result.extend(group)
+            continue
+        ids_in_group = {ev['protocol_event_id'] for ev in group}
+        ev_map       = {ev['protocol_event_id']: ev for ev in group}
+        in_degree    = {ev['protocol_event_id']: 0 for ev in group}
+        dependents   = {ev['protocol_event_id']: [] for ev in group}
+        for ev in group:
+            pid  = ev['protocol_event_id']
+            deps = event_defs.get(pid, {}).get('depends_on') or []
+            for d in deps:
+                if d in ids_in_group:
+                    in_degree[pid] += 1
+                    dependents[d].append(pid)
+        queue        = [ev for ev in group if in_degree[ev['protocol_event_id']] == 0]
+        sorted_group = []
+        while queue:
+            ev = queue.pop(0)
+            sorted_group.append(ev)
+            for dep_pid in dependents[ev['protocol_event_id']]:
+                in_degree[dep_pid] -= 1
+                if in_degree[dep_pid] == 0:
+                    queue.append(ev_map[dep_pid])
+        placed = {ev['protocol_event_id'] for ev in sorted_group}
+        sorted_group.extend(ev for ev in group if ev['protocol_event_id'] not in placed)
+        result.extend(sorted_group)
+    return result
+
+
 @bp.route('/api/dashboard/stats', methods=['GET'])
 def stats():
     """Return patient counts for the dashboard stat bubbles."""
@@ -122,6 +161,6 @@ def events():
 
     # Active-window sub-group first, then past-due; both ascending by end date
     overdue.sort(key=lambda x: (0 if x.get('active_window') else 1, x['scheduled_date'][1]))
-    upcoming.sort(key=lambda x: x['scheduled_date'][0])
+    upcoming = _topo_sort_upcoming(upcoming, event_defs)
 
     return jsonify({'overdue': overdue, 'upcoming': upcoming})

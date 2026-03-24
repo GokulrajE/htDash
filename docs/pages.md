@@ -65,7 +65,7 @@ Numbers are derived from `homer_id.json` files across all visible patients. Site
 Below the stats: **Overdue** and **Upcoming** event panels showing protocol events across all non-terminal patients. Fetched from `GET /api/dashboard/events`.
 
 - **Overdue** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`) sorted ascending by end date, then (2) past-due events (`end` < today) sorted ascending by end date. Active-window and past-due events are clickable if `depends_on` is satisfied.
-- **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, within 7 days, sorted ascending by start date. **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
+- **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, within 7 days, sorted ascending by start date. Within the same date, events that appear in another event's `depends_on` are sorted before their dependents. **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
 - The two lists are mutually exclusive.
 - Each event row displays the **Homer ID** prominently alongside the event name (e.g. `HOCMCV003 · ADL Prescription Day 01`), since rows span multiple patients.
 
@@ -97,7 +97,7 @@ Patient list for the user's visible site(s).
 | broken_protocol    | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
 | active             | Complete training                              | `trainingCompletionDate`                                  | training_completed |
 | active             | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
-| active             | Adverse event / fault — training paused        | `trainingPausedDate` set                                  | paused             |
+| active             | Adverse event / robot issue — training paused  | `trainingPausedDate` set                                  | paused             |
 | paused             | Resume training                                | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active       |
 | paused             | Extend pause (cumulative ≤ 10 days)            | `cumulativePauseDays` incremented                         | paused             |
 | paused             | Extend pause (cumulative > 10 days)            | `cumulativePauseDays` incremented                         | broken_protocol    |
@@ -121,15 +121,17 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 
 - **Tab bar** (JS-driven switching):
 
-  | Tab           | Shown for          |
-  |---------------|--------------------|
-  | Overview      | All                |
-  | Devices       | All                |
-  | ADL           | All                |
-  | VCG           | Control only       |
-  | Timeline      | All                |
-  | Adverse Events| All                |
-  | Call Logs     | All                |
+  | Tab            | Shown for           |
+  |----------------|---------------------|
+  | Overview       | All                 |
+  | Devices        | Experimental only   |
+  | VCG            | Control only        |
+  | ADL            | All                 |
+  | Call Logs      | All                 |
+  | Adverse Events | All                 |
+  | Watch Records  | All                 |
+  | Robot Issues   | Experimental only   |
+  | Timeline       | All                 |
 
 - **Overview tab** (default):
   1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date, Pluto ID *(experimental group)*, Mars ID *(experimental group)*, AG Watch Right ID *(both groups)*, AG Watch Left ID *(both groups)*,
@@ -137,7 +139,7 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   3. **Events panels** — Three columns: Completed | Overdue | Upcoming. Fetched from `GET /api/patients/<homer_id>/events`.
      - **Completed** — compact vertical timeline, most recent first. Green circle markers on a vertical line. Shows event name + completion date. Read-only.
      - **Overdue column** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`), label `Due now · N days left`, sorted ascending by end date; then (2) past-due events (`end` < today), label `Nd overdue`, sorted ascending by end date. Active-window events appear above past-due events.
-     - **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, sorted ascending by start date. No cap (all future events shown). **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
+     - **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, sorted ascending by start date. No cap (all future events shown). Within the same date, events that appear in another event's `depends_on` are sorted before their dependents. **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
      - The three states are mutually exclusive. Categorisation always uses `start` for upcoming and `end` for overdue/broken-protocol.
      - **Blocked events** (unmet `depends_on`): rendered as a non-clickable `<div>` with an amber badge on the right reading "Needs: \<event name\>". A muted lock icon appears next to the event name. Applies only to overdue events — upcoming events use the "Available from" label regardless.
 
@@ -164,10 +166,10 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - `GET /api/patients/<homer_id>/prescription/vcg_prescription_d01` (or `d15`)
   - `GET /api/patients/<homer_id>/agwatch-timing/vcg_agwatch_timing_d03` (or `d15`)
 
-- **Stub tabs** — Devices, Adverse Events, Call Logs show "Coming soon"
+- **Stub tabs** — Devices, Call Logs, Adverse Events, Watch Records, Robot Issues show "Coming soon"
 
 
-**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call), [Training Completion](#training-completion-training_completion_d29), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
+**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
 
 ---
 
@@ -243,15 +245,13 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Prerequisites: all events listed in `depends_on` for `activation` in `study_protocol.json` must be in `complete` (e.g. `exp_device_install` for experimental patients)
 - Modal fields:
   - Event Date (datetime, required; cannot be in the future)
-  - AG Watch Right (dropdown — active, unassigned watches from inventory + **"No Watch Available"** option; required). Selecting "No Watch Available" sets `agWatchRightID` to `null`.
-  - AG Watch Left (dropdown — same options; required). Selecting "No Watch Available" sets `agWatchLeftID` to `null`.
   - **VCG Group** (dropdown: VCG 2 / VCG 3 / VCG 4–5; required; **control patients only**) — therapist selects the patient's VCG level at the activation visit; fixed for the entire study duration
-  - Notes (textarea, optional). The notes text area must be large enough for the user to write the their notes comfortably.
+  - Notes (textarea, optional). The notes text area must be large enough for the user to write their notes comfortably.
 - Server actions:
   - Verify `depends_on` prerequisites are met (server-side safety check — the UI already blocks the action, but the endpoint rejects the request if any prerequisite event is not in `complete`)
   - Update `<homer_id>.json` with `activationDate` and `vcgGroup` (control patients only)
   - Compute and fill `scheduled_date` for all `reference: "activation"` entries in `protocol_events.json`
-  - Create first `watch_record` entry in `incomplete` with `scheduled_date = activationDate`
+  - Seed first `watch_record` entry in `incomplete` with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`
 - Log message: `Patient activated`
 - UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` (no `href`) with a muted lock icon next to the event name and an amber badge on the right reading "Needs: \<blocking event name\>" in place of the date/urgency label
 
@@ -418,13 +418,42 @@ Each action is defined once here. Pages above reference which actions apply to t
 ### Follow-up Call (`followup_call_d07`, `followup_call_d21`)
 - Trigger: respective event row on patient detail
 - Allowed users: `admin`, `therapist`
-- Modal: `simple-event-modal` (shared)
+- Modal: `followup-call-modal` (dedicated; not shared with home visits)
   - Title: event name (e.g. "Follow-up Phone Call Day 07")
-  - Event Date (datetime, required; cannot be in the future)
-  - Notes (textarea, optional)
+  - Call Date/Time (datetime, required; cannot be in the future)
+  - **Date Change Reason** (textarea, amber border, conditionally visible): shown only when the selected date differs from `scheduled_date[0]`; required when visible; label shows the scheduled date for reference
+  - Duration (integer minutes, required; must be > 0)
+  - Training log PDF (file upload, required; `.pdf` only) — photos of the patient's weekly training log, sent by the patient before the call
+  - Notes (textarea, required)
+  - **Triggered events section** — same mechanism as [Patient Call](#patient-call): user can optionally record an adverse event, robot issue (exp only), and/or watch record as a consequence of this call. Watch Record toggle only shown if at least one watch is currently assigned.
 - Server actions:
-  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
+  - Save uploaded PDF to `attachments/followup_call_d07.pdf` (or `d21`) in the patient folder, overwriting if exists
+  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `duration_minutes`, `attachment`, `notes`, `triggered: [...]`; if date differs from scheduled, also adds `date_change_reason`
+  - For each triggered event: same logic as [Patient Call](#patient-call) server actions — append to `free.adverse_event` / `free.robot_issue`, or stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
 - Log message: `Follow-up call recorded — Day <N>`
+
+---
+
+### Patient Call
+- Trigger: "Log Call" button on patient detail (active patients; available from the Call Logs tab)
+- Allowed users: `admin`, `therapist`
+- Modal: `patient-call-modal`
+  - Title: "Log Patient Call"
+  - Call Date/Time (datetime, required; cannot be in the future)
+  - Duration (integer minutes, required; must be > 0)
+  - Notes (textarea, required)
+  - **Triggered events section** — optional; user selects which downstream events arose from this call:
+    - **Adverse Event** (toggle, both groups): if enabled, reveals sub-form fields for the adverse event (description, action taken, paused toggle)
+    - **Robot Issue** (toggle, experimental only — hidden for control patients): if enabled, reveals sub-form fields for the robot issue (description, per-device fault list, paused toggle)
+    - **Watch Record** (toggle, both groups): only shown if at least one watch is currently assigned (`agWatchRightID` or `agWatchLeftID` is not null); if enabled, shows an info note — no sub-form fields required
+  - Multiple toggles may be enabled simultaneously
+- Server actions:
+  - Append `patient_call` entry to `free.patient_call` in `protocol_events.json`, with `triggered: [...]`
+  - For each enabled toggle:
+    - **Adverse event**: append entry to `free.adverse_event` with `triggered_by: {type: "patient_call", id: <call_id>}`
+    - **Robot issue** (exp only): append entry to `free.robot_issue` with `triggered_by: {type: "patient_call", id: <call_id>}`
+    - **Watch record**: stamp `triggered_by: {type: "patient_call", id: <call_id>}` onto the existing open `watch_record` entry in `incomplete`, and update its `scheduled_date` to `[now, now]` — no new entry is created; the entry immediately becomes overdue; the therapist completes it via the Watch Record modal
+- Log message: `Patient call recorded`; additional log entries for each triggered event (e.g. `Adverse event recorded`, `Robot issue recorded`, `Watch record triggered`)
 
 ---
 
@@ -432,7 +461,11 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: respective event row on patient detail
 - `adl_agwatch_timing_d03` / `adl_agwatch_timing_d15` — both groups; `vcg_agwatch_timing_d03` / `vcg_agwatch_timing_d15` — control only
 - Allowed users: `admin`, `therapist`
-- `depends_on`: `home_visit_d03` (d03 variants); `home_visit_d15` (d15 variants)
+- `depends_on`:
+  - `adl_agwatch_timing_d03`: `home_visit_d03`
+  - `adl_agwatch_timing_d15`: `home_visit_d15`, `adl_prescription_d15`
+  - `vcg_agwatch_timing_d03`: `home_visit_d03`, `vcg_prescription_d01`
+  - `vcg_agwatch_timing_d15`: `home_visit_d15`, `vcg_prescription_d15`
 - Modal: `agwatch-timing-modal`
   - Title: event name (e.g. "Add ADL AG Watch Timings Day 03")
   - **Session date** (read-only — auto-populated from the home visit event's `scheduled_date[0]`; fixed, not editable)
@@ -489,16 +522,33 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Watch Record (`watch_record`)
-- Trigger: `watch_record` event row on patient detail (both groups, chained — first entry seeded at activation; further entries added after each watch swap)
+- Trigger:
+  - `watch_record` event row on patient detail — covers three cases:
+    1. **Activation-seeded**: first entry, seeded at activation with `triggered_by = {type: "activation", ...}` and `scheduled_date = [activationDate, activationDate]`; immediately overdue
+    2. **Call-claimed**: existing open chain entry claimed by a patient call or follow-up call; `triggered_by` and `scheduled_date = [now, now]` stamped at call-save time; immediately overdue
+    3. **Chain follow-up**: open entry seeded at completion of previous watch record; `scheduled_date` computed from `next_followup_days`
+  - "Log Watch Record" button on the Watch Records tab (standalone, user-initiated — creates a new entry)
 - Allowed users: `admin`, `engineer`
-- Modal fields:
-  - Event Date (datetime, required; cannot be in the future)
-  - AG Watch Right (dropdown — active, unassigned watches from inventory + **"No Watch Available"** option; required). Selecting "No Watch Available" sets `ag_watch_right.new_id` to `null`.
-  - AG Watch Left (dropdown — same options; required). Selecting "No Watch Available" sets `ag_watch_left.new_id` to `null`.
-  - Notes (textarea, optional)
+- Modal: `watch-record-modal` (shared across all trigger paths)
+  - **Context banner** (read-only, top of modal):
+    - If `triggered_by.type = "activation"`: "Triggered by: Patient Activation"
+    - If `triggered_by.type` is a call: "Triggered by: \<call event name\>"
+    - If no `triggered_by`: "Scheduled chain follow-up"
+  - **Current watches** (read-only display, one row per limb):
+    - Right: watch ID (or "Not assigned" if null) + **Lost** checkbox — checkbox only shown when `old_id` is not null
+    - Left: same
+    - These become `old_id` and `old_lost` in the saved record
+  - AG Watch Right — new assignment (dropdown: active, unassigned, non-lost watches from inventory + **"No Watch Available"** option; required). Selecting "No Watch Available" sets `ag_watch_right.new_id` to `null`.
+  - AG Watch Left — new assignment (dropdown — same options; required).
+  - Sync date & time (datetime; cannot be in the future) — when the watches were synced / data downloaded. **Required if at least one new watch is assigned; omitted when both are "No Watch Available".**
+  - Worn date & time (datetime; cannot be in the future) — when the patient put the watches on. Same requirement as Sync.
+  - Next follow-up in N days (integer input, required; must be ≥ 1) — determines when the next chain entry is scheduled
+  - Notes (textarea) — **required if either new watch is "No Watch Available"**; optional otherwise
 - Server actions:
-  - Move `watch_record` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `ag_watch_right: {old_id, new_id}`, `ag_watch_left: {old_id, new_id}`, `notes`
+  - Move `watch_record` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `ag_watch_right: {old_id, old_lost, new_id}`, `ag_watch_left: {old_id, old_lost, new_id}`, `sync_datetime`, `worn_datetime`, `next_followup_days`, `notes`; `triggered_by` already present if entry was claimed
   - Update `agWatchRightID` and `agWatchLeftID` in `<homer_id>.json`
-  - Append assignment record to `devices/assignments/agwatch.json`
-  - Seed a new `watch_record` entry in `incomplete` for the next swap
+  - For each limb: close the existing open assignment record (`returned_date = completion_date`); if `old_lost: true`, also set `lost: true` on that assignment record and set `lost_date` on the inventory record
+  - For each new watch assigned: append a new assignment record to `devices/assignments/agwatch.json`; write device log `Assigned to <homer_id> (<limb>)`
+  - For each lost watch: write device log `Lost — reported by <homer_id>`
+  - Seed next `watch_record` entry in `incomplete` with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`
 - Log message: `Watch record filed`

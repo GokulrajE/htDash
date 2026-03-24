@@ -125,12 +125,12 @@ All fields are factual — status is never stored but always derived.
 - `group`: `null` | `"experimental"` | `"control"`
 - `trainingSide`: `"Right"` | `"Left"` | `null` (only set for experimental group)
 - `vcgGroup`: `null` | `"vcg2"` | `"vcg3"` | `"vcg4_5"` — set at activation for control patients; `null` for experimental patients; fixed for the entire study duration once set
-- `agWatchRightID`, `agWatchLeftID`: watch device ID string, or `null` if no watch was available at activation. Set at the activation event via dropdown; selecting "No Watch Available" stores `null`.
+- `agWatchRightID`, `agWatchLeftID`: watch device ID string, or `null` if no watch has been assigned yet. Updated at each `watch_record` completion; selecting "No Watch Available" stores `null`.
 - All date fields use ISO 8601 datetime format (`YYYY-MM-DDTHH:MM`). `null` means the event has not occurred.
 - Date fields cannot exceed the current local time — no future datetimes are allowed.
 
 **Pause fields (both groups):**
-- `trainingPausedDate` — set when training is paused (adverse event or technical fault); `null` when not paused. For experimental patients, pausing one device pauses everything.
+- `trainingPausedDate` — set when training is paused (adverse event or robot issue); `null` when not paused. For experimental patients, pausing one device pauses everything.
 - `cumulativePauseDays` — total pause days accumulated across all episodes. Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`.
 
 **Broken protocol detection field:**
@@ -211,14 +211,15 @@ Static files managed externally — htDash reads but never writes them.
 ```json
 {
   "devices": [
-    { "id": "RPLUTO001", "serial": "SN-RP-P001", "clinic_only": true,  "inclusion_date": "2024-01-01", "removal_date": null },
-    { "id": "RPLUTO002", "serial": "SN-RP-P002", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null }
+    { "id": "RPLUTO001", "serial": "SN-RP-P001", "clinic_only": true,  "inclusion_date": "2024-01-01", "removal_date": null, "lost_date": null },
+    { "id": "RPLUTO002", "serial": "SN-RP-P002", "clinic_only": false, "inclusion_date": "2024-01-01", "removal_date": null, "lost_date": null }
   ]
 }
 ```
 
 - `clinic_only` — `true` = demo/clinic use only; cannot be assigned to a patient. Agwatches always `false`.
 - `inclusion_date` / `removal_date` — device lifecycle dates. Active = `removal_date: null`.
+- `lost_date` — date the device was reported lost (`"YYYY-MM-DD"`), or `null`. Set by htDash when a watch_record is saved with `old_lost: true`. A device with `lost_date` set is excluded from the available devices list and no further assignments are created for it. `removal_date` is for intentional decommissioning by the engineer; `lost_date` is for patient-reported loss.
 - **On-login check (Pluto and Mars):** at least one active `clinic_only: true` device must exist per type. Site users get a hard error; admin gets a warning.
 
 ### `devices/assignments/<type>.json`
@@ -234,6 +235,7 @@ Written by htDash when a device is assigned or returned.
       "homer_id": "HOCMCV001",
       "assigned_date": "2026-03-20T09:00",
       "returned_date": null,
+      "lost": false,
       "assigned_by": "siva",
       "notes": ""
     }
@@ -244,6 +246,7 @@ Written by htDash when a device is assigned or returned.
 - Currently assigned = `returned_date: null`. A device has at most one open assignment at a time.
 - Clinic-only devices never appear here.
 - For agwatches, records are created at `watch_record` protocol event completion.
+- `lost` — `true` when the assignment was closed because the patient reported the watch lost. When `lost: true`, htDash also sets `lost_date` on the inventory record so the device is permanently excluded from the available list.
 
 ### `devices/logs/<device_id>.log`
 
@@ -270,7 +273,7 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 
 **On group assignment:** `incomplete` pre-populated with all timed events for that group + shared. `reference: "assignment"` events get `scheduled_date = [a0CompletionDate + (start_day−1), a0CompletionDate + (end_day−1)]`. `reference: "activation"` events are placeholders with `scheduled_date: null`.
 
-**On activation:** all `reference: "activation"` placeholders get `scheduled_date = [activationDate + (start_day−1), activationDate + (end_day−1)]`. First `watch_record` chained entry created with `scheduled_date = [activationDate, activationDate]`.
+**On activation:** all `reference: "activation"` placeholders get `scheduled_date = [activationDate + (start_day−1), activationDate + (end_day−1)]`. First `watch_record` chained entry seeded in `incomplete` with `scheduled_date = [activationDate, activationDate]` — the therapist fills it via the Watch Record modal; it is **not** auto-completed at activation.
 
 > **Day numbering:** `start_day`/`end_day` in `study_protocol.json` are **1-based** — Day 1 = the reference date itself. Code converts with `offset = day − 1`.
 
@@ -305,12 +308,31 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 
 ### Type-specific extra fields on `complete` entries
 
-**Simple visit/call events** (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `followup_call_d07`, `followup_call_d21`, `training_completion_d29`)
+**Simple visit events** (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `training_completion_d29`)
 ```json
 { "notes": "" }
 ```
 
 No extra fields beyond the base schema — `notes` may be empty.
+
+**Follow-up call events** (`followup_call_d07`, `followup_call_d21`)
+```json
+{
+  "duration_minutes": 15,
+  "attachment": "attachments/followup_call_d07.pdf",
+  "notes": "",
+  "date_change_reason": "",
+  "triggered": [
+    { "type": "adverse_event | robot_issue | watch_record", "id": "<uuid of triggered entry>" }
+  ]
+}
+```
+
+- `duration_minutes`: positive integer; duration of the call in minutes (required)
+- `attachment`: relative path to the training log PDF uploaded by the therapist; fixed filenames `followup_call_d07.pdf` / `followup_call_d21.pdf`, overwritten on re-submission
+- `notes`: call summary (required; non-empty)
+- `date_change_reason`: *(optional)* explanation of why the call date differs from the scheduled date; present only when completion date ≠ scheduled date
+- `triggered`: list of downstream events created as a result of this call; empty list `[]` if none
 
 **AG Watch Timing events** (`adl_agwatch_timing_d03`, `adl_agwatch_timing_d15`, `vcg_agwatch_timing_d03`, `vcg_agwatch_timing_d15`)
 ```json
@@ -332,23 +354,36 @@ The complete entry stores only a relative path to the timing file. See [AG Watch
 **`watch_record`**
 ```json
 {
-  "ag_watch_right": { "old_id": null, "new_id": "" },
-  "ag_watch_left":  { "old_id": null, "new_id": "" },
-  "reason": "",
-  "days_until_next": null,
-  "attachments": []
+  "ag_watch_right":    { "old_id": null, "old_lost": false, "new_id": "" },
+  "ag_watch_left":     { "old_id": null, "old_lost": false, "new_id": "" },
+  "sync_datetime":     "",
+  "worn_datetime":     "",
+  "next_followup_days": null,
+  "notes":             "",
+  "triggered_by":      { "type": "activation | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid>" }
 }
 ```
 
-For the initial record (auto-completed at activation), `old_id` is always `null`. `old_id` → `new_id` transitions are the source of truth for data gaps:
+- `old_lost`: *(agwatch only)* `true` if the previously assigned watch was reported lost by the patient. Only meaningful when `old_id` is not null (hidden in UI when `old_id` is null — first assignment). When `true`: the assignment record is closed with `lost: true`, and `lost_date` is set on the inventory record.
+- `sync_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the watches were synced / data downloaded. Required if at least one new watch is assigned; omitted when both `new_id` values are `null`.
+- `worn_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the patient put the watches on. Same requirement as `sync_datetime`.
+- `next_followup_days`: integer — number of days until the next watch record follow-up. Used to compute `scheduled_date` of the seeded chain entry: `[completion_date + N days, completion_date + N days]`.
+- `triggered_by`: *(optional)* present when activation, a patient call, or a follow-up call is the reason this record was created/claimed.
+  - For **activation-triggered**: `type = "activation"`. The seeded entry has `scheduled_date = [activationDate, activationDate]` so it is immediately overdue.
+  - For **call-triggered**: `type = "patient_call" | "followup_call_d07" | "followup_call_d21"`. **Stamped onto the existing open `incomplete` chain entry at call-save time** — no new entry is created. At the same time, `scheduled_date` is updated to `[now, now]` so the entry appears immediately in the overdue section. Absent for standalone records.
+  - `triggered_by` can appear on **both `incomplete` and `complete`** entries — it is written when the triggering event is saved, before the watch record itself is filled.
 
-| `old_id` | `new_id` | Meaning |
-|----------|----------|---------|
-| `null`   | `"W001"` | Initial setup |
-| `"W001"` | `"W002"` | Normal swap |
-| `"W001"` | `"W001"` | Watch continuing |
-| `"W001"` | `null`   | Watch missing — gap starts |
-| `null`   | `"W005"` | Missing watch replaced — gap ends |
+For the initial record (first fill after activation), `old_id` is always `null` and `triggered_by.type = "activation"`. `old_id` → `new_id` transitions are the source of truth for data gaps:
+
+| `old_id` | `old_lost` | `new_id` | Meaning |
+|----------|------------|----------|---------|
+| `null`   | —          | `"W001"` | Initial setup |
+| `"W001"` | `false`    | `"W002"` | Normal swap |
+| `"W001"` | `false`    | `"W001"` | Watch continuing, no change |
+| `"W001"` | `true`     | `"W002"` | Watch lost, replaced immediately |
+| `"W001"` | `true`     | `null`   | Watch lost, no replacement available |
+| `"W001"` | `false`    | `null`   | Watch intentionally removed — gap starts |
+| `null`   | —          | `"W005"` | Missing watch replaced — gap ends |
 
 **`adl_prescription_d01`** / **`adl_prescription_d15`**
 ```json
@@ -378,7 +413,7 @@ The `attachment` field is a relative path from the patient folder root. The PDF 
   "id": "<uuid>",
   "protocol_event_id": "training_pause_followup",
   "triggered_by": "<uuid>",
-  "triggered_by_type": "adverse_event | technical_fault",
+  "triggered_by_type": "adverse_event | robot_issue",
   "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
   "flagged": false,
   "notes": ""
@@ -398,19 +433,23 @@ Extra fields on `complete`:
 ```json
 {
   "adverse_event":       [],
-  "technical_fault":     [],
+  "robot_issue":         [],
   "patient_call":        [],
   "pre_discontinuation": null,
   "discontinuation":     null
 }
 ```
 
-`technical_fault` is only present for experimental patients.
+`robot_issue` is only present for experimental patients.
 
 **`adverse_event`**
+
+Created only as a downstream consequence of a `patient_call` or follow-up call (`followup_call_d07` / `followup_call_d21`). Never created standalone.
+
 ```json
 {
   "id": "<uuid>",
+  "triggered_by": { "type": "patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of call entry>" },
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "description": "",
@@ -422,10 +461,14 @@ Extra fields on `complete`:
 }
 ```
 
-**`technical_fault`** *(experimental only)*
+**`robot_issue`** *(experimental only)*
+
+Created only as a downstream consequence of a `patient_call` or follow-up call. Never created standalone.
+
 ```json
 {
   "id": "<uuid>",
+  "triggered_by": { "type": "patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of call entry>" },
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "description": "",
@@ -444,16 +487,24 @@ Extra fields on `complete`:
 ```
 
 **`patient_call`**
+
+Stores both the call details and forward references to any downstream events it spawned.
+
 ```json
 {
   "id": "<uuid>",
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
-  "duration_minutes": null,
-  "summary": "",
-  "attachments": []
+  "duration_minutes": 15,
+  "notes": "",
+  "triggered": [
+    { "type": "adverse_event | robot_issue | watch_record", "id": "<uuid of triggered entry>" }
+  ]
 }
 ```
+
+- `triggered`: list of downstream events created as a result of this call; empty list `[]` if none.
+- `type` in triggered entries: `"adverse_event"`, `"robot_issue"`, or `"watch_record"` (referring to a `watch_record` entry in `incomplete`/`complete`).
 
 **`pre_discontinuation`** / **`discontinuation`**
 ```json
@@ -582,6 +633,8 @@ The datetime is the `completion_date` of the event, not the server filing time.
 |------|-----------|
 | `prescription_d01.pdf` | `prescription_printout_d01` event |
 | `prescription_d15.pdf` | `prescription_printout_d15` event |
+| `followup_call_d07.pdf` | `followup_call_d07` event — patient training log photos |
+| `followup_call_d21.pdf` | `followup_call_d21` event — patient training log photos |
 
 Every file in `attachments/` must be referenced in `protocol_events.json`.
 
@@ -656,7 +709,7 @@ Each event definition:
 | `type` | string | `strict` / `point_in_time` / `windowed` / `anytime` / `chained` |
 | `window` | object or null | `{ "start_day": N, "end_day": N }` relative to `reference` |
 | `reference` | string or null | `"assignment"` or `"activation"`; `null` for `anytime`/`chained` |
-| `is_master` | bool | If `true`, completing this event triggers activation date propagation |
+| `is_master` | bool | If `true`, completing this event triggers activation ate propagation |
 | `repeatable` | bool | Whether multiple instances can exist per patient |
 | `depends_on` | list of strings or null | IDs of events that must be in `complete` before this event can be completed. `null` or absent means no dependencies. |
 
@@ -710,7 +763,7 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 |----|------|------|-----------|--------|--------------|--------------|---------|
 | `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
 | `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
-| `technical_fault` | Technical Fault | anytime | — | — | `activation` | `user` | Document any device malfunction affecting therapy delivery. May trigger a training pause. |
+| `robot_issue` | Robot Issue | anytime | — | — | `activation` | `user` | Document any robot (Pluto/Mars) malfunction affecting therapy delivery. Created only via a patient call or follow-up call. May trigger a training pause. |
 | `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
 | `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
 
@@ -720,9 +773,9 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 |----|------|------|-----------|--------|--------------|--------------|---------|
 | `activation` | Patient Activation | strict | assignment | day 1–5 | — | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
 | `vcg_prescription_d01` | VCG Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
-| `vcg_agwatch_timing_d03` | Add VCG AG Watch Timings | point_in_time | activation | day 3 | `home_visit_d03` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 3. |
+| `vcg_agwatch_timing_d03` | Add VCG AG Watch Timings | point_in_time | activation | day 3 | `home_visit_d03`, `vcg_prescription_d01` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 3. |
 | `vcg_prescription_d15` | VCG Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the VCG exercise programme at the mid-point of the intervention. |
-| `vcg_agwatch_timing_d15` | Add VCG AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 15. |
+| `vcg_agwatch_timing_d15` | Add VCG AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `vcg_prescription_d15` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 15. |
 | `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01`, `vcg_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL + VCG therapy prescription. |
 | `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15`, `vcg_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL + VCG therapy prescription. |
 
@@ -737,13 +790,13 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 | `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
 | `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
 | `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the ADL exercise programme at the mid-point of the intervention. |
-| `adl_agwatch_timing_d15` | Add ADL AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 15. |
+| `adl_agwatch_timing_d15` | Add ADL AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `adl_prescription_d15` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 15. |
 | `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | `user` | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
 | `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | `user` | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
 | `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |
 | `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | `user` | Six-month follow-up clinical outcome assessment. |
-| `watch_record` | Watch Record | chained | — | — | — | `user` | Track actigraph watch assignments and swaps to ensure continuous activity monitoring throughout the study. |
-| `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. May trigger a training pause. |
-| `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer outside the protocol schedule. |
+| `watch_record` | Watch Record | chained | — | — | — | `user` | Track actigraph watch assignments and swaps throughout the study. First entry seeded at activation; each completion seeds the next. Can also be triggered by activation, a patient call, or a follow-up call — the existing open chain entry is claimed (stamped with `triggered_by` and `scheduled_date` set to now) rather than a new entry being created. |
+| `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. Created only via a patient call or follow-up call. May trigger a training pause. |
+| `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue` (exp only), and/or `watch_record` entries. |
 | `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study before group assignment. |
 | `discontinuation` | Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study after group assignment. |

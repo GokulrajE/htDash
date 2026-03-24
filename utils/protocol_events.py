@@ -105,7 +105,7 @@ def create_protocol_events(hospital_folder: str, homer_id: str,
         'discontinuation':     None,
     }
     if group == 'experimental':
-        free['technical_fault'] = []
+        free['robot_issue'] = []
 
     data = {
         'incomplete': incomplete,

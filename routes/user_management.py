@@ -5,6 +5,7 @@ from utils.data_access import (
     read_patient_meta, write_patient_meta, create_patient_folders, generate_homer_id,
     create_patient_log, write_patient_log, get_patients_path,
     get_available_devices, read_device_assignments, write_device_assignments, write_device_log,
+    mark_device_lost,
 )
 from utils.protocol_events import (
     create_protocol_events, populate_activation_dates,
@@ -54,6 +55,45 @@ def api_patient_detail(homer_id):
     if not patient:
         return jsonify({'error': 'Patient not found'}), 404
     return jsonify({**patient, 'status': derive_status(patient)})
+
+
+def _topo_sort_upcoming(events, event_defs):
+    """Sort upcoming events ascending by start date; within the same date, parents before dependents."""
+    events_by_date = {}
+    for ev in events:
+        date_key = ev['scheduled_date'][0][:10]
+        events_by_date.setdefault(date_key, []).append(ev)
+
+    result = []
+    for date_key in sorted(events_by_date):
+        group = events_by_date[date_key]
+        if len(group) <= 1:
+            result.extend(group)
+            continue
+        ids_in_group = {ev['protocol_event_id'] for ev in group}
+        ev_map       = {ev['protocol_event_id']: ev for ev in group}
+        in_degree    = {ev['protocol_event_id']: 0 for ev in group}
+        dependents   = {ev['protocol_event_id']: [] for ev in group}
+        for ev in group:
+            pid  = ev['protocol_event_id']
+            deps = event_defs.get(pid, {}).get('depends_on') or []
+            for d in deps:
+                if d in ids_in_group:
+                    in_degree[pid] += 1
+                    dependents[d].append(pid)
+        queue        = [ev for ev in group if in_degree[ev['protocol_event_id']] == 0]
+        sorted_group = []
+        while queue:
+            ev = queue.pop(0)
+            sorted_group.append(ev)
+            for dep_pid in dependents[ev['protocol_event_id']]:
+                in_degree[dep_pid] -= 1
+                if in_degree[dep_pid] == 0:
+                    queue.append(ev_map[dep_pid])
+        placed = {ev['protocol_event_id'] for ev in sorted_group}
+        sorted_group.extend(ev for ev in group if ev['protocol_event_id'] not in placed)
+        result.extend(sorted_group)
+    return result
 
 
 @bp.route('/api/patients/<homer_id>/events', methods=['GET'])
@@ -128,6 +168,8 @@ def api_patient_events(homer_id):
             'scheduled_date':    sched,
             'blocked_by':        blocked_by,
         }
+        if entry.get('triggered_by'):
+            record['triggered_by'] = entry['triggered_by']
 
         if start_date > today:
             record['days'] = (start_date - today).days
@@ -144,7 +186,7 @@ def api_patient_events(homer_id):
 
     # Active-window sub-group first, then past-due; both ascending by end date
     overdue.sort(key=lambda x: (0 if x.get('active_window') else 1, x['scheduled_date'][1]))
-    upcoming.sort(key=lambda x: x['scheduled_date'][0])
+    upcoming = _topo_sort_upcoming(upcoming, event_defs)
 
     complete_list = []
     for entry in events_data.get('complete', []):
@@ -432,17 +474,11 @@ def api_activate_patient(homer_id):
     if flask_session.get('privilege') not in ('admin', 'therapist'):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json() or {}
-    activation_date   = (data.get('activationDate') or '').strip()
-    _raw_right        = data.get('agWatchRightID')
-    _raw_left         = data.get('agWatchLeftID')
-    ag_watch_right_id = (_raw_right.strip() if isinstance(_raw_right, str) else None) or None
-    ag_watch_left_id  = (_raw_left.strip()  if isinstance(_raw_left,  str) else None) or None
-    vcg_group         = (data.get('vcgGroup') or '').strip() or None
-    notes             = (data.get('notes') or '').strip()
+    activation_date = (data.get('activationDate') or '').strip()
+    vcg_group       = (data.get('vcgGroup') or '').strip() or None
+    notes           = (data.get('notes') or '').strip()
     if not activation_date:
         return jsonify({'error': 'activationDate is required'}), 400
-    if ag_watch_right_id and ag_watch_left_id and ag_watch_right_id == ag_watch_left_id:
-        return jsonify({'error': 'Right and left limb watches must be different'}), 400
     try:
         if datetime.strptime(activation_date, '%Y-%m-%dT%H:%M') > datetime.now():
             return jsonify({'error': 'activationDate cannot be in the future'}), 400
@@ -483,18 +519,18 @@ def api_activate_patient(homer_id):
             return jsonify({'error': f'Cannot activate: complete these first — {names}'}), 409
 
     # Update patient record
-    patient['activationDate']  = activation_date
-    patient['agWatchRightID']  = ag_watch_right_id
-    patient['agWatchLeftID']   = ag_watch_left_id
+    patient['activationDate'] = activation_date
     if vcg_group:
         patient['vcgGroup'] = vcg_group
     write_patient_meta(folder, homer_id, patient)
 
     # Move activation event from incomplete to complete
+    activation_entry_id = None
     if events_data:
         incomplete = events_data.get('incomplete', [])
         entry = next((e for e in incomplete if e.get('protocol_event_id') == 'activation'), None)
         if entry:
+            activation_entry_id = entry['id']
             filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
             complete_entry = {**entry, 'completion_date': activation_date, 'filed_at': filed_at, 'notes': notes}
             events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
@@ -507,46 +543,23 @@ def api_activate_patient(homer_id):
     except Exception as e:
         print(f'Warning: could not populate activation dates: {e}')
 
-    # The seeded watch_record represents the initial watch assignment done at activation —
-    # move it straight to complete since the watches were assigned in this same action.
+    # Stamp triggered_by on the seeded watch_record so it shows its origin
     try:
         ev_data = read_protocol_events(folder, homer_id)
-        if ev_data:
-            incomplete = ev_data.get('incomplete', [])
-            wr_entry = next((e for e in incomplete if e.get('protocol_event_id') == 'watch_record'), None)
-            if wr_entry:
-                filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-                ev_data['incomplete'] = [e for e in incomplete if e.get('id') != wr_entry['id']]
-                ev_data.setdefault('complete', []).append({
-                    **wr_entry,
-                    'completion_date':      activation_date,
-                    'filed_at':             filed_at,
-                    'ag_watch_right': {'old_id': None, 'new_id': ag_watch_right_id},
-                    'ag_watch_left':  {'old_id': None, 'new_id': ag_watch_left_id},
-                    'notes':                notes,
-                })
+        if ev_data and activation_entry_id:
+            wr = next(
+                (e for e in ev_data.get('incomplete', [])
+                 if e.get('protocol_event_id') == 'watch_record'),
+                None
+            )
+            if wr:
+                wr['triggered_by'] = {'type': 'activation', 'id': activation_entry_id}
                 write_protocol_events(folder, homer_id, ev_data)
     except Exception as e:
-        print(f'Warning: could not complete initial watch_record: {e}')
+        print(f'Warning: could not stamp watch_record triggered_by: {e}')
 
-    # Record agwatch assignments (skip if no watch was available)
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
-    for label, watch_id in (('right', ag_watch_right_id), ('left', ag_watch_left_id)):
-        if not watch_id:
-            continue
-        assignments = read_device_assignments(folder, 'agwatch')
-        assignments.append({
-            'id':            str(uuid.uuid4()),
-            'device_id':     watch_id,
-            'homer_id':      homer_id,
-            'limb':          label,
-            'assigned_date': activation_date,
-            'returned_date': None,
-            'assigned_by':   loginid,
-            'notes':         notes,
-        })
-        write_device_assignments(folder, 'agwatch', assignments)
 
     try:
         write_patient_log(folder, homer_id, loginid, session_id, 'Patient activated')
@@ -660,8 +673,6 @@ _SIMPLE_EVENT_IDS = {
     'home_visit_d02',
     'home_visit_d03',
     'home_visit_d15',
-    'followup_call_d07',
-    'followup_call_d21',
     'training_completion_d29',
 }
 
@@ -669,9 +680,12 @@ _SIMPLE_EVENT_LOG_MESSAGES = {
     'home_visit_d02':           'Home visit recorded — Day 02',
     'home_visit_d03':           'Home visit recorded — Day 03',
     'home_visit_d15':           'Home visit recorded — Day 15',
-    'followup_call_d07':        'Follow-up call recorded — Day 07',
-    'followup_call_d21':        'Follow-up call recorded — Day 21',
     'training_completion_d29':  'Training completion visit recorded',
+}
+
+_FOLLOWUP_CALL_IDS = {
+    'followup_call_d07': 'attachments/followup_call_d07.pdf',
+    'followup_call_d21': 'attachments/followup_call_d21.pdf',
 }
 
 
@@ -734,6 +748,328 @@ def api_complete_simple_event(homer_id):
                       _SIMPLE_EVENT_LOG_MESSAGES[protocol_event_id])
 
     return jsonify({'ok': True})
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/followup-call', methods=['POST'])
+def api_complete_followup_call(homer_id):
+    """Complete a follow-up call event with duration, training log PDF, and notes."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    event_id           = request.form.get('event_id')
+    protocol_event_id  = (request.form.get('protocol_event_id') or '').strip()
+    completion_date    = (request.form.get('completion_date') or '').strip()
+    duration_str       = (request.form.get('duration_minutes') or '').strip()
+    notes              = (request.form.get('notes') or '').strip()
+    date_change_reason = (request.form.get('date_change_reason') or '').strip()
+    pdf_file           = request.files.get('attachment')
+    triggered_json     = (request.form.get('triggered') or '[]')
+
+    # Parse triggered items
+    try:
+        triggered_items = json.loads(triggered_json)
+        if not isinstance(triggered_items, list):
+            triggered_items = []
+    except (json.JSONDecodeError, TypeError):
+        triggered_items = []
+
+    if protocol_event_id not in _FOLLOWUP_CALL_IDS:
+        return jsonify({'error': 'Invalid protocol event ID.'}), 400
+    if not completion_date:
+        return jsonify({'error': 'Call date is required.'}), 400
+    try:
+        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Call date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+    if not duration_str:
+        return jsonify({'error': 'Duration is required.'}), 400
+    try:
+        duration_minutes = int(duration_str)
+        if duration_minutes <= 0:
+            raise ValueError
+    except ValueError:
+        return jsonify({'error': 'Duration must be a positive integer.'}), 400
+    if not notes:
+        return jsonify({'error': 'Notes are required.'}), 400
+    if not pdf_file or not pdf_file.filename:
+        return jsonify({'error': 'Training log PDF is required.'}), 400
+    if not pdf_file.filename.lower().endswith('.pdf'):
+        return jsonify({'error': 'Attachment must be a PDF file.'}), 400
+
+    # Validate triggered items
+    patient_meta    = read_patient_meta(folder, homer_id)
+    is_experimental = patient_meta and patient_meta.get('group') == 'experimental'
+    for item in triggered_items:
+        t = item.get('type')
+        if t == 'adverse_event':
+            if not (item.get('description') or '').strip():
+                return jsonify({'error': 'Adverse event description is required.'}), 400
+            if not (item.get('action_taken') or '').strip():
+                return jsonify({'error': 'Adverse event action taken is required.'}), 400
+        elif t == 'robot_issue':
+            if not is_experimental:
+                return jsonify({'error': 'Robot issue is only valid for experimental patients.'}), 400
+            if not (item.get('description') or '').strip():
+                return jsonify({'error': 'Robot issue description is required.'}), 400
+            for fault in item.get('faults', []):
+                if not (fault.get('fault_description') or '').strip():
+                    device = fault.get('device', 'device').capitalize()
+                    return jsonify({'error': f'{device} fault description is required.'}), 400
+        elif t == 'watch_record':
+            pass
+        else:
+            return jsonify({'error': f"Unknown triggered type: {t}"}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == protocol_event_id
+         and (event_id is None or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Event not found in incomplete list.'}), 404
+
+    # Save PDF
+    attachment_rel  = _FOLLOWUP_CALL_IDS[protocol_event_id]
+    attachment_path = get_patients_path(folder) / homer_id / attachment_rel
+    attachment_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_file.save(str(attachment_path))
+
+    call_id  = entry['id']
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+
+    # Process triggered items
+    triggered_refs = []
+    for item in triggered_items:
+        t = item.get('type')
+        if t == 'adverse_event':
+            new_id = str(uuid.uuid4())
+            events_data['free'].setdefault('adverse_event', []).append({
+                'id':           new_id,
+                'triggered_by': {'type': protocol_event_id, 'id': call_id},
+                'completion_date': completion_date,
+                'filed_at':     filed_at,
+                'description':  item['description'].strip(),
+                'action_taken': item['action_taken'].strip(),
+                'paused':       bool(item.get('paused', False)),
+                'pause_date':   None,
+                'allocated_pause_days': None,
+                'attachments':  [],
+            })
+            triggered_refs.append({'type': 'adverse_event', 'id': new_id})
+
+        elif t == 'robot_issue':
+            new_id = str(uuid.uuid4())
+            events_data['free'].setdefault('robot_issue', []).append({
+                'id':           new_id,
+                'triggered_by': {'type': protocol_event_id, 'id': call_id},
+                'completion_date': completion_date,
+                'filed_at':     filed_at,
+                'description':  item['description'].strip(),
+                'paused':       bool(item.get('paused', False)),
+                'pause_date':   None,
+                'allocated_pause_days': None,
+                'faults': [
+                    {
+                        'device':            f['device'],
+                        'fault_description': f['fault_description'].strip(),
+                        'resolved_same_day': bool(f.get('resolved_same_day', False)),
+                    }
+                    for f in item.get('faults', [])
+                ],
+                'attachments':  [],
+            })
+            triggered_refs.append({'type': 'robot_issue', 'id': new_id})
+
+        elif t == 'watch_record':
+            # Stamp triggered_by and scheduled_date onto the existing open chain entry
+            wr = next(
+                (e for e in events_data.get('incomplete', [])
+                 if e.get('protocol_event_id') == 'watch_record'),
+                None
+            )
+            if wr:
+                now_hhmm = datetime.now().strftime('%Y-%m-%dT%H:%M')
+                wr['triggered_by']   = {'type': protocol_event_id, 'id': call_id}
+                wr['scheduled_date'] = [now_hhmm, now_hhmm]
+                triggered_refs.append({'type': 'watch_record', 'id': wr['id']})
+
+    complete_entry = {
+        **entry,
+        'completion_date':  completion_date,
+        'filed_at':         filed_at,
+        'duration_minutes': duration_minutes,
+        'attachment':       attachment_rel,
+        'notes':            notes,
+        'triggered':        triggered_refs,
+        **({'date_change_reason': date_change_reason} if date_change_reason else {}),
+    }
+
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    day        = '07' if protocol_event_id == 'followup_call_d07' else '21'
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      f'Follow-up call recorded — Day {day}')
+    for ref in triggered_refs:
+        msg = {'adverse_event': 'Adverse event recorded',
+               'robot_issue':   'Robot issue recorded',
+               'watch_record':  'Watch record triggered'}.get(ref['type'])
+        if msg:
+            write_patient_log(folder, homer_id, loginid, session_id, msg)
+
+    return jsonify({'ok': True})
+
+
+# ── Watch Record endpoint ──────────────────────────────────────────────────────
+
+@bp.route('/api/patients/<homer_id>/complete-event/watch-record', methods=['POST'])
+def api_complete_watch_record(homer_id):
+    """Complete a watch_record event: assign watches, seed next chain entry."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'engineer'):
+        return jsonify({'error': 'Forbidden'}), 403
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    data               = request.get_json() or {}
+    event_id           = data.get('event_id')
+    ag_right_new       = data.get('ag_watch_right_new')   # str or None
+    ag_left_new        = data.get('ag_watch_left_new')    # str or None
+    right_old_lost     = bool(data.get('ag_watch_right_old_lost', False))
+    left_old_lost      = bool(data.get('ag_watch_left_old_lost', False))
+    sync_datetime      = (data.get('sync_datetime') or '').strip()
+    worn_datetime      = (data.get('worn_datetime') or '').strip()
+    next_followup_days = data.get('next_followup_days')
+    notes              = (data.get('notes') or '').strip()
+
+    if not event_id:
+        return jsonify({'error': 'event_id is required'}), 400
+    if ag_right_new and ag_left_new and ag_right_new == ag_left_new:
+        return jsonify({'error': 'Right and left watches must be different'}), 400
+    both_empty = ag_right_new is None and ag_left_new is None
+    if not both_empty and not sync_datetime:
+        return jsonify({'error': 'Sync date & time is required when a watch is assigned'}), 400
+    if not both_empty and not worn_datetime:
+        return jsonify({'error': 'Worn date & time is required when a watch is assigned'}), 400
+    if (ag_right_new is None or ag_left_new is None) and not notes:
+        return jsonify({'error': 'Notes are required when a watch is not assigned'}), 400
+    if not isinstance(next_followup_days, int) or next_followup_days < 1:
+        return jsonify({'error': 'next_followup_days must be a positive integer'}), 400
+    for dt_val, label in ((sync_datetime, 'Sync'), (worn_datetime, 'Worn')):
+        if not dt_val:
+            continue
+        try:
+            if datetime.strptime(dt_val, '%Y-%m-%dT%H:%M') > datetime.now():
+                return jsonify({'error': f'{label} date cannot be in the future'}), 400
+        except ValueError:
+            return jsonify({'error': f'{label} date format must be YYYY-MM-DDTHH:MM'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('id') == event_id and e.get('protocol_event_id') == 'watch_record'),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Watch record not found in incomplete'}), 404
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    old_right       = patient.get('agWatchRightID')
+    old_left        = patient.get('agWatchLeftID')
+    filed_at        = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    completion_date = worn_datetime or sync_datetime or filed_at[:16]
+
+    complete_entry = {
+        **entry,
+        'completion_date':    completion_date,
+        'filed_at':           filed_at,
+        'ag_watch_right':     {'old_id': old_right, 'old_lost': right_old_lost, 'new_id': ag_right_new},
+        'ag_watch_left':      {'old_id': old_left,  'old_lost': left_old_lost,  'new_id': ag_left_new},
+        'sync_datetime':      sync_datetime,
+        'worn_datetime':      worn_datetime,
+        'next_followup_days': next_followup_days,
+        'notes':              notes,
+    }
+
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    # Seed next chain entry
+    next_dt = (datetime.fromisoformat(completion_date) + timedelta(days=next_followup_days)).strftime('%Y-%m-%dT%H:%M')
+    events_data['incomplete'].append({
+        'id':                str(uuid.uuid4()),
+        'protocol_event_id': 'watch_record',
+        'scheduled_date':    [next_dt, next_dt],
+        'flagged':           False,
+        'notes':             '',
+    })
+    write_protocol_events(folder, homer_id, events_data)
+
+    # Update patient meta
+    patient['agWatchRightID'] = ag_right_new
+    patient['agWatchLeftID']  = ag_left_new
+    write_patient_meta(folder, homer_id, patient)
+
+    # Update device assignments: close old open assignment, open new
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    assignments = read_device_assignments(folder, 'agwatch')
+    lost_date_str = completion_date[:10]
+    for old_id, old_lost, new_id, limb in (
+        (old_right, right_old_lost, ag_right_new, 'right'),
+        (old_left,  left_old_lost,  ag_left_new,  'left'),
+    ):
+        if old_id and old_id != new_id:
+            for a in assignments:
+                if a.get('device_id') == old_id and a.get('homer_id') == homer_id and a.get('returned_date') is None:
+                    a['returned_date'] = completion_date
+                    if old_lost:
+                        a['lost'] = True
+            if old_lost:
+                mark_device_lost(folder, 'agwatch', old_id, lost_date_str)
+                write_device_log(folder, old_id, loginid, session_id, f'Lost — reported by {homer_id}')
+        if new_id and new_id != old_id:
+            assignments.append({
+                'id':            str(uuid.uuid4()),
+                'device_id':     new_id,
+                'homer_id':      homer_id,
+                'limb':          limb,
+                'assigned_date': completion_date,
+                'returned_date': None,
+                'lost':          False,
+                'assigned_by':   loginid,
+                'notes':         notes,
+            })
+            write_device_log(folder, new_id, loginid, session_id, f'Assigned to {homer_id} ({limb})')
+    write_device_assignments(folder, 'agwatch', assignments)
+
+    write_patient_log(folder, homer_id, loginid, session_id, 'Watch record filed')
+    return jsonify({'status': 'success'})
 
 
 # ── AG Watch Timing endpoints ──────────────────────────────────────────────────

@@ -549,13 +549,14 @@ const EVENT_OPENERS = {
   home_visit_d02:            (ev) => openSimpleEventModal(ev),
   home_visit_d03:            (ev) => openSimpleEventModal(ev),
   home_visit_d15:            (ev) => openSimpleEventModal(ev),
-  followup_call_d07:         (ev) => openSimpleEventModal(ev),
-  followup_call_d21:         (ev) => openSimpleEventModal(ev),
+  followup_call_d07:         (ev) => openFollowupCallModal(ev),
+  followup_call_d21:         (ev) => openFollowupCallModal(ev),
   training_completion_d29:   (ev) => openSimpleEventModal(ev),
   adl_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
+  watch_record:              (ev) => openWatchRecordModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -689,63 +690,16 @@ async function openActivationModal(evId) {
   if (vcgRow) vcgRow.classList.toggle('hidden', !isControl);
   if (vcgSel) vcgSel.value = '';
 
-  const affectedSel   = document.getElementById('activation-watch-right');
-  const unaffectedSel = document.getElementById('activation-watch-left');
-  affectedSel.innerHTML   = '<option value="">Loading…</option>';
-  unaffectedSel.innerHTML = '<option value="">Loading…</option>';
   showModal('activation-modal');
-
-  try {
-    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-agwatches`);
-    const { agwatch } = await res.json();
-
-    const NO_WATCH_OPT = '<option value="__none__">No Watch Available</option>';
-
-    function buildWatchOpts(watches, excludeId) {
-      const available = watches.filter(d => d.id !== excludeId);
-      return '<option value="">Select watch…</option>' +
-        available.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('') +
-        NO_WATCH_OPT;
-    }
-
-    affectedSel.innerHTML   = buildWatchOpts(agwatch, null);
-    unaffectedSel.innerHTML = buildWatchOpts(agwatch, null);
-
-    affectedSel.onchange = () => {
-      const prev = unaffectedSel.value;
-      unaffectedSel.innerHTML = buildWatchOpts(agwatch, affectedSel.value);
-      if (prev && [...unaffectedSel.options].some(o => o.value === prev)) unaffectedSel.value = prev;
-    };
-    unaffectedSel.onchange = () => {
-      const prev = affectedSel.value;
-      affectedSel.innerHTML = buildWatchOpts(agwatch, unaffectedSel.value);
-      if (prev && [...affectedSel.options].some(o => o.value === prev)) affectedSel.value = prev;
-    };
-  } catch (e) {
-    setError('activation-error', 'Failed to load available watches.');
-  }
 }
 
 async function submitActivation() {
   const activationDate = document.getElementById('activation-date').value;
-  const agWatchRightId = document.getElementById('activation-watch-right').value;
-  const agWatchLeftId  = document.getElementById('activation-watch-left').value;
   const notes          = document.getElementById('activation-notes').value;
 
-  const NO_WATCH = '__none__';
-  if (!activationDate)   { setError('activation-error', 'Please select an activation date.'); return; }
-  if (!agWatchRightId)   { setError('activation-error', 'Please select a watch or "No Watch Available" for the right limb.'); return; }
-  if (!agWatchLeftId)    { setError('activation-error', 'Please select a watch or "No Watch Available" for the left limb.'); return; }
-  if (agWatchRightId !== NO_WATCH && agWatchRightId === agWatchLeftId) {
-    setError('activation-error', 'Right and left limb watches must be different.'); return;
-  }
+  if (!activationDate) { setError('activation-error', 'Please select an activation date.'); return; }
 
-  const body = {
-    activationDate,
-    agWatchRightID: agWatchRightId === NO_WATCH ? null : agWatchRightId,
-    agWatchLeftID:  agWatchLeftId  === NO_WATCH ? null : agWatchLeftId,
-    notes,
-  };
+  const body = { activationDate, notes };
   if (patientData?.group === 'control') {
     const vcgGroup = document.getElementById('activation-vcg-group').value;
     if (!vcgGroup) { setError('activation-error', 'Please select a VCG group.'); return; }
@@ -1363,6 +1317,300 @@ async function saveSimpleEvent() {
   await loadPatientEvents();
 }
 
+// ── Follow-up Call modal ───────────────────────────────────────────────────────
+
+let _followupCallEventId         = null;
+let _followupCallProtocolEventId = null;
+let _followupCallScheduledDate   = null;
+
+function _followupCallCheckDateChange() {
+  const dateVal     = document.getElementById('followup-call-date').value;
+  const reasonWrap  = document.getElementById('followup-call-date-reason-wrap');
+  const reasonInput = document.getElementById('followup-call-date-reason');
+  const isDifferent = dateVal && _followupCallScheduledDate && dateVal.slice(0, 10) !== _followupCallScheduledDate;
+  if (isDifferent) {
+    reasonWrap.classList.remove('hidden');
+  } else {
+    reasonWrap.classList.add('hidden');
+    reasonInput.value = '';
+  }
+}
+
+// Toggle a triggered sub-form on/off and clear its fields when hidden
+function _fcToggleSubform(type) {
+  const subformId = { adverse: 'fc-adverse-form', robot: 'fc-robot-form', watch: 'fc-watch-note' }[type];
+  const checked   = document.getElementById(`fc-trigger-${type}`).checked;
+  document.getElementById(subformId).classList.toggle('hidden', !checked);
+  if (!checked) {
+    if (type === 'adverse') {
+      document.getElementById('fc-adverse-desc').value   = '';
+      document.getElementById('fc-adverse-action').value = '';
+      document.getElementById('fc-adverse-paused').checked = false;
+    } else if (type === 'robot') {
+      document.getElementById('fc-robot-desc').value   = '';
+      document.getElementById('fc-robot-paused').checked = false;
+      ['pluto', 'mars'].forEach(d => _fcClearDevice(d));
+    }
+  }
+}
+
+function _fcToggleDevice(device) {
+  const checked = document.getElementById(`fc-robot-${device}-on`).checked;
+  document.getElementById(`fc-robot-${device}-form`).classList.toggle('hidden', !checked);
+  if (!checked) _fcClearDevice(device);
+}
+
+function _fcClearDevice(device) {
+  document.getElementById(`fc-robot-${device}-on`).checked       = false;
+  document.getElementById(`fc-robot-${device}-form`).classList.add('hidden');
+  document.getElementById(`fc-robot-${device}-desc`).value       = '';
+  document.getElementById(`fc-robot-${device}-resolved`).checked = false;
+}
+
+function openFollowupCallModal(ev) {
+  _followupCallEventId         = ev.id;
+  _followupCallProtocolEventId = ev.protocol_event_id;
+  _followupCallScheduledDate   = ev.scheduled_date ? ev.scheduled_date[0].slice(0, 10) : null;
+
+  document.getElementById('followup-call-title').textContent             = ev.event_name;
+  document.getElementById('followup-call-date').value                    = '';
+  document.getElementById('followup-call-duration').value                = '';
+  document.getElementById('followup-call-pdf').value                     = '';
+  document.getElementById('followup-call-notes').value                   = '';
+  document.getElementById('followup-call-date-reason').value             = '';
+  document.getElementById('followup-call-date-reason-wrap').classList.add('hidden');
+  document.getElementById('followup-call-scheduled-display').textContent = _followupCallScheduledDate || '';
+  document.getElementById('followup-call-date').addEventListener('change', _followupCallCheckDateChange, { once: false });
+
+  // Reset triggered section
+  ['adverse', 'robot', 'watch'].forEach(type => {
+    const cb = document.getElementById(`fc-trigger-${type}`);
+    if (cb) { cb.checked = false; _fcToggleSubform(type); }
+  });
+  // Robot Issue only shown for experimental patients
+  const robotWrap = document.getElementById('fc-trigger-robot-wrap');
+  if (robotWrap) robotWrap.classList.toggle('hidden', patientData?.group !== 'experimental');
+  // Watch Record only shown when at least one watch is currently assigned
+  const watchWrap = document.getElementById('fc-trigger-watch-wrap');
+  if (watchWrap) watchWrap.classList.toggle('hidden', !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
+
+  const err = document.getElementById('followup-call-error');
+  err.textContent = '';
+  err.classList.add('hidden');
+  showModal('followup-call-modal');
+}
+
+async function saveFollowupCall() {
+  const dateVal    = document.getElementById('followup-call-date').value;
+  const duration   = document.getElementById('followup-call-duration').value.trim();
+  const pdfInput   = document.getElementById('followup-call-pdf');
+  const notes      = document.getElementById('followup-call-notes').value.trim();
+  const reasonWrap = document.getElementById('followup-call-date-reason-wrap');
+  const dateReason = document.getElementById('followup-call-date-reason').value.trim();
+  const err        = document.getElementById('followup-call-error');
+  const saveBtn    = document.getElementById('followup-call-save');
+  err.classList.add('hidden');
+
+  const dateChanged = !reasonWrap.classList.contains('hidden');
+
+  if (!dateVal)                            { err.textContent = 'Call date is required.';                    err.classList.remove('hidden'); return; }
+  if (!duration || parseInt(duration) < 1) { err.textContent = 'Duration must be at least 1 minute.';       err.classList.remove('hidden'); return; }
+  if (!pdfInput.files.length)              { err.textContent = 'Training log PDF is required.';             err.classList.remove('hidden'); return; }
+  if (dateChanged && !dateReason)          { err.textContent = 'Please explain why the date is different.'; err.classList.remove('hidden'); return; }
+  if (!notes)                              { err.textContent = 'Notes are required.';                       err.classList.remove('hidden'); return; }
+
+  // Collect triggered items
+  const triggered = [];
+
+  if (document.getElementById('fc-trigger-adverse').checked) {
+    const desc   = document.getElementById('fc-adverse-desc').value.trim();
+    const action = document.getElementById('fc-adverse-action').value.trim();
+    if (!desc)   { err.textContent = 'Adverse event description is required.';   err.classList.remove('hidden'); return; }
+    if (!action) { err.textContent = 'Adverse event action taken is required.';  err.classList.remove('hidden'); return; }
+    triggered.push({
+      type:        'adverse_event',
+      description: desc,
+      action_taken: action,
+      paused:      document.getElementById('fc-adverse-paused').checked,
+    });
+  }
+
+  const robotCb = document.getElementById('fc-trigger-robot');
+  if (robotCb && robotCb.checked) {
+    const desc = document.getElementById('fc-robot-desc').value.trim();
+    if (!desc) { err.textContent = 'Robot issue description is required.'; err.classList.remove('hidden'); return; }
+    const faults = [];
+    for (const device of ['pluto', 'mars']) {
+      if (document.getElementById(`fc-robot-${device}-on`).checked) {
+        const fd = document.getElementById(`fc-robot-${device}-desc`).value.trim();
+        if (!fd) { err.textContent = `${device.charAt(0).toUpperCase() + device.slice(1)} fault description is required.`; err.classList.remove('hidden'); return; }
+        faults.push({ device, fault_description: fd, resolved_same_day: document.getElementById(`fc-robot-${device}-resolved`).checked });
+      }
+    }
+    triggered.push({
+      type:        'robot_issue',
+      description: desc,
+      faults,
+      paused:      document.getElementById('fc-robot-paused').checked,
+    });
+  }
+
+  if (document.getElementById('fc-trigger-watch').checked) {
+    triggered.push({ type: 'watch_record' });
+  }
+
+  const form = new FormData();
+  form.append('event_id',          _followupCallEventId);
+  form.append('protocol_event_id', _followupCallProtocolEventId);
+  form.append('completion_date',   dateVal);
+  form.append('duration_minutes',  duration);
+  if (dateChanged) form.append('date_change_reason', dateReason);
+  form.append('notes',      notes);
+  form.append('attachment', pdfInput.files[0]);
+  form.append('triggered',  JSON.stringify(triggered));
+
+  saveBtn.disabled = true;
+  const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/followup-call`, {
+    method: 'POST',
+    body:   form,
+  });
+  saveBtn.disabled = false;
+  const data = await res.json();
+  if (!res.ok) {
+    err.textContent = data.error || 'Failed to save.';
+    err.classList.remove('hidden');
+    return;
+  }
+  hideModal('followup-call-modal');
+  await loadPatientEvents();
+}
+
+// ── Watch Record modal ────────────────────────────────────────────────────────
+
+const _WR_TRIGGER_NAMES = {
+  activation:        'Patient Activation',
+  followup_call_d07: 'Follow-up Call Day 07',
+  followup_call_d21: 'Follow-up Call Day 21',
+  patient_call:      'Patient Call',
+};
+
+let _wrEventId = null;
+
+async function openWatchRecordModal(ev) {
+  _wrEventId = ev.id;
+
+  // Context banner
+  const banner = document.getElementById('wr-context-banner');
+  if (ev.triggered_by) {
+    const label = _WR_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type;
+    banner.textContent = `Triggered by: ${label}`;
+    banner.className = 'px-4 py-2 rounded-xl text-sm font-medium bg-blue-50 text-blue-700 border border-blue-100';
+  } else {
+    banner.textContent = 'Scheduled chain follow-up';
+    banner.className = 'px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200';
+  }
+
+  // Current watches + Lost checkboxes
+  const oldRight = patientData?.agWatchRightID || null;
+  const oldLeft  = patientData?.agWatchLeftID  || null;
+  document.getElementById('wr-old-right').textContent = oldRight || 'Not assigned';
+  document.getElementById('wr-old-left').textContent  = oldLeft  || 'Not assigned';
+  document.getElementById('wr-right-lost-wrap').classList.toggle('hidden', !oldRight);
+  document.getElementById('wr-left-lost-wrap').classList.toggle('hidden', !oldLeft);
+  document.getElementById('wr-right-lost').checked = false;
+  document.getElementById('wr-left-lost').checked  = false;
+
+  // Reset fields
+  document.getElementById('wr-new-right').innerHTML  = '<option value="">Loading…</option>';
+  document.getElementById('wr-new-left').innerHTML   = '<option value="">Loading…</option>';
+  document.getElementById('wr-sync-datetime').value  = '';
+  document.getElementById('wr-worn-datetime').value  = '';
+  document.getElementById('wr-next-days').value      = '';
+  document.getElementById('wr-notes').value          = '';
+  setError('wr-error', '');
+
+  _attachDateGuard('wr-sync-datetime', 'wr-error');
+  _attachDateGuard('wr-worn-datetime', 'wr-error');
+
+  showModal('watch-record-modal');
+
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-agwatches`);
+    const { agwatch } = await res.json();
+    const NO_WATCH_OPT = '<option value="__none__">No Watch Available</option>';
+
+    function buildOpts(watches, excludeId) {
+      const available = watches.filter(d => d.id !== excludeId);
+      return '<option value="">Select watch…</option>' +
+        available.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('') +
+        NO_WATCH_OPT;
+    }
+
+    const rightSel = document.getElementById('wr-new-right');
+    const leftSel  = document.getElementById('wr-new-left');
+    rightSel.innerHTML = buildOpts(agwatch, null);
+    leftSel.innerHTML  = buildOpts(agwatch, null);
+
+    rightSel.onchange = () => {
+      const prev = leftSel.value;
+      leftSel.innerHTML = buildOpts(agwatch, rightSel.value);
+      if (prev && [...leftSel.options].some(o => o.value === prev)) leftSel.value = prev;
+    };
+    leftSel.onchange = () => {
+      const prev = rightSel.value;
+      rightSel.innerHTML = buildOpts(agwatch, leftSel.value);
+      if (prev && [...rightSel.options].some(o => o.value === prev)) rightSel.value = prev;
+    };
+  } catch (e) {
+    setError('wr-error', 'Failed to load available watches.');
+  }
+}
+
+async function saveWatchRecord() {
+  const newRight = document.getElementById('wr-new-right').value;
+  const newLeft  = document.getElementById('wr-new-left').value;
+  const syncDt   = document.getElementById('wr-sync-datetime').value;
+  const wornDt   = document.getElementById('wr-worn-datetime').value;
+  const nextDays = document.getElementById('wr-next-days').value;
+  const notes    = document.getElementById('wr-notes').value.trim();
+  const NO_WATCH = '__none__';
+
+  if (!newRight) { setError('wr-error', 'Please select a right watch or "No Watch Available".'); return; }
+  if (!newLeft)  { setError('wr-error', 'Please select a left watch or "No Watch Available".'); return; }
+  if (newRight !== NO_WATCH && newRight === newLeft) { setError('wr-error', 'Right and left watches must be different.'); return; }
+  const bothEmpty = newRight === NO_WATCH && newLeft === NO_WATCH;
+  if (!bothEmpty && !syncDt) { setError('wr-error', 'Sync date & time is required when a watch is assigned.'); return; }
+  if (!bothEmpty && !wornDt) { setError('wr-error', 'Worn date & time is required when a watch is assigned.'); return; }
+  if (!nextDays || parseInt(nextDays) < 1) { setError('wr-error', 'Next follow-up days must be at least 1.'); return; }
+  if ((newRight === NO_WATCH || newLeft === NO_WATCH) && !notes) {
+    setError('wr-error', 'Notes are required when a watch is not assigned — explain why.'); return;
+  }
+
+  const saveBtn   = document.getElementById('wr-save');
+  const rightLost = (document.getElementById('wr-right-lost')?.checked && !!patientData?.agWatchRightID) || false;
+  const leftLost  = (document.getElementById('wr-left-lost')?.checked  && !!patientData?.agWatchLeftID)  || false;
+  const body = {
+    event_id:                 _wrEventId,
+    ag_watch_right_new:       newRight === NO_WATCH ? null : newRight,
+    ag_watch_left_new:        newLeft  === NO_WATCH ? null : newLeft,
+    ag_watch_right_old_lost:  rightLost,
+    ag_watch_left_old_lost:   leftLost,
+    sync_datetime:            syncDt,
+    worn_datetime:            wornDt,
+    next_followup_days:       parseInt(nextDays),
+    notes,
+  };
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/watch-record`, body);
+  saveBtn.disabled = false;
+
+  if (!ok) { setError('wr-error', data.error || 'Failed to save.'); return; }
+  hideModal('watch-record-modal');
+  await loadPatient();
+  loadPatientEvents();
+}
+
 // ── AG Watch Timing modal ─────────────────────────────────────────────────────
 
 let _agwatchEventId         = null;
@@ -1525,6 +1773,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     'device-setup-submit', 'activation-submit',
     'adl-prescription-submit', 'vcg-prescription-submit',
     'prescription-printout-save', 'prescription-printout-print',
+    'wr-save',
   ].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) btn.dataset.label = btn.textContent;

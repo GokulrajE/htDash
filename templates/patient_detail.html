@@ -374,20 +374,6 @@
       </select>
     </div>
     <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">AG Watch — Right <span class="text-red-500">*</span></label>
-      <select id="activation-watch-right" required
-              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <option value="">Loading…</option>
-      </select>
-    </div>
-    <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">AG Watch — Left <span class="text-red-500">*</span></label>
-      <select id="activation-watch-left" required
-              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <option value="">Loading…</option>
-      </select>
-    </div>
-    <div class="mb-4">
       <label class="block text-sm font-medium text-slate-700 mb-2">Notes</label>
       <textarea id="activation-notes" rows="6"
                 class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
@@ -564,6 +550,128 @@
   </div>
 </div>
 
+<div id="followup-call-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
+    <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+      <h3 id="followup-call-title" class="text-xl font-bold text-slate-800"></h3>
+      <button onclick="hideModal('followup-call-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Call Date &amp; Time</label>
+        <input id="followup-call-date" type="datetime-local" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+      </div>
+      <div id="followup-call-date-reason-wrap" class="hidden">
+        <label class="block text-sm font-medium text-amber-700 mb-1">Reason for date change <span class="text-xs font-normal text-slate-500">(scheduled: <span id="followup-call-scheduled-display"></span>)</span></label>
+        <textarea id="followup-call-date-reason" rows="2" class="w-full px-3 py-2 border border-amber-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none" placeholder="Why is the call date different from the scheduled date?"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Duration (minutes)</label>
+        <input id="followup-call-duration" type="number" min="1" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="e.g. 20" />
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Training Log PDF</label>
+        <input id="followup-call-pdf" type="file" accept=".pdf" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Notes</label>
+        <textarea id="followup-call-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Summary of the call…"></textarea>
+      </div>
+
+      <!-- ── Triggered events ─────────────────────────────────────────── -->
+      <div class="border-t border-slate-100 pt-4">
+        <p class="text-sm font-semibold text-slate-700 mb-3">What came out of this call?</p>
+
+        <!-- Adverse Event -->
+        <div class="mb-3">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="fc-trigger-adverse" onchange="_fcToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
+            <span class="text-sm font-medium text-slate-700">Adverse Event</span>
+          </label>
+          <div id="fc-adverse-form" class="hidden mt-2 ml-6 space-y-2 p-3 bg-red-50 rounded-xl border border-red-100">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Description <span class="text-red-400">*</span></label>
+              <textarea id="fc-adverse-desc" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none" placeholder="Describe the adverse event…"></textarea>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Action taken <span class="text-red-400">*</span></label>
+              <textarea id="fc-adverse-action" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-200 resize-none" placeholder="What action was taken?"></textarea>
+            </div>
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="fc-adverse-paused" class="w-4 h-4 rounded border-slate-300">
+              <span class="text-sm text-slate-700">Training paused as a result</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Robot Issue (experimental only) -->
+        <div class="mb-3" id="fc-trigger-robot-wrap">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="fc-trigger-robot" onchange="_fcToggleSubform('robot')" class="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-300">
+            <span class="text-sm font-medium text-slate-700">Robot Issue</span>
+          </label>
+          <div id="fc-robot-form" class="hidden mt-2 ml-6 space-y-2 p-3 bg-orange-50 rounded-xl border border-orange-100">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">Description <span class="text-red-400">*</span></label>
+              <textarea id="fc-robot-desc" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none" placeholder="Describe the robot issue…"></textarea>
+            </div>
+            <p class="text-xs font-medium text-slate-600">Affected devices</p>
+            <div>
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" id="fc-robot-pluto-on" onchange="_fcToggleDevice('pluto')" class="w-4 h-4 rounded border-slate-300">
+                <span class="text-sm text-slate-700">Pluto</span>
+              </label>
+              <div id="fc-robot-pluto-form" class="hidden mt-2 ml-6 space-y-1">
+                <input id="fc-robot-pluto-desc" type="text" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200" placeholder="Fault description…" />
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" id="fc-robot-pluto-resolved" class="w-4 h-4 rounded border-slate-300">
+                  <span class="text-xs text-slate-600">Resolved same day</span>
+                </label>
+              </div>
+            </div>
+            <div>
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" id="fc-robot-mars-on" onchange="_fcToggleDevice('mars')" class="w-4 h-4 rounded border-slate-300">
+                <span class="text-sm text-slate-700">Mars</span>
+              </label>
+              <div id="fc-robot-mars-form" class="hidden mt-2 ml-6 space-y-1">
+                <input id="fc-robot-mars-desc" type="text" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200" placeholder="Fault description…" />
+                <label class="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" id="fc-robot-mars-resolved" class="w-4 h-4 rounded border-slate-300">
+                  <span class="text-xs text-slate-600">Resolved same day</span>
+                </label>
+              </div>
+            </div>
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="fc-robot-paused" class="w-4 h-4 rounded border-slate-300">
+              <span class="text-sm text-slate-700">Training paused as a result</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Watch Record -->
+        <div id="fc-trigger-watch-wrap">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="fc-trigger-watch" onchange="_fcToggleSubform('watch')" class="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-300">
+            <span class="text-sm font-medium text-slate-700">Watch Record Issue</span>
+          </label>
+          <div id="fc-watch-note" class="hidden mt-2 ml-6 px-3 py-2 bg-blue-50 rounded-xl border border-blue-100 text-xs text-slate-600">
+            The currently open watch record will be linked to this call. Complete it from the Watch Records tab.
+          </div>
+        </div>
+      </div>
+      <div class="h-1"></div>
+    </div>
+    <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
+      <p id="followup-call-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <div class="flex gap-3">
+        <button type="button" onclick="hideModal('followup-call-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button id="followup-call-save" type="button" onclick="saveFollowupCall()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="agwatch-timing-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl w-full max-w-xl flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between p-6 pb-4 shrink-0">
@@ -585,6 +693,88 @@
       <div class="flex gap-3">
         <button type="button" onclick="hideModal('agwatch-timing-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
         <button type="button" onclick="saveAgwatchTiming()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Watch Record -->
+<div id="watch-record-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
+    <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+      <h3 class="text-xl font-bold text-slate-800">Watch Record</h3>
+      <button onclick="hideModal('watch-record-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
+      <!-- Context banner -->
+      <div id="wr-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium"></div>
+      <!-- Current watches (read-only) -->
+      <div class="px-4 py-3 bg-slate-50 rounded-xl">
+        <p class="text-xs text-slate-500 font-medium mb-2">Current Watches</p>
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs text-slate-500">Right</span>
+          <div class="flex items-center gap-3">
+            <span id="wr-old-right" class="text-sm font-medium text-slate-700"></span>
+            <label id="wr-right-lost-wrap" class="hidden flex items-center gap-1 cursor-pointer select-none">
+              <input type="checkbox" id="wr-right-lost" class="w-3.5 h-3.5 rounded border-slate-300 text-red-500 focus:ring-red-300">
+              <span class="text-xs text-red-600 font-medium">Lost</span>
+            </label>
+          </div>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-slate-500">Left</span>
+          <div class="flex items-center gap-3">
+            <span id="wr-old-left" class="text-sm font-medium text-slate-700"></span>
+            <label id="wr-left-lost-wrap" class="hidden flex items-center gap-1 cursor-pointer select-none">
+              <input type="checkbox" id="wr-left-lost" class="w-3.5 h-3.5 rounded border-slate-300 text-red-500 focus:ring-red-300">
+              <span class="text-xs text-red-600 font-medium">Lost</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <!-- New watch right -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">New Watch — Right <span class="text-red-500">*</span></label>
+        <select id="wr-new-right" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          <option value="">Loading…</option>
+        </select>
+      </div>
+      <!-- New watch left -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">New Watch — Left <span class="text-red-500">*</span></label>
+        <select id="wr-new-left" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+          <option value="">Loading…</option>
+        </select>
+      </div>
+      <!-- Sync datetime -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Sync Date & Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="wr-sync-datetime" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      </div>
+      <!-- Worn datetime -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Worn Date & Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="wr-worn-datetime" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      </div>
+      <!-- Next follow-up days -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Next Follow-up In <span class="text-red-500">*</span></label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="wr-next-days" min="1" class="w-32 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="7">
+          <span class="text-sm text-slate-500">days</span>
+        </div>
+      </div>
+      <!-- Notes -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <textarea id="wr-notes" rows="3" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Optional notes…"></textarea>
+      </div>
+    </div>
+    <div class="px-6 pt-4 pb-6 shrink-0">
+      <p id="wr-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <div class="flex gap-3">
+        <button type="button" onclick="hideModal('watch-record-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button id="wr-save" type="button" onclick="saveWatchRecord()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Save</button>
       </div>
     </div>
   </div>
