@@ -50,13 +50,20 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 4. ✅ Patients list page
 5. ✅ Patient detail page — overview, key dates, events panels
 6. ✅ Device setup modal (`exp_device_install`)
-7. ✅ Activation modal (`activation`) — including agwatch assignment
-8. ✅ Prescription modals (ADL + VCG d1 and d15) — ✅ Home visit + follow-up call + training completion modals — ⬜ Assessment modals (a1, a2)
-9. ⬜ Devices page
-10. ⬜ SIMs page
-11. ⬜ Cleanup — remove old `dashboard.html` and unused JS
-12. ⬜ Test all routes and functionality
-13. ⬜ Merge to `main`
+7. ✅ Activation modal (`activation`) — watch assignment removed; activation seeds open `watch_record` chain entry
+8. ✅ Prescription modals (ADL + VCG d1 and d15)
+9. ✅ Home visit + training completion modals
+10. ✅ Follow-up call modal — including triggered events (adverse_event, robot_issue, watch_record)
+11. ✅ Agwatch timing modal
+12. ✅ Watch record modal — chain + triggered modes, lost watch handling
+13. ⬜ Patient call modal
+14. ⬜ Assessment modals (a1, a2)
+15. ⬜ Patient detail tab content — Call Logs, Adverse Events, Watch Records, Robot Issues (exp only)
+16. ⬜ Devices page
+17. ⬜ SIMs page
+18. ⬜ Cleanup — remove old `dashboard.html` and unused JS
+19. ⬜ Test all routes and functionality
+20. ⬜ Merge to `main`
 
 ---
 
@@ -96,6 +103,31 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
   - `prefill: <event_id>` — pre-filled from another completed event's `completion_date` but editable; future-date guard applies
   - The source for each event is documented in the event catalogue in `docs/data_schemas.md`. For `=` and `prefill` sources, the referenced event is always complete by the time the modal opens (enforced by `depends_on`).
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
+- Free event types: `patient_call`, `adverse_event`, `robot_issue` (experimental only), `watch_record`, `discontinuation`. `technical_fault` was renamed to `robot_issue` — do not use the old name anywhere.
+- **Triggered events:** `adverse_event` and `robot_issue` can **only** be created via a `patient_call` or follow-up call modal — never standalone. `watch_record` can be standalone (open chain entry) or triggered by a call.
+  - Bidirectional references: calling event stores `triggered: [{type, id}, ...]`; spawned event stores `triggered_by: {type, id}`.
+  - For `watch_record` triggered by a call: the existing open `incomplete` chain entry is **claimed** (no new entry created). `triggered_by` is stamped on the `incomplete` entry at call-save time. `scheduled_date` is also updated to `[now, now]` so it appears immediately as overdue.
+  - Watch record trigger toggle in call modals is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
+- **Watch record chain:** seeded at activation with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`. On each completion, a new open chain entry is seeded with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`.
+- **Lost watch:** when a watch is marked lost in the watch record modal, htDash sets `lost_date` on the inventory record and closes the assignment with `lost: true`. `get_available_devices` filters out devices where `lost_date is not None`. Lost watches are permanently retired — no further assignments or records.
+- **Watch record modal notes:** required if any new watch is "No Watch Available" (null). Sync/worn datetimes are optional only when **both** new watches are null.
+
+---
+
+## Patient Detail Tab Order
+
+Tabs appear left-to-right in this order. Visibility is per group.
+
+| Tab | Experimental | Control |
+|---|---|---|
+| Overview | ✅ | ✅ |
+| Devices | ✅ | ✅ |
+| ADL | ✅ | ✅ |
+| Call Logs | ✅ | ✅ |
+| Adverse Events | ✅ | ✅ |
+| Watch Records | ✅ | ✅ |
+| Robot Issues | ✅ | ⬜ hidden |
+| Timeline | ✅ | ✅ |
 
 ---
 
@@ -133,7 +165,7 @@ Both event APIs must compute `blocked_by` using the same logic (depends_on entri
 | `routes/dashboard.py` | `GET /api/dashboard/events` | Cross-patient events |
 
 ### Protocol event openers (patient detail page)
-Every protocol event that has a modal must be listed in `EVENT_OPENERS` in `patient_detail.js`. When a new modal is implemented, add the entry.
+Every protocol event that has a modal must be listed in `EVENT_OPENERS` in `patient_detail.js`. When a new modal is implemented, add the entry. Currently registered: `exp_device_install`, `activation`, `discontinuation_reminder`, `adl_prescription_d01/d15`, `vcg_prescription_d01/d15`, `prescription_printout_d01/d15`, `home_visit_d02/d03/d15`, `followup_call_d07/d21`, `training_completion_d29`, `adl_agwatch_timing_d03/d15`, `vcg_agwatch_timing_d03/d15`, `watch_record`.
 
 ### Synthetic events
 Some events are not stored in `protocol_events.json` but injected at query time by both event APIs. These require matching `EVENT_OPENERS` entries in `patient_detail.js`.
