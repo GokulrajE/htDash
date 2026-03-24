@@ -51,7 +51,7 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 5. ✅ Patient detail page — overview, key dates, events panels
 6. ✅ Device setup modal (`exp_device_install`)
 7. ✅ Activation modal (`activation`) — including agwatch assignment
-8. ✅ Prescription modals (ADL + VCG d1 and d15) — ⬜ Remaining modals (home visits, calls, assessments)
+8. ✅ Prescription modals (ADL + VCG d1 and d15) — ✅ Home visit + follow-up call + training completion modals — ⬜ Assessment modals (a1, a2)
 9. ⬜ Devices page
 10. ⬜ SIMs page
 11. ⬜ Cleanup — remove old `dashboard.html` and unused JS

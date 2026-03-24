@@ -305,10 +305,19 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 
 ### Type-specific extra fields on `complete` entries
 
-**Scheduled call events** (`exp_d7_call`, `ctrl_d7_call`, etc.)
+**Simple visit/call events** (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `followup_call_d07`, `followup_call_d21`, `training_completion_d29`)
 ```json
-{ "duration_minutes": null, "summary": "", "attachments": [] }
+{ "notes": "" }
 ```
+
+No extra fields beyond the base schema — `notes` may be empty.
+
+**AG Watch Timing events** (`adl_agwatch_timing_d03`, `adl_agwatch_timing_d15`, `vcg_agwatch_timing_d03`, `vcg_agwatch_timing_d15`)
+```json
+{ "timing_file": "adl/adl_agwatch_timing_d03.json" }
+```
+
+The complete entry stores only a relative path to the timing file. See [AG Watch Timing files](#ag-watch-timing-files) below.
 
 **`a1_assessment`** / **`a2_assessment`**
 ```json
@@ -341,21 +350,21 @@ For the initial record (auto-completed at activation), `old_id` is always `null`
 | `"W001"` | `null`   | Watch missing — gap starts |
 | `null`   | `"W005"` | Missing watch replaced — gap ends |
 
-**`adl_prescription_d1`** / **`adl_prescription_d15`**
+**`adl_prescription_d01`** / **`adl_prescription_d15`**
 ```json
-{ "prescription_file": "adl/adl_prescription_d1.json" }
+{ "prescription_file": "adl/adl_prescription_d01.json" }
 ```
 
-**`vcg_prescription_d1`** / **`vcg_prescription_d15`**
+**`vcg_prescription_d01`** / **`vcg_prescription_d15`**
 ```json
-{ "prescription_file": "vcg_exercise/vcg_prescription_d1.json" }
+{ "prescription_file": "vcg_exercise/vcg_prescription_d01.json" }
 ```
 
 The complete entry stores only a relative path reference. The prescription data itself lives in the file — see [Prescription files](#prescription-files) below.
 
-**`prescription_printout_d1`** / **`prescription_printout_d15`**
+**`prescription_printout_d01`** / **`prescription_printout_d15`**
 ```json
-{ "attachment": "attachments/prescription_d1.pdf" }
+{ "attachment": "attachments/prescription_d01.pdf" }
 ```
 ```json
 { "attachment": "attachments/prescription_d15.pdf" }
@@ -463,7 +472,7 @@ Extra fields on `complete`:
 
 ## Prescription files
 
-### `adl/adl_prescription_d1.json` and `adl/adl_prescription_d15.json`
+### `adl/adl_prescription_d01.json` and `adl/adl_prescription_d15.json`
 
 Written by htDash when the therapist completes an ADL prescription event. The d15 file is independent — it is a full prescription, not a diff.
 
@@ -483,7 +492,7 @@ Written by htDash when the therapist completes an ADL prescription event. The d1
 }
 ```
 
-### `vcg_exercise/vcg_prescription_d1.json` and `vcg_exercise/vcg_prescription_d15.json`
+### `vcg_exercise/vcg_prescription_d01.json` and `vcg_exercise/vcg_prescription_d15.json`
 
 Written by htDash when the therapist completes a VCG prescription event. `vcg_group` mirrors `<homer_id>.json` for self-documentation.
 
@@ -514,6 +523,49 @@ Written by htDash when the therapist completes a VCG prescription event. `vcg_gr
 
 ---
 
+## AG Watch Timing files
+
+### `adl/adl_agwatch_timing_d03.json` and `adl/adl_agwatch_timing_d15.json`
+
+Written by htDash when the therapist completes an ADL AG watch timing event. One entry per prescribed ADL exercise. The exercise list is sourced from the corresponding ADL prescription file (`adl_prescription_d01.json` for d03, `adl_prescription_d15.json` for d15).
+
+### `vcg_exercise/vcg_agwatch_timing_d03.json` and `vcg_exercise/vcg_agwatch_timing_d15.json`
+
+Written by htDash when the therapist completes a VCG AG watch timing event (control patients only). The exercise list is sourced from `vcg_prescription_d01.json` (d03) or `vcg_prescription_d15.json` (d15).
+
+**Schema (all four files share the same structure):**
+
+```json
+{
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "filed_by": "<user_id>",
+  "timings": [
+    {
+      "exercise_id": "adl_2",
+      "start": "2026-03-23T10:35:12",
+      "end": "2026-03-23T10:37:45",
+      "notes": ""
+    },
+    {
+      "exercise_id": "adl_5",
+      "start": null,
+      "end": null,
+      "notes": "Patient skipped — shoulder pain"
+    }
+  ],
+  "notes": ""
+}
+```
+
+**Field rules:**
+- `timings`: one entry per prescribed exercise, in prescription order
+- `start` / `end`: ISO 8601 datetime to **seconds** resolution (`"YYYY-MM-DDTHH:MM:SS"`), or `null` if the exercise was not timed
+- `notes` (per entry): free text; **required if `start` or `end` is `null`**, otherwise optional
+- `notes` (top-level): optional general notes for the whole session
+- Once written, timing files are **not edited** — re-opening the modal is not supported
+
+---
+
 ## `attachments/`
 
 Flat folder at patient root. General filename convention:
@@ -528,7 +580,7 @@ The datetime is the `completion_date` of the event, not the server filing time.
 
 | File | Created by |
 |------|-----------|
-| `prescription_d1.pdf` | `prescription_printout_d1` event |
+| `prescription_d01.pdf` | `prescription_printout_d01` event |
 | `prescription_d15.pdf` | `prescription_printout_d15` event |
 
 Every file in `attachments/` must be referenced in `protocol_events.json`.
@@ -659,7 +711,7 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 | `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
 | `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
 | `technical_fault` | Technical Fault | anytime | — | — | `activation` | `user` | Document any device malfunction affecting therapy delivery. May trigger a training pause. |
-| `prescription_printout_d1` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d1` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
+| `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
 | `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
 
 #### Control only
@@ -667,21 +719,25 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 | ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
 |----|------|------|-----------|--------|--------------|--------------|---------|
 | `activation` | Patient Activation | strict | assignment | day 1–5 | — | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
-| `vcg_prescription_d1` | VCG Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
+| `vcg_prescription_d01` | VCG Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
+| `vcg_agwatch_timing_d03` | Add VCG AG Watch Timings | point_in_time | activation | day 3 | `home_visit_d03` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 3. |
 | `vcg_prescription_d15` | VCG Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the VCG exercise programme at the mid-point of the intervention. |
-| `prescription_printout_d1` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d1`, `vcg_prescription_d1` | `= activation` | Provide the patient with a printed copy of their personalised ADL + VCG therapy prescription. |
+| `vcg_agwatch_timing_d15` | Add VCG AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 15. |
+| `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01`, `vcg_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL + VCG therapy prescription. |
 | `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15`, `vcg_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL + VCG therapy prescription. |
 
 #### Shared (both groups)
 
 | ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
 |----|------|------|-----------|--------|--------------|--------------|---------|
-| `adl_prescription_d1` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
+| `adl_prescription_d01` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
 | `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | `user` | Second home visit — review training progress and address any early questions or difficulties. |
 | `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | `user` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
+| `adl_agwatch_timing_d03` | Add ADL AG Watch Timings Day 03 | point_in_time | activation | day 3 | `home_visit_d03` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 3. |
 | `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
 | `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
 | `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the ADL exercise programme at the mid-point of the intervention. |
+| `adl_agwatch_timing_d15` | Add ADL AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 15. |
 | `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | `user` | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
 | `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | `user` | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
 | `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |

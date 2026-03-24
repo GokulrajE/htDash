@@ -540,12 +540,22 @@ const EVENT_OPENERS = {
   exp_device_install:        (ev) => openDeviceSetupModal(ev.id),
   activation:                (ev) => openActivationModal(ev.id),
   discontinuation_reminder:  (_ev) => openDiscontinueModal(),
-  adl_prescription_d1:       (ev) => openAdlPrescriptionModal(ev),
+  adl_prescription_d01:      (ev) => openAdlPrescriptionModal(ev),
   adl_prescription_d15:      (ev) => openAdlPrescriptionModal(ev),
-  vcg_prescription_d1:       (ev) => openVcgPrescriptionModal(ev),
+  vcg_prescription_d01:      (ev) => openVcgPrescriptionModal(ev),
   vcg_prescription_d15:      (ev) => openVcgPrescriptionModal(ev),
-  prescription_printout_d1:  (ev) => openPrescriptionPrintoutModal(ev),
+  prescription_printout_d01: (ev) => openPrescriptionPrintoutModal(ev),
   prescription_printout_d15: (ev) => openPrescriptionPrintoutModal(ev),
+  home_visit_d02:            (ev) => openSimpleEventModal(ev),
+  home_visit_d03:            (ev) => openSimpleEventModal(ev),
+  home_visit_d15:            (ev) => openSimpleEventModal(ev),
+  followup_call_d07:         (ev) => openSimpleEventModal(ev),
+  followup_call_d21:         (ev) => openSimpleEventModal(ev),
+  training_completion_d29:   (ev) => openSimpleEventModal(ev),
+  adl_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
+  adl_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -969,7 +979,7 @@ async function openAdlPrescriptionModal(ev) {
     }
     // Pre-populate for d15 revision
     if (protocolId === 'adl_prescription_d15') {
-      const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d1`);
+      const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d01`);
       if (res.ok) {
         const prev = await res.json();
         _adlSelected = (prev.prescribed_exercises || []).map(pe => {
@@ -1057,7 +1067,7 @@ async function openVcgPrescriptionModal(ev) {
     }
     // Pre-populate for d15 revision
     if (protocolId === 'vcg_prescription_d15') {
-      const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d1`);
+      const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d01`);
       if (res.ok) {
         const prev = await res.json();
         _vcgSelected = (prev.prescribed_exercises || []).map(pe => {
@@ -1109,20 +1119,30 @@ async function submitVcgPrescription() {
 let _adlTabLoaded = false;
 let _vcgTabLoaded = false;
 
-function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath) {
-  const exMap = Object.fromEntries(exercises.map(e => [e.id, e]));
+function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath, timingData) {
+  const exMap     = Object.fromEntries(exercises.map(e => [e.id, e]));
+  const timingMap = Object.fromEntries(
+    (timingData?.timings || []).map(t => [t.exercise_id, t])
+  );
   const rows = (data.prescribed_exercises || []).map((pe, i) => {
     const name = exMap[pe.exercise_id]?.name || pe.exercise_id;
     const notesHtml = pe.notes
       ? `<p class="text-xs text-slate-400 mt-0.5 italic">${pe.notes}</p>` : '';
+    const t = timingMap[pe.exercise_id];
+    const timingHtml = t
+      ? `<p class="text-xs font-mono text-slate-400 mt-0.5">${t.start ? t.start.split('T')[1] : '—'} → ${t.end ? t.end.split('T')[1] : '—'}</p>`
+      : '';
     return `
-      <div class="flex items-baseline gap-3 py-2.5 border-b border-slate-100 last:border-b-0">
-        <span class="text-xs font-bold text-slate-400 w-5 flex-shrink-0 text-right">${i + 1}.</span>
+      <div class="flex items-start gap-3 py-2.5 border-b border-slate-100 last:border-b-0">
+        <span class="w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">${i + 1}</span>
         <div class="flex-1 min-w-0">
           <span class="text-sm font-semibold text-slate-800">${name}</span>
           ${notesHtml}
         </div>
-        <span class="text-xs font-medium text-slate-500 whitespace-nowrap flex-shrink-0">${pe.blocks} blocks × ${pe.repetitions} reps</span>
+        <div class="flex-shrink-0 text-right">
+          <p class="text-xs font-medium text-slate-500 whitespace-nowrap">${pe.blocks} blocks × ${pe.repetitions} reps</p>
+          ${timingHtml}
+        </div>
       </div>`;
   }).join('');
 
@@ -1135,13 +1155,13 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
   const downloadLink = attachmentPath ? `
     <a href="/api/patients/${PATIENT_HOMER_ID}/attachment/${attachmentPath}"
        download
-       class="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-800">
+       class="inline-flex items-center gap-1.5 text-xs font-semibold text-white/90 hover:text-white">
       <i class="fas fa-file-pdf"></i> Download PDF
     </a>` : '';
 
   return `
     <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-      <div class="flex items-center justify-between px-5 py-4 ${headerClass} border-b border-slate-100">
+      <div class="flex items-center justify-between px-5 py-3 ${headerClass}">
         <h3 class="text-sm font-bold">${dayLabel}</h3>
         <div class="flex items-center gap-4">
           ${downloadLink}
@@ -1164,14 +1184,18 @@ async function loadAdlTab() {
   if (!container) return;
 
   try {
-    const [exRes, d1Res, d15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
       fetch('/api/exercises?type=adl'),
-      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d1`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d03`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t03       = t03Res.ok ? await t03Res.json() : null;
+    const t15       = t15Res.ok ? await t15Res.json() : null;
 
     if (!d1 && !d15) {
       container.innerHTML = `
@@ -1180,11 +1204,11 @@ async function loadAdlTab() {
           <p class="font-medium">No ADL prescriptions recorded yet.</p>
         </div>`;
     } else {
-      const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d1');
+      const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d01');
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-50 text-blue-800',  printD15?.attachment);
-      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-slate-50 text-slate-700', printD1?.attachment);
+      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-600 text-white',  printD15?.attachment, t15);
+      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-blue-400 text-white', printD1?.attachment,  t03);
       container.innerHTML = html;
     }
     _adlTabLoaded = true;
@@ -1202,14 +1226,18 @@ async function loadVcgTab() {
   const groupLabel = VCG_GROUP_LABELS[vcgGroup] || vcgGroup || '';
 
   try {
-    const [exRes, d1Res, d15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
       fetch(`/api/exercises?type=vcg&group=${vcgGroup}`),
-      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d1`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d03`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t03       = t03Res.ok ? await t03Res.json() : null;
+    const t15       = t15Res.ok ? await t15Res.json() : null;
 
     if (!d1 && !d15) {
       container.innerHTML = `
@@ -1218,12 +1246,12 @@ async function loadVcgTab() {
           <p class="font-medium">No VCG prescriptions recorded yet.</p>
         </div>`;
     } else {
-      const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d1');
+      const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d01');
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       const suffix = groupLabel ? ` · <span class="font-normal opacity-70">${groupLabel}</span>` : '';
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-50 text-teal-800',  printD15?.attachment);
-      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-slate-50 text-slate-700', printD1?.attachment);
+      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-600 text-white',  printD15?.attachment, t15);
+      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-teal-400 text-white', printD1?.attachment,  t03);
       container.innerHTML = html;
     }
     _vcgTabLoaded = true;
@@ -1284,6 +1312,182 @@ async function printPrescriptionPrintout() {
   if (attachment) {
     window.open(`/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`, '_blank');
   }
+}
+
+// ── Simple event modal (home visits, follow-up calls, training completion) ────
+
+let _simpleEventId         = null;
+let _simpleProtocolEventId = null;
+
+function openSimpleEventModal(ev) {
+  _simpleEventId         = ev.id;
+  _simpleProtocolEventId = ev.protocol_event_id;
+  document.getElementById('simple-event-title').textContent = ev.event_name;
+  document.getElementById('simple-event-date').value        = '';
+  document.getElementById('simple-event-notes').value       = '';
+  const err = document.getElementById('simple-event-error');
+  err.textContent = '';
+  err.classList.add('hidden');
+  showModal('simple-event-modal');
+}
+
+async function saveSimpleEvent() {
+  const dateVal = document.getElementById('simple-event-date').value;
+  const notes   = document.getElementById('simple-event-notes').value.trim();
+  const err     = document.getElementById('simple-event-error');
+  err.classList.add('hidden');
+
+  if (!dateVal) {
+    err.textContent = 'Event date is required.';
+    err.classList.remove('hidden');
+    return;
+  }
+
+  const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/simple`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      event_id:          _simpleEventId,
+      protocol_event_id: _simpleProtocolEventId,
+      completion_date:   dateVal,
+      notes,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    err.textContent = data.error || 'Failed to save.';
+    err.classList.remove('hidden');
+    return;
+  }
+  hideModal('simple-event-modal');
+  await loadPatientEvents();
+}
+
+// ── AG Watch Timing modal ─────────────────────────────────────────────────────
+
+let _agwatchEventId         = null;
+let _agwatchProtocolEventId = null;
+
+async function openAgwatchTimingModal(ev) {
+  _agwatchEventId         = ev.id;
+  _agwatchProtocolEventId = ev.protocol_event_id;
+
+  document.getElementById('agwatch-timing-title').textContent = ev.event_name;
+  document.getElementById('agwatch-timing-notes').value       = '';
+  const errEl = document.getElementById('agwatch-timing-error');
+  errEl.textContent = '';
+  errEl.classList.add('hidden');
+
+  // Pre-fill session date from scheduled_date[0], fallback to today
+  const schedDate = Array.isArray(ev.scheduled_date) ? ev.scheduled_date[0] : ev.scheduled_date;
+  const dateOnly  = schedDate ? schedDate.split('T')[0] : new Date().toISOString().split('T')[0];
+  document.getElementById('agwatch-session-date').value = dateOnly;
+
+  const bodyEl = document.getElementById('agwatch-timing-body');
+  bodyEl.innerHTML = '<p class="text-sm text-slate-500">Loading exercises…</p>';
+  showModal('agwatch-timing-modal');
+
+  try {
+    const res = await fetch(
+      `/api/patients/${PATIENT_HOMER_ID}/agwatch-timing-exercises/${ev.protocol_event_id}`
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      bodyEl.innerHTML = `<p class="text-sm text-red-500">${data.error || 'Failed to load exercises.'}</p>`;
+      return;
+    }
+    bodyEl.innerHTML = data.exercises.map((ex, i) => `
+      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold text-slate-400 uppercase tracking-wide w-6">${i + 1}</span>
+          <span class="text-sm font-medium text-slate-800">${ex.name}</span>
+          <span class="ml-auto text-xs text-slate-400">${ex.blocks} blocks · ${ex.repetitions} reps</span>
+        </div>
+        <input type="hidden" class="agwatch-ex-id" value="${ex.exercise_id}">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Start time</label>
+            <div class="flex gap-1">
+              <input type="time" class="agwatch-start grow px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" step="1">
+              <button type="button" onclick="this.previousElementSibling.value=''" class="px-2 text-slate-400 hover:text-slate-600 border border-slate-200 rounded-xl text-xs">✕</button>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">End time</label>
+            <div class="flex gap-1">
+              <input type="time" class="agwatch-end grow px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" step="1">
+              <button type="button" onclick="this.previousElementSibling.value=''" class="px-2 text-slate-400 hover:text-slate-600 border border-slate-200 rounded-xl text-xs">✕</button>
+            </div>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(required if timing is incomplete)</span></label>
+          <input type="text" class="agwatch-notes w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="e.g. patient unable to perform">
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    bodyEl.innerHTML = '<p class="text-sm text-red-500">Network error loading exercises.</p>';
+  }
+}
+
+async function saveAgwatchTiming() {
+  const errEl = document.getElementById('agwatch-timing-error');
+  errEl.textContent = '';
+  errEl.classList.add('hidden');
+
+  const sessionDate = document.getElementById('agwatch-session-date').value;
+  if (!sessionDate) {
+    errEl.textContent = 'Session date is required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  function toDatetime(timeVal) {
+    if (!timeVal) return null;
+    // time input with step=1 gives HH:MM:SS; pad if browser gives HH:MM
+    const t = timeVal.length === 5 ? timeVal + ':00' : timeVal;
+    return `${sessionDate}T${t}`;
+  }
+
+  const rows    = document.querySelectorAll('#agwatch-timing-body > div');
+  const timings = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row   = rows[i];
+    const exId  = row.querySelector('.agwatch-ex-id').value;
+    const start = row.querySelector('.agwatch-start').value;
+    const end   = row.querySelector('.agwatch-end').value;
+    const notes = row.querySelector('.agwatch-notes').value.trim();
+    if ((!start || !end) && !notes) {
+      errEl.textContent = `Notes are required for exercise ${i + 1} when timing is incomplete.`;
+      errEl.classList.remove('hidden');
+      return;
+    }
+    timings.push({ exercise_id: exId, start: toDatetime(start), end: toDatetime(end), notes });
+  }
+
+  const globalNotes = document.getElementById('agwatch-timing-notes').value.trim();
+
+  const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/agwatch-timing`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      event_id:          _agwatchEventId,
+      protocol_event_id: _agwatchProtocolEventId,
+      timings,
+      notes: globalNotes,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errEl.textContent = data.error || 'Failed to save.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  hideModal('agwatch-timing-modal');
+  if (_agwatchProtocolEventId?.startsWith('adl_')) _adlTabLoaded = false;
+  if (_agwatchProtocolEventId?.startsWith('vcg_')) _vcgTabLoaded = false;
+  await loadPatientEvents();
 }
 
 // ── Load patient ──────────────────────────────────────────────────────────────

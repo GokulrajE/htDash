@@ -556,7 +556,7 @@ def api_activate_patient(homer_id):
 
 
 _PRINTOUT_PDF_FILES = {
-    'prescription_printout_d1':  'attachments/prescription_d1.pdf',
+    'prescription_printout_d01': 'attachments/prescription_d01.pdf',
     'prescription_printout_d15': 'attachments/prescription_d15.pdf',
 }
 
@@ -654,6 +654,243 @@ def api_get_attachment(homer_id, rel_path):
         return jsonify({'error': 'File not found'}), 404
     from flask import send_file
     return send_file(file_path, as_attachment=True, download_name=file_path.name)
+
+
+_SIMPLE_EVENT_IDS = {
+    'home_visit_d02',
+    'home_visit_d03',
+    'home_visit_d15',
+    'followup_call_d07',
+    'followup_call_d21',
+    'training_completion_d29',
+}
+
+_SIMPLE_EVENT_LOG_MESSAGES = {
+    'home_visit_d02':           'Home visit recorded — Day 02',
+    'home_visit_d03':           'Home visit recorded — Day 03',
+    'home_visit_d15':           'Home visit recorded — Day 15',
+    'followup_call_d07':        'Follow-up call recorded — Day 07',
+    'followup_call_d21':        'Follow-up call recorded — Day 21',
+    'training_completion_d29':  'Training completion visit recorded',
+}
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/simple', methods=['POST'])
+def api_complete_simple_event(homer_id):
+    """Complete a simple protocol event that only requires a date and optional notes."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    data              = request.get_json() or {}
+    event_id          = data.get('event_id')
+    protocol_event_id = (data.get('protocol_event_id') or '').strip()
+    completion_date   = (data.get('completion_date') or '').strip()
+    notes             = (data.get('notes') or '').strip()
+
+    if protocol_event_id not in _SIMPLE_EVENT_IDS:
+        return jsonify({'error': 'Invalid protocol event ID.'}), 400
+    if not completion_date:
+        return jsonify({'error': 'Event date is required.'}), 400
+    try:
+        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Event date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == protocol_event_id
+         and (event_id is None or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Event not found in incomplete list.'}), 404
+
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    complete_entry = {
+        **entry,
+        'completion_date': completion_date,
+        'filed_at':        filed_at,
+        'notes':           notes,
+    }
+
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      _SIMPLE_EVENT_LOG_MESSAGES[protocol_event_id])
+
+    return jsonify({'ok': True})
+
+
+# ── AG Watch Timing endpoints ──────────────────────────────────────────────────
+
+_AGWATCH_TIMING_CONFIG = {
+    'adl_agwatch_timing_d03': {
+        'prescription_event': 'adl_prescription_d01',
+        'timing_file':        'adl/adl_agwatch_timing_d03.json',
+        'ex_type':            'adl',
+    },
+    'adl_agwatch_timing_d15': {
+        'prescription_event': 'adl_prescription_d15',
+        'timing_file':        'adl/adl_agwatch_timing_d15.json',
+        'ex_type':            'adl',
+    },
+    'vcg_agwatch_timing_d03': {
+        'prescription_event': 'vcg_prescription_d01',
+        'timing_file':        'vcg_exercise/vcg_agwatch_timing_d03.json',
+        'ex_type':            'vcg',
+    },
+    'vcg_agwatch_timing_d15': {
+        'prescription_event': 'vcg_prescription_d15',
+        'timing_file':        'vcg_exercise/vcg_agwatch_timing_d15.json',
+        'ex_type':            'vcg',
+    },
+}
+
+
+@bp.route('/api/patients/<homer_id>/agwatch-timing-exercises/<protocol_event_id>', methods=['GET'])
+def api_agwatch_timing_exercises(homer_id, protocol_event_id):
+    """Return the exercise list for an agwatch timing event (from the relevant prescription)."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    cfg = _AGWATCH_TIMING_CONFIG.get(protocol_event_id)
+    if not cfg:
+        return jsonify({'error': 'Unknown agwatch timing event'}), 400
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    presc_path = _PRESCRIPTION_FILES.get(cfg['prescription_event'])
+    if not presc_path:
+        return jsonify({'error': 'Prescription event not found in config'}), 500
+
+    presc = _read_prescription(folder, homer_id, presc_path)
+    if not presc:
+        return jsonify({'error': 'Prescription file not found — complete the prescription first'}), 404
+
+    ex_data = _load_exercises()
+    if cfg['ex_type'] == 'adl':
+        ex_lookup = {e['id']: e['name'] for e in ex_data.get('adl', {}).get('exercises', [])}
+    else:
+        patient   = read_patient_meta(folder, homer_id) or {}
+        vcg_group = patient.get('vcgGroup', '')
+        ex_lookup = {e['id']: e['name']
+                     for e in ex_data.get('vcg', {}).get(vcg_group, {}).get('exercises', [])}
+
+    exercises = [
+        {
+            'exercise_id':  ex['exercise_id'],
+            'name':         ex_lookup.get(ex['exercise_id'], ex['exercise_id']),
+            'blocks':       ex.get('blocks'),
+            'repetitions':  ex.get('repetitions'),
+        }
+        for ex in presc.get('prescribed_exercises', [])
+    ]
+    return jsonify({'exercises': exercises})
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/agwatch-timing', methods=['POST'])
+def api_complete_agwatch_timing(homer_id):
+    """Record agwatch timing data and mark the event complete."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    data              = request.get_json() or {}
+    event_id          = data.get('event_id')
+    protocol_event_id = data.get('protocol_event_id', '').strip()
+    timings           = data.get('timings', [])
+    notes             = data.get('notes', '').strip()
+
+    cfg = _AGWATCH_TIMING_CONFIG.get(protocol_event_id)
+    if not cfg:
+        return jsonify({'error': 'Unknown agwatch timing event'}), 400
+
+    # Validate: if start or end is absent/null, per-entry notes are required
+    for i, t in enumerate(timings):
+        start = (t.get('start') or '').strip()
+        end   = (t.get('end')   or '').strip()
+        if not start or not end:
+            if not (t.get('notes') or '').strip():
+                return jsonify({'error': f'Notes are required for exercise {i + 1} when timing is incomplete.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == protocol_event_id
+         and (event_id is None or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Event not found in incomplete list.'}), 404
+
+    # Write the timing file
+    timing_rel = cfg['timing_file']
+    timing_path = get_patients_path(folder) / homer_id / timing_rel
+    timing_path.parent.mkdir(parents=True, exist_ok=True)
+    filed_at  = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    loginid   = flask_session.get('loginid', 'unknown')
+    timing_content = {
+        'filed_at':  filed_at,
+        'filed_by':  loginid,
+        'timings':   [
+            {
+                'exercise_id': t.get('exercise_id'),
+                'start':       (t.get('start') or '').strip() or None,
+                'end':         (t.get('end')   or '').strip() or None,
+                'notes':       (t.get('notes') or '').strip(),
+            }
+            for t in timings
+        ],
+        'notes': notes,
+    }
+    tmp = timing_path.with_suffix('.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(timing_content, f, indent=2)
+    os.replace(tmp, timing_path)
+
+    # Mark event complete
+    complete_entry = {
+        **entry,
+        'completion_date': filed_at,
+        'filed_at':        filed_at,
+        'timing_file':     timing_rel,
+    }
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    session_id = flask_session.get('session_id', -1)
+    log_label  = 'ADL' if cfg['ex_type'] == 'adl' else 'VCG'
+    day_label  = 'd03' if 'd03' in protocol_event_id else 'd15'
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      f'{log_label} AG watch timings recorded ({day_label})')
+
+    return jsonify({'ok': True})
 
 
 @bp.route('/api/patients/<homer_id>/complete-training', methods=['POST'])
@@ -2562,9 +2799,9 @@ def api_exercises():
 # ── Prescription file helpers ──────────────────────────────────────────────────
 
 _PRESCRIPTION_FILES = {
-    'adl_prescription_d1':  'adl/adl_prescription_d1.json',
+    'adl_prescription_d01': 'adl/adl_prescription_d01.json',
     'adl_prescription_d15': 'adl/adl_prescription_d15.json',
-    'vcg_prescription_d1':  'vcg_exercise/vcg_prescription_d1.json',
+    'vcg_prescription_d01': 'vcg_exercise/vcg_prescription_d01.json',
     'vcg_prescription_d15': 'vcg_exercise/vcg_prescription_d15.json',
 }
 
@@ -2606,10 +2843,28 @@ def api_get_prescription(homer_id, event_id):
     return jsonify(data)
 
 
+@bp.route('/api/patients/<homer_id>/agwatch-timing/<protocol_event_id>', methods=['GET'])
+def api_get_agwatch_timing(homer_id, protocol_event_id):
+    """Return a saved agwatch timing file."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    cfg = _AGWATCH_TIMING_CONFIG.get(protocol_event_id)
+    if not cfg:
+        return jsonify({'error': 'Unknown agwatch timing event'}), 400
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+    path = get_patients_path(folder) / homer_id / cfg['timing_file']
+    if not path.exists():
+        return jsonify({'error': 'Timing file not found'}), 404
+    with open(path, encoding='utf-8') as f:
+        return jsonify(json.load(f))
+
+
 # Maps prescription event_id → the completed event whose completion_date it inherits
 _PRESCRIPTION_DATE_SOURCE = {
-    'adl_prescription_d1':  'activation',
-    'vcg_prescription_d1':  'activation',
+    'adl_prescription_d01': 'activation',
+    'vcg_prescription_d01': 'activation',
     'adl_prescription_d15': 'home_visit_d15',
     'vcg_prescription_d15': 'home_visit_d15',
 }
@@ -2660,7 +2915,7 @@ def _complete_prescription_event(folder, homer_id, event_id, presc_file,
 
 @bp.route('/api/patients/<homer_id>/adl-prescription', methods=['POST'])
 def api_adl_prescription(homer_id):
-    """Complete adl_prescription_d1 or adl_prescription_d15."""
+    """Complete adl_prescription_d01 or adl_prescription_d15."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     if flask_session.get('privilege') not in ('admin', 'therapist'):
@@ -2676,8 +2931,8 @@ def api_adl_prescription(homer_id):
     exercises  = body.get('exercises', [])
     notes      = body.get('notes', '').strip()
 
-    if event_id not in ('adl_prescription_d1', 'adl_prescription_d15'):
-        return jsonify({'error': 'protocol_event_id must be adl_prescription_d1 or adl_prescription_d15'}), 400
+    if event_id not in ('adl_prescription_d01', 'adl_prescription_d15'):
+        return jsonify({'error': 'protocol_event_id must be adl_prescription_d01 or adl_prescription_d15'}), 400
     if not exercises:
         return jsonify({'error': 'At least one exercise is required.'}), 400
     for ex in exercises:
@@ -2690,7 +2945,7 @@ def api_adl_prescription(homer_id):
     session_id = flask_session.get('session_id', -1)
     filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     presc_file = _PRESCRIPTION_FILES[event_id]
-    log_msg    = 'ADL prescription recorded' if event_id.endswith('d1') else 'ADL prescription revised'
+    log_msg    = 'ADL prescription recorded' if event_id == 'adl_prescription_d01' else 'ADL prescription revised'
 
     presc_data = {
         'filed_at':             filed_at,
@@ -2712,7 +2967,7 @@ def api_adl_prescription(homer_id):
 
 @bp.route('/api/patients/<homer_id>/vcg-prescription', methods=['POST'])
 def api_vcg_prescription(homer_id):
-    """Complete vcg_prescription_d1 or vcg_prescription_d15."""
+    """Complete vcg_prescription_d01 or vcg_prescription_d15."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     if flask_session.get('privilege') not in ('admin', 'therapist'):
@@ -2728,8 +2983,8 @@ def api_vcg_prescription(homer_id):
     exercises  = body.get('exercises', [])
     notes      = body.get('notes', '').strip()
 
-    if event_id not in ('vcg_prescription_d1', 'vcg_prescription_d15'):
-        return jsonify({'error': 'protocol_event_id must be vcg_prescription_d1 or vcg_prescription_d15'}), 400
+    if event_id not in ('vcg_prescription_d01', 'vcg_prescription_d15'):
+        return jsonify({'error': 'protocol_event_id must be vcg_prescription_d01 or vcg_prescription_d15'}), 400
     if not exercises:
         return jsonify({'error': 'At least one exercise is required.'}), 400
     for ex in exercises:
@@ -2747,7 +3002,7 @@ def api_vcg_prescription(homer_id):
     session_id = flask_session.get('session_id', -1)
     filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     presc_file = _PRESCRIPTION_FILES[event_id]
-    log_msg    = 'VCG prescription recorded' if event_id.endswith('d1') else 'VCG prescription revised'
+    log_msg    = 'VCG prescription recorded' if event_id == 'vcg_prescription_d01' else 'VCG prescription revised'
 
     presc_data = {
         'filed_at':             filed_at,

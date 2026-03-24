@@ -67,7 +67,7 @@ Below the stats: **Overdue** and **Upcoming** event panels showing protocol even
 - **Overdue** — two sub-groups shown together: (1) active-window events (`start` ≤ today ≤ `end`) sorted ascending by end date, then (2) past-due events (`end` < today) sorted ascending by end date. Active-window and past-due events are clickable if `depends_on` is satisfied.
 - **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, within 7 days, sorted ascending by start date. **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
 - The two lists are mutually exclusive.
-- Each event row displays the **Homer ID** prominently alongside the event name (e.g. `HOCMCV003 · ADL Prescription D1`), since rows span multiple patients.
+- Each event row displays the **Homer ID** prominently alongside the event name (e.g. `HOCMCV003 · ADL Prescription Day 01`), since rows span multiple patients.
 
 **Actions:** None
 
@@ -155,18 +155,19 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 
   Data from the `complete` array in `GET /api/patients/<homer_id>/events` (all fields except `id` are returned).
 
-- **ADL tab** — shows the ADL prescription history for the patient:
-  - **Day 1 prescription** — displayed if `adl_prescription_d1` is complete. Shows the prescribed exercise list and notes. If `prescription_printout_d1` is also complete, shows a **Download PDF** link for `attachments/prescription_d1.pdf`.
-  - **Day 15 revised prescription** — displayed if `adl_prescription_d15` is complete. Shows the revised exercise list and notes. If `prescription_printout_d15` is also complete, shows a **Download PDF** link for `attachments/prescription_d15.pdf`.
+- **ADL tab** — shows the ADL prescription history for the patient. Each prescription is a card with a coloured header (day 01 = blue-400, day 15 = blue-600). Each exercise row shows: numbered circle badge · exercise name · blocks × reps (right-aligned). If the corresponding AG watch timing event is complete, the recorded `HH:MM:SS → HH:MM:SS` window appears below blocks × reps in the same row. Data is fetched in parallel via:
+  - `GET /api/patients/<homer_id>/prescription/adl_prescription_d01` (or `d15`)
+  - `GET /api/patients/<homer_id>/agwatch-timing/adl_agwatch_timing_d03` (or `d15`)
+  - If `prescription_printout_d01` (or `d15`) is complete, a **Download PDF** link appears in the card header.
 
-- **VCG tab** *(control patients only)* — shows the VCG prescription history:
-  - **Day 1 prescription** — displayed if `vcg_prescription_d1` is complete. Shows the prescribed exercise list and notes. If `prescription_printout_d1` is also complete, shows a **Download PDF** link for `attachments/prescription_d1.pdf`.
-  - **Day 15 revised prescription** — displayed if `vcg_prescription_d15` is complete. Shows the revised exercise list and notes. If `prescription_printout_d15` is also complete, shows a **Download PDF** link for `attachments/prescription_d15.pdf`.
+- **VCG tab** *(control patients only)* — same layout as ADL tab, using teal headers (day 01 = teal-400, day 15 = teal-600). Data fetched via:
+  - `GET /api/patients/<homer_id>/prescription/vcg_prescription_d01` (or `d15`)
+  - `GET /api/patients/<homer_id>/agwatch-timing/vcg_agwatch_timing_d03` (or `d15`)
 
 - **Stub tabs** — Devices, Adverse Events, Call Logs show "Coming soon"
 
 
-**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d1), [VCG Prescription](#vcg-prescription-vcg_prescription_d1), [Prescription Printout](#prescription-printout-prescription_printout_d1), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call), [Training Completion](#training-completion-training_completion_d29), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
+**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call), [Training Completion](#training-completion-training_completion_d29), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
 
 ---
 
@@ -302,8 +303,8 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ---
 
-### ADL Prescription (`adl_prescription_d1`)
-- Trigger: `adl_prescription_d1` event row on patient detail (both groups, day 1 after activation)
+### ADL Prescription (`adl_prescription_d01`)
+- Trigger: `adl_prescription_d01` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - Modal fields:
   - Event Date (read-only — auto-populated from the `activation` event's `completion_date`)
@@ -314,42 +315,42 @@ Each action is defined once here. Pages above reference which actions apply to t
     - The modal's **Save Prescription** button is **disabled** while any exercise card is in editing state — the therapist must Save or remove all cards before submitting
   - General Notes (textarea, optional)
 - Server actions:
-  - Write prescription to `adl/adl_prescription_d1.json` in the patient folder
-  - Move `adl_prescription_d1` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "adl/adl_prescription_d1.json"`
+  - Write prescription to `adl/adl_prescription_d01.json` in the patient folder
+  - Move `adl_prescription_d01` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "adl/adl_prescription_d01.json"`
 - Log message: `ADL prescription recorded`
 
 ---
 
-### VCG Prescription (`vcg_prescription_d1`)
-- Trigger: `vcg_prescription_d1` event row on patient detail (control patients only, day 1 after activation)
+### VCG Prescription (`vcg_prescription_d01`)
+- Trigger: `vcg_prescription_d01` event row on patient detail (control patients only, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - Modal fields:
   - Event Date (read-only — auto-populated from the `activation` event's `completion_date`)
   - **VCG Group** (read-only display — pre-filled from `vcgGroup` in `<homer_id>.json`, set at activation)
   - **Exercise search bar** — live-filters the VCG exercise list fetched from `GET /api/exercises?type=vcg&group=<vcg_group>`; clicking a result adds it to the selected list; already-selected exercises are excluded
-  - **Selected exercises list** (scrollable if long) — same two-state card behaviour as [ADL Prescription](#adl-prescription-adl_prescription_d1); **Save Prescription** button disabled while any card is in editing state
+  - **Selected exercises list** (scrollable if long) — same two-state card behaviour as [ADL Prescription](#adl-prescription-adl_prescription_d01); **Save Prescription** button disabled while any card is in editing state
   - General Notes (textarea, optional)
 - Server actions:
-  - Write prescription to `vcg_exercise/vcg_prescription_d1.json` in the patient folder
-  - Move `vcg_prescription_d1` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "vcg_exercise/vcg_prescription_d1.json"`
+  - Write prescription to `vcg_exercise/vcg_prescription_d01.json` in the patient folder
+  - Move `vcg_prescription_d01` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "vcg_exercise/vcg_prescription_d01.json"`
 - Log message: `VCG prescription recorded`
 
 ---
 
-### Prescription Printout (`prescription_printout_d1`)
-- Trigger: `prescription_printout_d1` event row on patient detail (both groups, day 1 after activation)
+### Prescription Printout (`prescription_printout_d01`)
+- Trigger: `prescription_printout_d01` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
-- `depends_on`: `adl_prescription_d1` (both groups); `vcg_prescription_d1` (control only)
+- `depends_on`: `adl_prescription_d01` (both groups); `vcg_prescription_d01` (control only)
 - Modal: `prescription-printout-modal`
   - Title: "Therapy Prescription Printout"
   - Patient ID display (read-only)
   - PDF preview area (TODO: generate and render prescription PDF)
-  - **Save PDF** button — generates PDF, saves to `attachments/prescription_d1.pdf`, marks event complete, downloads file to browser
-  - **Print** button — generates PDF, saves to `attachments/prescription_d1.pdf`, marks event complete, sends to printer
+  - **Save PDF** button — generates PDF, saves to `attachments/prescription_d01.pdf`, marks event complete, downloads file to browser
+  - **Print** button — generates PDF, saves to `attachments/prescription_d01.pdf`, marks event complete, sends to printer
 - Server actions:
   - Generate prescription PDF (TODO)
-  - Save PDF to `attachments/prescription_d1.pdf` in the patient folder (overwrite if exists)
-  - Move `prescription_printout_d1` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date` (current datetime), `filed_at` (current datetime), `attachment: "attachments/prescription_d1.pdf"`
+  - Save PDF to `attachments/prescription_d01.pdf` in the patient folder (overwrite if exists)
+  - Move `prescription_printout_d01` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date` (current datetime), `filed_at` (current datetime), `attachment: "attachments/prescription_d01.pdf"`
 - Log message: `Prescription printout generated`
 
 ---
@@ -358,7 +359,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: `prescription_printout_d15` event row on patient detail (both groups, day 15 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `adl_prescription_d15` (both groups); `vcg_prescription_d15` (control only)
-- Modal: `prescription-printout-modal` (shared with d1)
+- Modal: `prescription-printout-modal` (shared with d01)
   - Title: "Revised Therapy Prescription Printout"
   - Patient ID display (read-only)
   - PDF preview area (TODO: generate and render revised prescription PDF)
@@ -376,9 +377,9 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: `adl_prescription_d15` event row on patient detail (both groups, day 15 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `home_visit_d15` (both groups)
-- Modal fields: same structure as [ADL Prescription](#adl-prescription-adl_prescription_d1), with:
+- Modal fields: same structure as [ADL Prescription](#adl-prescription-adl_prescription_d01), with:
   - Event Date (read-only — auto-populated from the `home_visit_d15` event's `completion_date`)
-  - Exercise list and notes pre-populated from `adl/adl_prescription_d1.json` — all cards open in **compact state** (already saved); therapist edits individual cards as needed
+  - Exercise list and notes pre-populated from `adl/adl_prescription_d01.json` — all cards open in **compact state** (already saved); therapist edits individual cards as needed
 - Server actions:
   - Write revised prescription to `adl/adl_prescription_d15.json` in the patient folder
   - Move `adl_prescription_d15` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "adl/adl_prescription_d15.json"`
@@ -390,10 +391,10 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: `vcg_prescription_d15` event row on patient detail (control patients only, day 15 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `home_visit_d15`
-- Modal fields: same structure as [VCG Prescription](#vcg-prescription-vcg_prescription_d1), with:
+- Modal fields: same structure as [VCG Prescription](#vcg-prescription-vcg_prescription_d01), with:
   - Event Date (read-only — auto-populated from the `home_visit_d15` event's `completion_date`)
   - VCG Group read-only (from `vcgGroup` in `<homer_id>.json` — fixed for entire study)
-  - Exercise list and notes pre-populated from `vcg_exercise/vcg_prescription_d1.json` — all cards open in **compact state**; therapist edits individual cards as needed
+  - Exercise list and notes pre-populated from `vcg_exercise/vcg_prescription_d01.json` — all cards open in **compact state**; therapist edits individual cards as needed
 - Server actions:
   - Write revised prescription to `vcg_exercise/vcg_prescription_d15.json` in the patient folder
   - Move `vcg_prescription_d15` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `prescription_file: "vcg_exercise/vcg_prescription_d15.json"`
@@ -404,8 +405,12 @@ Each action is defined once here. Pages above reference which actions apply to t
 ### Home Visit (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`)
 - Trigger: respective event row on patient detail
 - Allowed users: `admin`, `therapist`
-- Modal fields: TBD
-- Server actions: TBD
+- Modal: `simple-event-modal` (shared)
+  - Title: event name (e.g. "Home Visit Day 02")
+  - Event Date (datetime, required; cannot be in the future)
+  - Notes (textarea, optional)
+- Server actions:
+  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
 - Log message: `Home visit recorded — Day <N>`
 
 ---
@@ -413,17 +418,53 @@ Each action is defined once here. Pages above reference which actions apply to t
 ### Follow-up Call (`followup_call_d07`, `followup_call_d21`)
 - Trigger: respective event row on patient detail
 - Allowed users: `admin`, `therapist`
-- Modal fields: TBD
-- Server actions: TBD
+- Modal: `simple-event-modal` (shared)
+  - Title: event name (e.g. "Follow-up Phone Call Day 07")
+  - Event Date (datetime, required; cannot be in the future)
+  - Notes (textarea, optional)
+- Server actions:
+  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
 - Log message: `Follow-up call recorded — Day <N>`
+
+---
+
+### AG Watch Timings (`adl_agwatch_timing_d03`, `adl_agwatch_timing_d15`, `vcg_agwatch_timing_d03`, `vcg_agwatch_timing_d15`)
+- Trigger: respective event row on patient detail
+- `adl_agwatch_timing_d03` / `adl_agwatch_timing_d15` — both groups; `vcg_agwatch_timing_d03` / `vcg_agwatch_timing_d15` — control only
+- Allowed users: `admin`, `therapist`
+- `depends_on`: `home_visit_d03` (d03 variants); `home_visit_d15` (d15 variants)
+- Modal: `agwatch-timing-modal`
+  - Title: event name (e.g. "Add ADL AG Watch Timings Day 03")
+  - **Session date** (read-only — auto-populated from the home visit event's `scheduled_date[0]`; fixed, not editable)
+  - One row per prescribed exercise (exercise list loaded from the associated prescription file at modal open):
+    - Exercise name + block/rep summary (read-only)
+    - **Start time** (`HH:MM:SS`, optional) + **✕ clear button**
+    - **End time** (`HH:MM:SS`, optional) + **✕ clear button**
+    - **Notes** (text input, optional if both times are filled; **required if either time is missing**)
+  - Global Notes (textarea, optional)
+  - **Save** button — combines session date + each time to produce `YYYY-MM-DDTHH:MM:SS`; non-editable after submission
+- Associated prescription files:
+  - `adl_agwatch_timing_d03` → exercises from `adl/adl_prescription_d01.json`
+  - `adl_agwatch_timing_d15` → exercises from `adl/adl_prescription_d15.json`
+  - `vcg_agwatch_timing_d03` → exercises from `vcg_exercise/vcg_prescription_d01.json`
+  - `vcg_agwatch_timing_d15` → exercises from `vcg_exercise/vcg_prescription_d15.json`
+- Server actions:
+  - On modal open — `GET /api/patients/<homer_id>/agwatch-timing-exercises/<protocol_event_id>` — returns exercise list from the associated prescription file
+  - On save — `POST /api/patients/<homer_id>/complete-event/agwatch-timing` — validates per-entry notes, writes timing JSON file, moves event to `complete`
+  - For tab display — `GET /api/patients/<homer_id>/agwatch-timing/<protocol_event_id>` — returns the saved timing file for rendering inline in the ADL/VCG tab
+- Log message: `<ADL|VCG> AG watch timings recorded (d03|d15)`
 
 ---
 
 ### Training Completion Visit (`training_completion_d29`)
 - Trigger: `training_completion_d29` event row on patient detail (active patients, day 29)
 - Allowed users: `admin`, `therapist`
-- Modal fields: TBD
-- Server actions: TBD
+- Modal: `simple-event-modal` (shared)
+  - Title: "Training Completion Day 29"
+  - Event Date (datetime, required; cannot be in the future)
+  - Notes (textarea, optional)
+- Server actions:
+  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
 - Log message: `Training completion visit recorded`
 
 ---
