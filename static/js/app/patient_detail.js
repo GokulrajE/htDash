@@ -1581,7 +1581,9 @@ const _WR_TRIGGER_NAMES = {
   patient_call:      'Patient Call',
 };
 
-let _wrEventId = null;
+let _wrEventId  = null;
+let _wrOldRight = null;
+let _wrOldLeft  = null;
 
 async function openWatchRecordModal(ev) {
   _wrEventId = ev.id;
@@ -1598,14 +1600,23 @@ async function openWatchRecordModal(ev) {
   }
 
   // Current watches + Lost checkboxes
-  const oldRight = patientData?.agWatchRightID || null;
-  const oldLeft  = patientData?.agWatchLeftID  || null;
-  document.getElementById('wr-old-right').textContent = oldRight || 'Not assigned';
-  document.getElementById('wr-old-left').textContent  = oldLeft  || 'Not assigned';
-  document.getElementById('wr-right-lost-wrap').classList.toggle('hidden', !oldRight);
-  document.getElementById('wr-left-lost-wrap').classList.toggle('hidden', !oldLeft);
+  _wrOldRight = patientData?.agWatchRightID || null;
+  _wrOldLeft  = patientData?.agWatchLeftID  || null;
+  const twoWatches = !!(_wrOldRight && _wrOldLeft);
+
+  document.getElementById('wr-old-right').textContent = _wrOldRight || 'Not assigned';
+  document.getElementById('wr-old-left').textContent  = _wrOldLeft  || 'Not assigned';
+  document.getElementById('wr-right-lost-wrap').classList.toggle('hidden', !_wrOldRight);
+  document.getElementById('wr-left-lost-wrap').classList.toggle('hidden',  !_wrOldLeft);
   document.getElementById('wr-right-lost').checked = false;
   document.getElementById('wr-left-lost').checked  = false;
+
+  // Show/hide selectors and sync based on watch count
+  document.getElementById('wr-right-current-row').classList.toggle('hidden', !_wrOldRight);
+  document.getElementById('wr-left-current-row').classList.toggle('hidden',  !_wrOldLeft);
+  document.getElementById('wr-right-wrap').classList.toggle('hidden', !_wrOldRight);
+  document.getElementById('wr-left-wrap').classList.toggle('hidden',  !_wrOldLeft);
+  document.getElementById('wr-sync-wrap').classList.toggle('hidden',  !twoWatches);
 
   // Reset fields
   document.getElementById('wr-new-right').innerHTML  = '<option value="">Loading…</option>';
@@ -1623,31 +1634,84 @@ async function openWatchRecordModal(ev) {
 
   try {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-agwatches`);
-    const { agwatch } = await res.json();
-    const NO_WATCH_OPT = '<option value="__none__">No Watch Available</option>';
+    const { agwatch, current_right, current_left } = await res.json();
+    const NO_WATCH_VAL = '__none__';
+    const NO_WATCH_OPT = `<option value="${NO_WATCH_VAL}">No Watch Available</option>`;
 
-    function buildOpts(watches, excludeId) {
-      const available = watches.filter(d => d.id !== excludeId);
+    const rightSel    = document.getElementById('wr-new-right');
+    const leftSel     = document.getElementById('wr-new-left');
+    const syncInput   = document.getElementById('wr-sync-datetime');
+    const wornInput   = document.getElementById('wr-worn-datetime');
+    const rightLostCb = document.getElementById('wr-right-lost');
+    const leftLostCb  = document.getElementById('wr-left-lost');
+
+    // True if any watch is being marked lost — overrides the right-as-reference lock.
+    function anyLost() {
+      return (rightLostCb.checked && !!_wrOldRight) ||
+             (leftLostCb.checked  && !!_wrOldLeft);
+    }
+
+    // Sync/worn disabled only when both watches are kept as current (and none lost).
+    function updateDatetimeFields() {
+      const bothCurrent = !anyLost() && twoWatches &&
+        current_right && rightSel.value === current_right.id &&
+        current_left  && leftSel.value  === current_left.id;
+      const syncRequired = twoWatches && !bothCurrent;
+      const wornRequired = !bothCurrent;
+      syncInput.disabled = !syncRequired;
+      wornInput.disabled = !wornRequired;
+      if (!syncRequired) syncInput.value = '';
+      if (!wornRequired) wornInput.value = '';
+    }
+
+    // Right options: current option excluded if right is lost (can't keep a lost watch).
+    function buildRightOpts() {
+      const rightLost  = rightLostCb.checked && !!current_right;
+      const currentOpt = (current_right && !rightLost)
+        ? `<option value="${current_right.id}">${current_right.id} (${current_right.serial}) — current</option>`
+        : '';
       return '<option value="">Select watch…</option>' +
-        available.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('') +
+        currentOpt +
+        agwatch.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('') +
         NO_WATCH_OPT;
     }
 
-    const rightSel = document.getElementById('wr-new-right');
-    const leftSel  = document.getElementById('wr-new-left');
-    rightSel.innerHTML = buildOpts(agwatch, null);
-    leftSel.innerHTML  = buildOpts(agwatch, null);
+    // Left options:
+    //   anyLost OR right ≠ current → new mode (pool + NO_WATCH, no current option, left unlocked)
+    //   right = current AND no lost → left auto-locks to current (disabled)
+    function updateLeftOpts() {
+      const rightIsCurrent = !anyLost() && current_right && rightSel.value === current_right.id;
+      if (rightIsCurrent) {
+        leftSel.innerHTML = current_left
+          ? `<option value="${current_left.id}">${current_left.id} (${current_left.serial}) — current</option>`
+          : '<option value="">No current watch</option>';
+        if (current_left) leftSel.value = current_left.id;
+        leftSel.disabled = true;
+      } else {
+        leftSel.disabled = false;
+        const excludeId = (rightSel.value && rightSel.value !== NO_WATCH_VAL) ? rightSel.value : null;
+        const pool = agwatch.filter(d => d.id !== excludeId);
+        leftSel.innerHTML = '<option value="">Select watch…</option>' +
+          pool.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('') +
+          NO_WATCH_OPT;
+      }
+      updateDatetimeFields();
+    }
 
-    rightSel.onchange = () => {
-      const prev = leftSel.value;
-      leftSel.innerHTML = buildOpts(agwatch, rightSel.value);
-      if (prev && [...leftSel.options].some(o => o.value === prev)) leftSel.value = prev;
-    };
-    leftSel.onchange = () => {
+    // Rebuild right options (lost state may add/remove the current option) then update left.
+    function updateAll() {
       const prev = rightSel.value;
-      rightSel.innerHTML = buildOpts(agwatch, leftSel.value);
+      rightSel.innerHTML = buildRightOpts();
       if (prev && [...rightSel.options].some(o => o.value === prev)) rightSel.value = prev;
-    };
+      updateLeftOpts();
+    }
+
+    rightSel.innerHTML = buildRightOpts();
+    updateLeftOpts();   // initialise left based on right's default (empty → new mode)
+
+    rightSel.onchange    = () => updateLeftOpts();
+    rightLostCb.onchange = () => updateAll();
+    leftLostCb.onchange  = () => updateAll();
   } catch (e) {
     setError('wr-error', 'Failed to load available watches.');
   }
@@ -1660,26 +1724,40 @@ async function saveWatchRecord() {
   const wornDt   = document.getElementById('wr-worn-datetime').value;
   const nextDays = document.getElementById('wr-next-days').value;
   const notes    = document.getElementById('wr-notes').value.trim();
-  const NO_WATCH = '__none__';
+  const NO_WATCH   = '__none__';
+  const twoWatches = !!(_wrOldRight && _wrOldLeft);
 
-  if (!newRight) { setError('wr-error', 'Please select a right watch or "No Watch Available".'); return; }
-  if (!newLeft)  { setError('wr-error', 'Please select a left watch or "No Watch Available".'); return; }
-  if (newRight !== NO_WATCH && newRight === newLeft) { setError('wr-error', 'Right and left watches must be different.'); return; }
-  const bothEmpty = newRight === NO_WATCH && newLeft === NO_WATCH;
-  if (!bothEmpty && !syncDt) { setError('wr-error', 'Sync date & time is required when a watch is assigned.'); return; }
-  if (!bothEmpty && !wornDt) { setError('wr-error', 'Worn date & time is required when a watch is assigned.'); return; }
+  if (_wrOldRight && !newRight) { setError('wr-error', 'Please select a right watch or "No Watch Available".'); return; }
+  if (_wrOldLeft  && !newLeft)  { setError('wr-error', 'Please select a left watch or "No Watch Available".'); return; }
+  if (twoWatches && newRight !== NO_WATCH && newRight === newLeft) {
+    setError('wr-error', 'Right and left watches must be different.'); return;
+  }
+
+  // Determine whether either watch is changing vs being kept as-is
+  const bothCurrent = twoWatches && newRight === _wrOldRight && newLeft === _wrOldLeft;
+  const syncRequired = twoWatches && !bothCurrent;
+  const wornRequired = !bothCurrent;
+
+  if (syncRequired && !syncDt) { setError('wr-error', 'Sync date & time is required when watches are changed.'); return; }
+  if (wornRequired && !wornDt) { setError('wr-error', 'Worn date & time is required.'); return; }
   if (!nextDays || parseInt(nextDays) < 1) { setError('wr-error', 'Next follow-up days must be at least 1.'); return; }
-  if ((newRight === NO_WATCH || newLeft === NO_WATCH) && !notes) {
+  const rightNoWatch = _wrOldRight && newRight === NO_WATCH;
+  const leftNoWatch  = _wrOldLeft  && newLeft  === NO_WATCH;
+  if ((rightNoWatch || leftNoWatch) && !notes) {
     setError('wr-error', 'Notes are required when a watch is not assigned — explain why.'); return;
   }
 
+  // Force unused limb to null when patient has only one watch
+  const finalRight = _wrOldRight ? (newRight === NO_WATCH ? null : newRight) : null;
+  const finalLeft  = _wrOldLeft  ? (newLeft  === NO_WATCH ? null : newLeft)  : null;
+
   const saveBtn   = document.getElementById('wr-save');
-  const rightLost = (document.getElementById('wr-right-lost')?.checked && !!patientData?.agWatchRightID) || false;
-  const leftLost  = (document.getElementById('wr-left-lost')?.checked  && !!patientData?.agWatchLeftID)  || false;
+  const rightLost = (document.getElementById('wr-right-lost')?.checked && !!_wrOldRight) || false;
+  const leftLost  = (document.getElementById('wr-left-lost')?.checked  && !!_wrOldLeft)  || false;
   const body = {
     event_id:                 _wrEventId,
-    ag_watch_right_new:       newRight === NO_WATCH ? null : newRight,
-    ag_watch_left_new:        newLeft  === NO_WATCH ? null : newLeft,
+    ag_watch_right_new:       finalRight,
+    ag_watch_left_new:        finalLeft,
     ag_watch_right_old_lost:  rightLost,
     ag_watch_left_old_lost:   leftLost,
     sync_datetime:            syncDt,

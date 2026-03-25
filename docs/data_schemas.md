@@ -381,8 +381,8 @@ The complete entry stores only a relative path to the timing file. See [AG Watch
 ```
 
 - `old_lost`: *(agwatch only)* `true` if the previously assigned watch was reported lost by the patient. Only meaningful when `old_id` is not null (hidden in UI when `old_id` is null — first assignment). When `true`: the assignment record is closed with `lost: true`, and `lost_date` is set on the inventory record.
-- `sync_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the watches were synced / data downloaded. Required if at least one new watch is assigned; omitted when both `new_id` values are `null`.
-- `worn_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the patient put the watches on. Same requirement as `sync_datetime`.
+- `sync_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the watches were synced / data downloaded. Required when the patient has **two watches** assigned; not required when only one watch is assigned; omitted when both `new_id` values are `null`.
+- `worn_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the patient put the watch(es) on. Required when at least one new watch is assigned; omitted when both `new_id` values are `null`.
 - `next_followup_days`: integer — number of days until the next watch record follow-up. Used to compute `scheduled_date` of the seeded chain entry: `[completion_date + N days, completion_date + N days]`.
 - `triggered_by`: *(optional)* present when activation, a patient call, or a follow-up call is the reason this record was created/claimed.
   - For **activation-triggered**: `type = "activation"`. The seeded entry has `scheduled_date = [activationDate, activationDate]` so it is immediately overdue.
@@ -395,7 +395,7 @@ For the initial record (first fill after activation), `old_id` is always `null` 
 |----------|------------|----------|---------|
 | `null`   | —          | `"W001"` | Initial setup |
 | `"W001"` | `false`    | `"W002"` | Normal swap |
-| `"W001"` | `false`    | `"W001"` | Watch continuing, no change |
+| `"W001"` | `false`    | `"W001"` | Watch continuing, no change — used when documenting an issue without a swap |
 | `"W001"` | `true`     | `"W002"` | Watch lost, replaced immediately |
 | `"W001"` | `true`     | `null`   | Watch lost, no replacement available |
 | `"W001"` | `false`    | `null`   | Watch intentionally removed — gap starts |

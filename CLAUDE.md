@@ -161,7 +161,19 @@ The script shifts the patient's entire timeline by N days (positive or negative)
   - Watch record trigger toggle in call modals is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
 - **Watch record chain:** seeded at activation with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`. On each completion, a new open chain entry is seeded with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`.
 - **Lost watch:** when a watch is marked lost in the watch record modal, htDash sets `lost_date` on the inventory record and closes the assignment with `lost: true`. `get_available_devices` filters out devices where `lost_date is not None`. Lost watches are permanently retired — no further assignments or records.
-- **Watch record modal notes:** required if any new watch is "No Watch Available" (null). Sync/worn datetimes are optional only when **both** new watches are null.
+- **Watch record modal — full interaction model:**
+  - **One-watch patient:** only the relevant limb selector is shown; the other is hidden. `sync_datetime` not shown. `worn_datetime` always required.
+  - **Two-watch patient — selector logic:** the **right watch is the reference** that drives the left selector:
+    - Right = "current" (same watch kept) → left automatically locks to its current watch (disabled, auto-selected). No other left option is possible.
+    - Right = any new watch or "No Watch Available" → left is unlocked; current option is removed from left; left shows pool (excluding right's choice) + "No Watch Available".
+    - Right = unselected ("Select watch…") → same as "new" mode: left shows pool + "No Watch Available", no current option.
+  - **Lost checkbox interaction:** each limb shows a "Lost" checkbox if it has a current watch. Checking **any** lost checkbox overrides the right-as-reference lock: both selectors switch to "new mode" (current option removed from both, left unlocked). This ensures a lost watch can never be re-selected as the new watch.
+  - **`sync_datetime` / `worn_datetime` enable rules** (for two-watch patients):
+    - **Both current, no lost** → both fields disabled and cleared (nothing changed, nothing to record).
+    - **Any watch changed or any lost checked** → both fields enabled and required.
+    - For one-watch patients: `sync_datetime` always hidden; `worn_datetime` always enabled and required.
+  - **`notes`** are required if any new watch selection is "No Watch Available" (null) — therapist must explain why no watch was assigned.
+  - **Available options** in each selector: non-lost unassigned watches from inventory, plus the currently-assigned watch for that limb as a "— current" option (injected by the server separately, since assigned watches are excluded from `get_available_devices`). "No Watch Available" is always present.
 
 ---
 
@@ -188,6 +200,15 @@ Tabs appear left-to-right in this order. Visibility is per group.
 - Chart.js rendering
 - Modal interactions
 - In-page dynamic updates (fetch calls within a page)
+
+---
+
+## JS Coding Conventions
+
+- **One JS file per page** (`static/js/app/<page>.js`). All modals for a page live in that page's file — do not extract individual modals into separate files. If the file grows too large to manage, split *all* modals out together into a `static/js/app/<page>/` directory, not just one.
+- **Each modal has a clearly-delimited section** opened by a comment banner (`// ── Modal name ───...`), containing: module-level state variables, an `open*Modal()` function, a `save*()` function, and any private helpers.
+- **Dynamic UI state** (showing/hiding/disabling fields based on user input) is implemented with `onchange` handlers set up inside the `open*Modal()` function, not at page load. Handlers are re-attached each time the modal opens so they always close over fresh modal state.
+- **Validation** is enforced in two places: client-side in `save*()` before the fetch (user-facing error message via `setError()`), and server-side in the route (returns `{error}` JSON). Both must apply the same rules.
 
 ---
 

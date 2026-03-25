@@ -4,8 +4,8 @@ from utils.data_access import (
     get_patients_for_user, derive_status, get_hospital_folder, find_patient_folder,
     read_patient_meta, write_patient_meta, create_patient_folders, generate_homer_id,
     create_patient_log, write_patient_log, get_patients_path,
-    get_available_devices, read_device_assignments, write_device_assignments, write_device_log,
-    mark_device_lost,
+    get_available_devices, read_device_inventory, read_device_assignments,
+    write_device_assignments, write_device_log, mark_device_lost,
 )
 from utils.protocol_events import (
     create_protocol_events, populate_activation_dates,
@@ -225,13 +225,31 @@ def api_available_devices(homer_id):
 
 @bp.route('/api/patients/<homer_id>/available-agwatches', methods=['GET'])
 def api_available_agwatches(homer_id):
-    """Return available (active, non-clinic, unassigned) AG watches."""
+    """Return available AG watches plus the patient's currently-assigned watches."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
-    return jsonify({'agwatch': get_available_devices(folder, 'agwatch')})
+
+    available = get_available_devices(folder, 'agwatch')
+
+    # Also return the currently-assigned watches so the modal can offer
+    # "keep same watch" (new_id = old_id) when no swap is needed.
+    patient = read_patient_meta(folder, homer_id)
+    inventory = {d['id']: d for d in read_device_inventory(folder, 'agwatch')}
+
+    def current_watch(watch_id):
+        if not watch_id:
+            return None
+        d = inventory.get(watch_id)
+        return {'id': d['id'], 'serial': d.get('serial', '')} if d else None
+
+    return jsonify({
+        'agwatch':       available,
+        'current_right': current_watch(patient.get('agWatchRightID')),
+        'current_left':  current_watch(patient.get('agWatchLeftID')),
+    })
 
 
 @bp.route('/api/patients/<homer_id>/complete-event/exp_device_install', methods=['POST'])
@@ -1009,14 +1027,27 @@ def api_complete_watch_record(homer_id):
 
     if not event_id:
         return jsonify({'error': 'event_id is required'}), 400
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    old_right    = patient.get('agWatchRightID')
+    old_left     = patient.get('agWatchLeftID')
+    two_watches  = bool(old_right and old_left)
+    both_current = two_watches and ag_right_new == old_right and ag_left_new == old_left
+    sync_required = two_watches and not both_current
+    worn_required = not both_current
+
     if ag_right_new and ag_left_new and ag_right_new == ag_left_new:
         return jsonify({'error': 'Right and left watches must be different'}), 400
-    both_empty = ag_right_new is None and ag_left_new is None
-    if not both_empty and not sync_datetime:
-        return jsonify({'error': 'Sync date & time is required when a watch is assigned'}), 400
-    if not both_empty and not worn_datetime:
-        return jsonify({'error': 'Worn date & time is required when a watch is assigned'}), 400
-    if (ag_right_new is None or ag_left_new is None) and not notes:
+    if sync_required and not sync_datetime:
+        return jsonify({'error': 'Sync date & time is required when watches are changed'}), 400
+    if worn_required and not worn_datetime:
+        return jsonify({'error': 'Worn date & time is required'}), 400
+    right_no_watch = old_right is not None and ag_right_new is None
+    left_no_watch  = old_left  is not None and ag_left_new  is None
+    if (right_no_watch or left_no_watch) and not notes:
         return jsonify({'error': 'Notes are required when a watch is not assigned'}), 400
     if not isinstance(next_followup_days, int) or next_followup_days < 1:
         return jsonify({'error': 'next_followup_days must be a positive integer'}), 400
@@ -1041,13 +1072,6 @@ def api_complete_watch_record(homer_id):
     )
     if not entry:
         return jsonify({'error': 'Watch record not found in incomplete'}), 404
-
-    patient = read_patient_meta(folder, homer_id)
-    if not patient:
-        return jsonify({'error': 'Patient not found'}), 404
-
-    old_right       = patient.get('agWatchRightID')
-    old_left        = patient.get('agWatchLeftID')
     filed_at        = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     completion_date = worn_datetime or sync_datetime or filed_at[:16]
 
