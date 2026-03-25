@@ -83,10 +83,32 @@ function setError(id, msg) {
 }
 
 function _nowForInput() {
-  // Returns current local datetime truncated to minutes in YYYY-MM-DDTHH:MM format
-  const d = new Date();
-  d.setSeconds(0, 0);
-  return d.toISOString().slice(0, 16);
+  // Returns current LOCAL datetime truncated to minutes in YYYY-MM-DDTHH:MM format.
+  // Must use local components — toISOString() returns UTC which breaks datetime-local
+  // comparisons in non-UTC timezones (e.g. IST = UTC+5:30 would flag valid local times).
+  const d   = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function _attachSessionEndGuard(startInputId, endInputId, errorId) {
+  // Fires on change of the end input; validates same date and end > start immediately.
+  const endInput = document.getElementById(endInputId);
+  if (!endInput) return;
+  if (endInput._sessionEndGuard) endInput.removeEventListener('change', endInput._sessionEndGuard);
+  endInput._sessionEndGuard = () => {
+    const startVal = document.getElementById(startInputId)?.value;
+    const endVal   = endInput.value;
+    if (!startVal || !endVal) return;
+    if (startVal.split('T')[0] !== endVal.split('T')[0]) {
+      setError(errorId, 'Session start and end must be on the same date.');
+    } else if (endVal <= startVal) {
+      setError(errorId, 'Session end must be after session start.');
+    } else {
+      setError(errorId, '');
+    }
+  };
+  endInput.addEventListener('change', endInput._sessionEndGuard);
 }
 
 function _attachDateGuard(inputId, errorId) {
@@ -183,18 +205,13 @@ function renderOverview(p) {
     }
   }
 
-  // Show VCG tab for control group only; position it before ADL
+  // VCG tab: control only
   const vcgBtn = document.getElementById('tab-btn-vcg');
-  if (vcgBtn) {
-    const isControl = p.group === 'control';
-    vcgBtn.classList.toggle('hidden', !isControl);
-    if (isControl) {
-      const adlBtn = document.querySelector('[data-tab="adl"]');
-      if (adlBtn && vcgBtn.nextElementSibling !== adlBtn) {
-        adlBtn.parentNode.insertBefore(vcgBtn, adlBtn);
-      }
-    }
-  }
+  if (vcgBtn) vcgBtn.classList.toggle('hidden', p.group !== 'control');
+
+  // Robot Issues tab: experimental only
+  const robotBtn = document.getElementById('tab-btn-robot');
+  if (robotBtn) robotBtn.classList.toggle('hidden', p.group !== 'experimental');
 
   renderActions(p);
 }
@@ -678,10 +695,12 @@ let _activationEventId = null;
 async function openActivationModal(evId) {
   _activationEventId = typeof evId === 'object' ? evId.id : evId;
   document.getElementById('activation-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('activation-date').value = '';
-  document.getElementById('activation-notes').value = '';
+  document.getElementById('activation-session-start').value = '';
+  document.getElementById('activation-session-end').value   = '';
+  document.getElementById('activation-notes').value         = '';
   setError('activation-error', '');
-  _attachDateGuard('activation-date', 'activation-error');
+  _attachDateGuard('activation-session-start', 'activation-error');
+  _attachSessionEndGuard('activation-session-start', 'activation-session-end', 'activation-error');
 
   // Show VCG group row for control patients only
   const vcgRow = document.getElementById('activation-vcg-group-row');
@@ -694,12 +713,24 @@ async function openActivationModal(evId) {
 }
 
 async function submitActivation() {
-  const activationDate = document.getElementById('activation-date').value;
-  const notes          = document.getElementById('activation-notes').value;
+  const sessionStart = document.getElementById('activation-session-start').value;
+  const sessionEnd   = document.getElementById('activation-session-end').value;
+  const notes        = document.getElementById('activation-notes').value;
 
-  if (!activationDate) { setError('activation-error', 'Please select an activation date.'); return; }
+  if (!sessionStart || !sessionEnd) {
+    setError('activation-error', 'Session start and end are required.');
+    return;
+  }
+  if (sessionStart.split('T')[0] !== sessionEnd.split('T')[0]) {
+    setError('activation-error', 'Session start and end must be on the same date.');
+    return;
+  }
+  if (sessionStart >= sessionEnd) {
+    setError('activation-error', 'Session end must be after session start.');
+    return;
+  }
 
-  const body = { activationDate, notes };
+  const body = { activationDate: sessionStart, sessionStart, sessionEnd, notes };
   if (patientData?.group === 'control') {
     const vcgGroup = document.getElementById('activation-vcg-group').value;
     if (!vcgGroup) { setError('activation-error', 'Please select a VCG group.'); return; }
@@ -900,7 +931,7 @@ function _setupPrescSearchListener(prefix) {
   });
 }
 
-// ── ADL Prescription modal ─────────────────────────────────────────────────────
+// ── ADL Prescription modal ────────────────��────────────────────────────────────
 
 async function openAdlPrescriptionModal(ev) {
   _adlPrescEventId = typeof ev === 'object' ? ev.id : ev;
@@ -1277,24 +1308,78 @@ function openSimpleEventModal(ev) {
   _simpleEventId         = ev.id;
   _simpleProtocolEventId = ev.protocol_event_id;
   document.getElementById('simple-event-title').textContent = ev.event_name;
-  document.getElementById('simple-event-date').value        = '';
   document.getElementById('simple-event-notes').value       = '';
-  const err = document.getElementById('simple-event-error');
+  const err         = document.getElementById('simple-event-error');
+  const dateWrap    = document.getElementById('simple-event-date-wrap');
+  const sessionWrap = document.getElementById('simple-event-session-wrap');
   err.textContent = '';
   err.classList.add('hidden');
+
+  const HOME_VISIT_SESSION_IDS = new Set(['home_visit_d02', 'home_visit_d03', 'home_visit_d15']);
+  const isHomeVisit = HOME_VISIT_SESSION_IDS.has(ev.protocol_event_id);
+
+  // Home visits: show session start/end datetime inputs; hide single date field
+  dateWrap.classList.toggle('hidden', isHomeVisit);
+  sessionWrap.classList.toggle('hidden', !isHomeVisit);
+  document.getElementById('simple-event-session-start').value = '';
+  document.getElementById('simple-event-session-end').value   = '';
+
+  if (isHomeVisit) {
+    // d02/d03: pre-fill session start with fixed visit date (activation + offset) at 09:00
+    const ACTIVATION_OFFSETS = { home_visit_d02: 1, home_visit_d03: 2 };
+    const offset = ACTIVATION_OFFSETS[ev.protocol_event_id];
+    if (offset !== undefined && patientData?.activationDate) {
+      const d = new Date(patientData.activationDate);
+      d.setDate(d.getDate() + offset);
+      document.getElementById('simple-event-session-start').value = d.toISOString().slice(0, 10) + 'T09:00';
+    }
+    _attachDateGuard('simple-event-session-start', 'simple-event-error');
+    _attachSessionEndGuard('simple-event-session-start', 'simple-event-session-end', 'simple-event-error');
+  } else {
+    const dateInput = document.getElementById('simple-event-date');
+    dateInput.value    = '';
+    dateInput.readOnly = false;
+    dateInput.classList.remove('bg-slate-50', 'cursor-not-allowed');
+    _attachDateGuard('simple-event-date', 'simple-event-error');
+  }
+
   showModal('simple-event-modal');
 }
 
 async function saveSimpleEvent() {
-  const dateVal = document.getElementById('simple-event-date').value;
-  const notes   = document.getElementById('simple-event-notes').value.trim();
-  const err     = document.getElementById('simple-event-error');
+  const notes = document.getElementById('simple-event-notes').value.trim();
+  const err   = document.getElementById('simple-event-error');
   err.classList.add('hidden');
 
-  if (!dateVal) {
-    err.textContent = 'Event date is required.';
-    err.classList.remove('hidden');
-    return;
+  const HOME_VISIT_SESSION_IDS = new Set(['home_visit_d02', 'home_visit_d03', 'home_visit_d15']);
+  let completionDate, sessionStart = null, sessionEnd = null;
+
+  if (HOME_VISIT_SESSION_IDS.has(_simpleProtocolEventId)) {
+    sessionStart = document.getElementById('simple-event-session-start').value;
+    sessionEnd   = document.getElementById('simple-event-session-end').value;
+    if (!sessionStart || !sessionEnd) {
+      err.textContent = 'Session start and end are required.';
+      err.classList.remove('hidden');
+      return;
+    }
+    if (sessionStart.split('T')[0] !== sessionEnd.split('T')[0]) {
+      err.textContent = 'Session start and end must be on the same date.';
+      err.classList.remove('hidden');
+      return;
+    }
+    if (sessionStart >= sessionEnd) {
+      err.textContent = 'Session end must be after session start.';
+      err.classList.remove('hidden');
+      return;
+    }
+    completionDate = sessionStart;
+  } else {
+    completionDate = document.getElementById('simple-event-date').value;
+    if (!completionDate) {
+      err.textContent = 'Event date is required.';
+      err.classList.remove('hidden');
+      return;
+    }
   }
 
   const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/simple`, {
@@ -1303,7 +1388,9 @@ async function saveSimpleEvent() {
     body:    JSON.stringify({
       event_id:          _simpleEventId,
       protocol_event_id: _simpleProtocolEventId,
-      completion_date:   dateVal,
+      completion_date:   completionDate,
+      session_start:     sessionStart,
+      session_end:       sessionEnd,
       notes,
     }),
   });
@@ -1615,6 +1702,8 @@ async function saveWatchRecord() {
 
 let _agwatchEventId         = null;
 let _agwatchProtocolEventId = null;
+let _agwatchSessionStart    = null;
+let _agwatchSessionEnd      = null;
 
 async function openAgwatchTimingModal(ev) {
   _agwatchEventId         = ev.id;
@@ -1630,6 +1719,26 @@ async function openAgwatchTimingModal(ev) {
   const schedDate = Array.isArray(ev.scheduled_date) ? ev.scheduled_date[0] : ev.scheduled_date;
   const dateOnly  = schedDate ? schedDate.split('T')[0] : new Date().toISOString().split('T')[0];
   document.getElementById('agwatch-session-date').value = dateOnly;
+
+  // Load session bounds from the corresponding home visit complete entry
+  const _AGWATCH_SESSION_SOURCE = {
+    adl_agwatch_timing_d03: 'home_visit_d03',
+    vcg_agwatch_timing_d03: 'home_visit_d03',
+    adl_agwatch_timing_d15: 'home_visit_d15',
+    vcg_agwatch_timing_d15: 'home_visit_d15',
+  };
+  const hvId    = _AGWATCH_SESSION_SOURCE[ev.protocol_event_id];
+  const hvEntry = hvId ? (_completeEventsCache || []).find(e => e.protocol_event_id === hvId) : null;
+  _agwatchSessionStart = hvEntry?.session_start || null;
+  _agwatchSessionEnd   = hvEntry?.session_end   || null;
+  const windowWrap = document.getElementById('agwatch-session-window-wrap');
+  const windowEl   = document.getElementById('agwatch-session-window');
+  if (_agwatchSessionStart && _agwatchSessionEnd) {
+    windowEl.textContent = `${_agwatchSessionStart.split('T')[1]} – ${_agwatchSessionEnd.split('T')[1]}`;
+    windowWrap.classList.remove('hidden');
+  } else {
+    windowWrap.classList.add('hidden');
+  }
 
   const bodyEl = document.getElementById('agwatch-timing-body');
   bodyEl.innerHTML = '<p class="text-sm text-slate-500">Loading exercises…</p>';
@@ -1715,6 +1824,26 @@ async function saveAgwatchTiming() {
   }
 
   const globalNotes = document.getElementById('agwatch-timing-notes').value.trim();
+
+  // Hard validation: all non-null timings must fall within the home visit session window
+  if (_agwatchSessionStart && _agwatchSessionEnd) {
+    const padSec = (dt) => dt.length === 16 ? dt + ':00' : dt;
+    const sesStart = padSec(_agwatchSessionStart);
+    const sesEnd   = padSec(_agwatchSessionEnd);
+    for (let i = 0; i < timings.length; i++) {
+      const t = timings[i];
+      if (t.start && t.start < sesStart) {
+        errEl.textContent = `Exercise ${i + 1}: start time is before the session start (${_agwatchSessionStart.split('T')[1]}).`;
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (t.end && t.end > sesEnd) {
+        errEl.textContent = `Exercise ${i + 1}: end time is after the session end (${_agwatchSessionEnd.split('T')[1]}).`;
+        errEl.classList.remove('hidden');
+        return;
+      }
+    }
+  }
 
   const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/agwatch-timing`, {
     method:  'POST',

@@ -57,12 +57,12 @@ def api_patient_detail(homer_id):
     return jsonify({**patient, 'status': derive_status(patient)})
 
 
-def _topo_sort_upcoming(events, event_defs):
-    """Sort upcoming events ascending by start date; within the same date, parents before dependents."""
+def _topo_sort(events, event_defs, date_fn):
+    """Group events by date_fn, topo-sort within each group (parents before dependents),
+    return in ascending date order."""
     events_by_date = {}
     for ev in events:
-        date_key = ev['scheduled_date'][0][:10]
-        events_by_date.setdefault(date_key, []).append(ev)
+        events_by_date.setdefault(date_fn(ev), []).append(ev)
 
     result = []
     for date_key in sorted(events_by_date):
@@ -106,14 +106,19 @@ def api_patient_events(homer_id):
         return jsonify({'error': 'Patient not found'}), 404
 
     protocol = load_study_protocol()
-    event_defs = {}
-    for section in ('experimental', 'control', 'shared'):
-        for e in protocol.get(section, []):
-            event_defs[e['id']] = e
-    event_defs['training_pause_followup'] = {'name': 'Training Pause Follow-up', 'depends_on': []}
 
-    patient = read_patient_meta(folder, homer_id)
+    patient    = read_patient_meta(folder, homer_id)
     events_data = read_protocol_events(folder, homer_id)
+
+    # Build event_defs from shared + patient's group only so group-specific
+    # depends_on (e.g. activation→exp_device_install for experimental) are not
+    # overwritten by the other group's definition.
+    event_defs = {}
+    for e in protocol.get('shared', []):
+        event_defs[e['id']] = e
+    for e in protocol.get((patient or {}).get('group', ''), []):
+        event_defs[e['id']] = e
+    event_defs['training_pause_followup'] = {'name': 'Training Pause Follow-up', 'depends_on': []}
     if not events_data:
         return jsonify({'overdue': [], 'upcoming': []})
 
@@ -184,9 +189,14 @@ def api_patient_events(homer_id):
             record['active_window'] = False
             overdue.append(record)
 
-    # Active-window sub-group first, then past-due; both ascending by end date
-    overdue.sort(key=lambda x: (0 if x.get('active_window') else 1, x['scheduled_date'][1]))
-    upcoming = _topo_sort_upcoming(upcoming, event_defs)
+    # Active-window first, then past-due; within each sub-group sort by end date
+    # and topo-sort within same-end-date groups so parents appear before dependents.
+    end_date_fn = lambda ev: ev['scheduled_date'][1][:10]
+    active_overdue = sorted([e for e in overdue if e.get('active_window')],  key=end_date_fn)
+    past_overdue   = sorted([e for e in overdue if not e.get('active_window')], key=end_date_fn)
+    overdue  = (_topo_sort(active_overdue, event_defs, end_date_fn) +
+                _topo_sort(past_overdue,   event_defs, end_date_fn))
+    upcoming = _topo_sort(upcoming, event_defs, lambda ev: ev['scheduled_date'][0][:10])
 
     complete_list = []
     for entry in events_data.get('complete', []):
@@ -477,6 +487,8 @@ def api_activate_patient(homer_id):
     activation_date = (data.get('activationDate') or '').strip()
     vcg_group       = (data.get('vcgGroup') or '').strip() or None
     notes           = (data.get('notes') or '').strip()
+    session_start   = (data.get('sessionStart') or '').strip()
+    session_end     = (data.get('sessionEnd') or '').strip()
     if not activation_date:
         return jsonify({'error': 'activationDate is required'}), 400
     try:
@@ -484,6 +496,17 @@ def api_activate_patient(homer_id):
             return jsonify({'error': 'activationDate cannot be in the future'}), 400
     except ValueError:
         return jsonify({'error': 'activationDate format must be YYYY-MM-DDTHH:MM'}), 400
+    if not session_start or not session_end:
+        return jsonify({'error': 'Session start and end times are required'}), 400
+    try:
+        _ss = datetime.strptime(session_start, '%Y-%m-%dT%H:%M')
+        _se = datetime.strptime(session_end,   '%Y-%m-%dT%H:%M')
+        if _ss.date() != _se.date():
+            return jsonify({'error': 'Session start and end must be on the same date'}), 400
+        if _ss >= _se:
+            return jsonify({'error': 'Session start must be before session end'}), 400
+    except ValueError:
+        return jsonify({'error': 'Session times must be in YYYY-MM-DDTHH:MM format'}), 400
     folder = get_hospital_folder(flask_session['login_place'])
     if not folder:
         return jsonify({'error': 'Cannot determine hospital folder'}), 400
@@ -532,7 +555,8 @@ def api_activate_patient(homer_id):
         if entry:
             activation_entry_id = entry['id']
             filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-            complete_entry = {**entry, 'completion_date': activation_date, 'filed_at': filed_at, 'notes': notes}
+            complete_entry = {**entry, 'completion_date': activation_date, 'filed_at': filed_at,
+                              'session_start': session_start, 'session_end': session_end, 'notes': notes}
             events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
             events_data.setdefault('complete', []).append(complete_entry)
             write_protocol_events(folder, homer_id, events_data)
@@ -676,6 +700,8 @@ _SIMPLE_EVENT_IDS = {
     'training_completion_d29',
 }
 
+_HOME_VISIT_IDS = {'home_visit_d02', 'home_visit_d03', 'home_visit_d15'}
+
 _SIMPLE_EVENT_LOG_MESSAGES = {
     'home_visit_d02':           'Home visit recorded — Day 02',
     'home_visit_d03':           'Home visit recorded — Day 03',
@@ -703,16 +729,34 @@ def api_complete_simple_event(homer_id):
     protocol_event_id = (data.get('protocol_event_id') or '').strip()
     completion_date   = (data.get('completion_date') or '').strip()
     notes             = (data.get('notes') or '').strip()
+    session_start     = (data.get('session_start') or '').strip()
+    session_end       = (data.get('session_end') or '').strip()
 
     if protocol_event_id not in _SIMPLE_EVENT_IDS:
         return jsonify({'error': 'Invalid protocol event ID.'}), 400
-    if not completion_date:
-        return jsonify({'error': 'Event date is required.'}), 400
-    try:
-        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
-            return jsonify({'error': 'Event date cannot be in the future.'}), 400
-    except ValueError:
-        return jsonify({'error': 'Invalid date format.'}), 400
+    if protocol_event_id in _HOME_VISIT_IDS:
+        if not session_start or not session_end:
+            return jsonify({'error': 'Session start and end are required.'}), 400
+        try:
+            _ss = datetime.strptime(session_start, '%Y-%m-%dT%H:%M')
+            _se = datetime.strptime(session_end,   '%Y-%m-%dT%H:%M')
+            if _ss.date() != _se.date():
+                return jsonify({'error': 'Session start and end must be on the same date.'}), 400
+            if _ss >= _se:
+                return jsonify({'error': 'Session start must be before session end.'}), 400
+            if _ss > datetime.now():
+                return jsonify({'error': 'Session start cannot be in the future.'}), 400
+        except ValueError:
+            return jsonify({'error': 'Session times must be in YYYY-MM-DDTHH:MM format.'}), 400
+        completion_date = session_start
+    else:
+        if not completion_date:
+            return jsonify({'error': 'Event date is required.'}), 400
+        try:
+            if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+                return jsonify({'error': 'Event date cannot be in the future.'}), 400
+        except ValueError:
+            return jsonify({'error': 'Invalid date format.'}), 400
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
@@ -735,6 +779,9 @@ def api_complete_simple_event(homer_id):
         'filed_at':        filed_at,
         'notes':           notes,
     }
+    if protocol_event_id in _HOME_VISIT_IDS:
+        complete_entry['session_start'] = session_start
+        complete_entry['session_end']   = session_end
 
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
     events_data.setdefault('complete', []).append(complete_entry)
@@ -1079,21 +1126,25 @@ _AGWATCH_TIMING_CONFIG = {
         'prescription_event': 'adl_prescription_d01',
         'timing_file':        'adl/adl_agwatch_timing_d03.json',
         'ex_type':            'adl',
+        'session_source':     'home_visit_d03',
     },
     'adl_agwatch_timing_d15': {
         'prescription_event': 'adl_prescription_d15',
         'timing_file':        'adl/adl_agwatch_timing_d15.json',
         'ex_type':            'adl',
+        'session_source':     'home_visit_d15',
     },
     'vcg_agwatch_timing_d03': {
         'prescription_event': 'vcg_prescription_d01',
         'timing_file':        'vcg_exercise/vcg_agwatch_timing_d03.json',
         'ex_type':            'vcg',
+        'session_source':     'home_visit_d03',
     },
     'vcg_agwatch_timing_d15': {
         'prescription_event': 'vcg_prescription_d15',
         'timing_file':        'vcg_exercise/vcg_agwatch_timing_d15.json',
         'ex_type':            'vcg',
+        'session_source':     'home_visit_d15',
     },
 }
 
@@ -1171,6 +1222,40 @@ def api_complete_agwatch_timing(homer_id):
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
         return jsonify({'error': 'Protocol events not found.'}), 404
+
+    # Hard validation: timings must fall within the home visit session window
+    session_source = cfg.get('session_source')
+    if session_source:
+        hv_entry = next(
+            (e for e in events_data.get('complete', []) if e.get('protocol_event_id') == session_source),
+            None
+        )
+        if hv_entry:
+            ses_start_str = hv_entry.get('session_start', '')
+            ses_end_str   = hv_entry.get('session_end', '')
+            if ses_start_str and ses_end_str:
+                try:
+                    ses_start = datetime.strptime(ses_start_str, '%Y-%m-%dT%H:%M')
+                    ses_end   = datetime.strptime(ses_end_str,   '%Y-%m-%dT%H:%M')
+                    for i, t in enumerate(timings):
+                        t_start = (t.get('start') or '').strip()
+                        t_end   = (t.get('end')   or '').strip()
+                        if t_start:
+                            try:
+                                ts = datetime.strptime(t_start[:16], '%Y-%m-%dT%H:%M')
+                                if ts < ses_start:
+                                    return jsonify({'error': f'Exercise {i + 1}: start time is before the session start ({ses_start_str.split("T")[1]}).'}), 400
+                            except ValueError:
+                                pass
+                        if t_end:
+                            try:
+                                te = datetime.strptime(t_end[:16], '%Y-%m-%dT%H:%M')
+                                if te > ses_end:
+                                    return jsonify({'error': f'Exercise {i + 1}: end time is after the session end ({ses_end_str.split("T")[1]}).'}), 400
+                            except ValueError:
+                                pass
+                except ValueError:
+                    pass
 
     incomplete = events_data.get('incomplete', [])
     entry = next(

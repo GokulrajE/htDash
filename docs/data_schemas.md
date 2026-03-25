@@ -308,7 +308,23 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 
 ### Type-specific extra fields on `complete` entries
 
-**Simple visit events** (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `training_completion_d29`)
+**Home visit events** (`activation`, `home_visit_d02`, `home_visit_d03`, `home_visit_d15`)
+```json
+{
+  "session_start": "YYYY-MM-DDTHH:MM",
+  "session_end":   "YYYY-MM-DDTHH:MM",
+  "notes": ""
+}
+```
+
+- `session_start` / `session_end`: ISO 8601 datetime to minute resolution (`YYYY-MM-DDTHH:MM`); both required. Validation rules:
+  1. `session_start` and `session_end` must be on the **same calendar date**
+  2. `session_end` must be strictly **after** `session_start`
+  3. Future-date guard applies to `session_start`
+  - `completion_date` is set to `session_start` — no separate event date is recorded.
+- `notes`: optional free text.
+
+**Simple visit events** (`training_completion_d29`)
 ```json
 { "notes": "" }
 ```
@@ -615,6 +631,17 @@ Written by htDash when the therapist completes a VCG AG watch timing event (cont
 - `notes` (top-level): optional general notes for the whole session
 - Once written, timing files are **not edited** — re-opening the modal is not supported
 
+**Session bounds (hard validation):**
+
+Each non-null `start` and `end` in `timings` must fall within the session window recorded on the corresponding home visit event:
+
+| Timing event | Session bounds source |
+|---|---|
+| `adl_agwatch_timing_d03`, `vcg_agwatch_timing_d03` | `session_start` / `session_end` from `home_visit_d03` |
+| `adl_agwatch_timing_d15`, `vcg_agwatch_timing_d15` | `session_start` / `session_end` from `home_visit_d15` |
+
+The modal must reject any timing entry where `start < session_start` or `end > session_end`. This is a hard error — the form cannot be saved until all timings fall within the session window.
+
 ---
 
 ## `attachments/`
@@ -755,6 +782,7 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 **`date source` values:**
 - `user` — therapist enters the date; editable datetime input, future-date guard applied
 - `= <event_id>` — copied from another completed event's `completion_date`; read-only in the modal
+- `= <event_id> + <N>d` — computed as another event's `completion_date` plus N calendar days; read-only in the modal
 - `prefill: <event_id>` — pre-filled from another completed event's `completion_date` but editable; future-date guard applied
 
 #### Experimental only
@@ -784,8 +812,8 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 | ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
 |----|------|------|-----------|--------|--------------|--------------|---------|
 | `adl_prescription_d01` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
-| `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | `user` | Second home visit — review training progress and address any early questions or difficulties. |
-| `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | `user` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
+| `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | `= activation + 1d` | Second home visit — review training progress and address any early questions or difficulties. |
+| `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | `= activation + 2d` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
 | `adl_agwatch_timing_d03` | Add ADL AG Watch Timings Day 03 | point_in_time | activation | day 3 | `home_visit_d03` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 3. |
 | `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
 | `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |

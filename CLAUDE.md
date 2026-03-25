@@ -85,6 +85,49 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 | `templates/base.html` | Shared layout — sidebar, header, nav |
 | `templates/patient_detail.html` | Patient detail page |
 | `static/js/app/` | Per-page JS modules |
+| `scripts/reset_test_patient.py` | Reset all ranipet test patients to enrolled state |
+| `scripts/shift_activation.py` | Shift a patient's activation date (and all dependent dates) by N days |
+
+---
+
+## Test Data
+
+The ranipet site holds four fixed test patients. Reset them all with:
+
+```
+python scripts/reset_test_patient.py expt1_dd/mm expt2_dd/mm ctrl1_dd/mm ctrl2_dd/mm
+```
+
+Example:
+```
+python scripts/reset_test_patient.py 23/03 24/03 22/03 21/03
+```
+
+| Patient | Group | Training side |
+|---|---|---|
+| HOCMCV002 | experimental | Right |
+| HOCMCV003 | experimental | Left |
+| HOCMCV004 | control | Right |
+| HOCMCV005 | control | Left |
+
+Dates are `dd/mm` (current year, noon). The script:
+- Wipes all device assignments and device log entries for the site
+- Deletes and recreates each patient folder from scratch
+- Sets `enrollDate` and `a0CompletionDate` to the supplied date
+- Regenerates `protocol_events.json` in enrolled state
+
+To advance a patient's timeline after partial testing (e.g. to make `home_visit_d03` fall today):
+
+```
+python scripts/shift_activation.py HOCMCV002 -2
+```
+
+The script shifts the patient's entire timeline by N days (positive or negative):
+- `enrollDate`, `a0CompletionDate`, `activationDate` in the patient JSON all shift by N
+- For every entry in `protocol_events.json` (both `incomplete` and `complete`):
+  - `scheduled_date` is **recomputed** from the new reference date using `study_protocol.json` window definitions, preserving the original time-of-day
+  - All datetime fields (`completion_date`, `session_start`, `session_end`, `sync_datetime`, `worn_datetime`) shift by the **per-event delta** (`new_scheduled[0] − old_scheduled[0]`), which handles any pre-existing inconsistencies in the file
+- `watch_record` entries (free events with no window definition) shift by N directly
 
 ---
 
@@ -97,11 +140,19 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 - All datetimes stored in ISO 8601 format with `T` separator. User-entered dates: minute resolution (`YYYY-MM-DDTHH:MM`). System-generated timestamps (`filed_at`): seconds resolution (`YYYY-MM-DDTHH:MM:SS`). Event-level comparisons use date only (call `.date()` before comparing).
 - `scheduled_date` in `protocol_events.json` is always a **two-element list** `[start, end]` (both `"YYYY-MM-DDTHH:MM"`). Point-in-time events have `start == end`. `null` for free/unscheduled events. Categorisation uses `start` for upcoming, `end` for overdue and broken-protocol detection.
 - `window.start_day` / `window.end_day` in `study_protocol.json` use **1-based day numbers**: Day 1 = the reference date itself (a0 for `reference=assignment`, activation for `reference=activation`). Code converts to a 0-based offset with `start_day - 1`. All event IDs (`d1`, `d02`, `d15`, …) reflect this naming convention.
-- Every protocol event has a **`date source`** that determines how `completion_date` is obtained. Three possible values:
+- Every protocol event has a **`date source`** that determines how `completion_date` is obtained. Four possible values:
   - `user` — therapist enters the date; editable datetime input with future-date guard
   - `= <event_id>` — copied from another completed event's `completion_date`; read-only in the modal
+  - `= <event_id> + <N>d` — computed as another event's `completion_date` plus N calendar days; read-only in the modal
   - `prefill: <event_id>` — pre-filled from another completed event's `completion_date` but editable; future-date guard applies
   - The source for each event is documented in the event catalogue in `docs/data_schemas.md`. For `=` and `prefill` sources, the referenced event is always complete by the time the modal opens (enforced by `depends_on`).
+- **Home visit session times:** `activation`, `home_visit_d02`, `home_visit_d03`, and `home_visit_d15` each record `session_start` and `session_end` (`YYYY-MM-DDTHH:MM`), both required. The modal presents two `datetime-local` inputs. Validation rules (enforced client-side before save):
+  1. `session_start` and `session_end` must fall on the **same calendar date**
+  2. `session_end` must be strictly **after** `session_start`
+  3. Future-date guard applies to `session_start`
+  - `completion_date` is set to `session_start` — there is no separate event date input.
+  - These represent the clock times of the therapy session conducted during that home visit.
+- **AG Watch timing session bounds (hard validation):** the `adl_agwatch_timing_d03` / `vcg_agwatch_timing_d03` modals enforce that every non-null exercise `start`/`end` falls within the `session_start`/`session_end` from `home_visit_d03`. The `adl_agwatch_timing_d15` / `vcg_agwatch_timing_d15` modals apply the same hard constraint using `home_visit_d15`. The form cannot be saved if any timing falls outside the session window.
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
 - Free event types: `patient_call`, `adverse_event`, `robot_issue` (experimental only), `watch_record`, `discontinuation`. `technical_fault` was renamed to `robot_issue` — do not use the old name anywhere.
 - **Triggered events:** `adverse_event` and `robot_issue` can **only** be created via a `patient_call` or follow-up call modal — never standalone. `watch_record` can be standalone (open chain entry) or triggered by a call.

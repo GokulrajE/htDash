@@ -7,12 +7,12 @@ from utils.protocol_events import read_protocol_events, load_study_protocol
 bp = Blueprint('dashboard', __name__)
 
 
-def _topo_sort_upcoming(events, event_defs):
-    """Sort upcoming events ascending by start date; within the same date, parents before dependents."""
+def _topo_sort(events, event_defs, date_fn):
+    """Group events by date_fn, topo-sort within each group (parents before dependents),
+    return in ascending date order."""
     events_by_date = {}
     for ev in events:
-        date_key = ev['scheduled_date'][0][:10]
-        events_by_date.setdefault(date_key, []).append(ev)
+        events_by_date.setdefault(date_fn(ev), []).append(ev)
 
     result = []
     for date_key in sorted(events_by_date):
@@ -80,13 +80,29 @@ def events():
         return jsonify({'error': 'Not authenticated'}), 401
 
     protocol = load_study_protocol()
+
+    # Build flat event_names for display (merge all sections; names don't conflict)
     event_names = {}
-    event_defs  = {}
     for section in ('experimental', 'control', 'shared'):
         for e in protocol.get(section, []):
             event_names[e['id']] = e['name']
-            event_defs[e['id']]  = e
     event_names['training_pause_followup'] = 'Training Pause Follow-up'
+
+    # Build per-group event_defs so depends_on is looked up against the correct
+    # group definition (e.g. activation has different depends_on per group).
+    group_defs = {}
+    for grp in ('experimental', 'control'):
+        defs = {}
+        for e in protocol.get('shared', []):
+            defs[e['id']] = e
+        for e in protocol.get(grp, []):
+            defs[e['id']] = e
+        defs['training_pause_followup'] = {'name': 'Training Pause Follow-up', 'depends_on': []}
+        group_defs[grp] = defs
+
+    # Merged defs for topo sort (experimental preferred — stricter depends_on).
+    # Ordering within a date is cosmetic; correctness comes from blocked_by above.
+    topo_defs = {**group_defs.get('control', {}), **group_defs.get('experimental', {})}
 
     terminal = {'discontinued', 'pre_discontinued', 'all_completed'}
     today = date.today()
@@ -113,7 +129,7 @@ def events():
                     'protocol_event_id': 'discontinuation_reminder',
                     'homer_id':          homer_id,
                     'event_name':        'Discontinue Patient',
-                    'scheduled_date':    broken_date,
+                    'scheduled_date':    [broken_date, broken_date],
                     'days':              (broken_sched - today).days,
                     'blocked_by':        [],
                 })
@@ -121,6 +137,7 @@ def events():
 
         completed_ids = {e['protocol_event_id'] for e in events_data.get('complete', [])}
         known_ids     = completed_ids | {e['protocol_event_id'] for e in events_data.get('incomplete', [])}
+        patient_defs  = group_defs.get(patient.get('group', ''), {})
 
         for entry in events_data.get('incomplete', []):
             sched = entry.get('scheduled_date')
@@ -132,8 +149,8 @@ def events():
             except Exception:
                 continue
 
-            dep_ids    = event_defs.get(entry['protocol_event_id'], {}).get('depends_on') or []
-            blocked_by = [event_defs[d]['name'] for d in dep_ids if d in known_ids and d not in completed_ids]
+            dep_ids    = patient_defs.get(entry['protocol_event_id'], {}).get('depends_on') or []
+            blocked_by = [event_names.get(d, d) for d in dep_ids if d in known_ids and d not in completed_ids]
 
             record = {
                 'id':                entry['id'],
@@ -159,8 +176,13 @@ def events():
                 record['active_window'] = False
                 overdue.append(record)
 
-    # Active-window sub-group first, then past-due; both ascending by end date
-    overdue.sort(key=lambda x: (0 if x.get('active_window') else 1, x['scheduled_date'][1]))
-    upcoming = _topo_sort_upcoming(upcoming, event_defs)
+    # Active-window first, then past-due; within each sub-group sort by end date
+    # and topo-sort within same-end-date groups so parents appear before dependents.
+    end_date_fn = lambda ev: ev['scheduled_date'][1][:10]
+    active_overdue = sorted([e for e in overdue if e.get('active_window')],     key=end_date_fn)
+    past_overdue   = sorted([e for e in overdue if not e.get('active_window')], key=end_date_fn)
+    overdue  = (_topo_sort(active_overdue, topo_defs, end_date_fn) +
+                _topo_sort(past_overdue,   topo_defs, end_date_fn))
+    upcoming = _topo_sort(upcoming, topo_defs, lambda ev: ev['scheduled_date'][0][:10])
 
     return jsonify({'overdue': overdue, 'upcoming': upcoming})
