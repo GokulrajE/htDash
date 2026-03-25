@@ -201,7 +201,7 @@ def api_patient_events(homer_id):
     complete_list = []
     for entry in events_data.get('complete', []):
         pid = entry.get('protocol_event_id', '')
-        item = {k: v for k, v in entry.items() if k != 'id'}
+        item = dict(entry)
         item['event_name'] = event_defs.get(pid, {}).get('name', pid)
         complete_list.append(item)
     complete_list.sort(key=lambda x: x.get('filed_at') or x.get('completion_date') or '', reverse=True)
@@ -300,7 +300,6 @@ def api_complete_device_install(homer_id):
         'mars_id':         mars_id,
         'demo_done':       demo_done,
         'notes':           notes,
-        'attachments':     [],
     }
 
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
@@ -473,7 +472,6 @@ def api_discontinue_patient(homer_id):
         'id':              str(uuid.uuid4()),
         'completion_date': now,
         'reason':          reason,
-        'attachments':     [],
     }
     key = 'pre_discontinuation' if status == 'unassigned' else 'discontinuation'
     try:
@@ -825,21 +823,15 @@ def api_complete_followup_call(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    event_id           = request.form.get('event_id')
-    protocol_event_id  = (request.form.get('protocol_event_id') or '').strip()
-    completion_date    = (request.form.get('completion_date') or '').strip()
-    duration_str       = (request.form.get('duration_minutes') or '').strip()
-    notes              = (request.form.get('notes') or '').strip()
-    date_change_reason = (request.form.get('date_change_reason') or '').strip()
-    pdf_file           = request.files.get('attachment')
-    triggered_json     = (request.form.get('triggered') or '[]')
-
-    # Parse triggered items
-    try:
-        triggered_items = json.loads(triggered_json)
-        if not isinstance(triggered_items, list):
-            triggered_items = []
-    except (json.JSONDecodeError, TypeError):
+    body               = request.get_json() or {}
+    event_id           = body.get('event_id')
+    protocol_event_id  = (body.get('protocol_event_id') or '').strip()
+    completion_date    = (body.get('completion_date') or '').strip()
+    duration_str       = str(body.get('duration_minutes', '')).strip()
+    notes              = (body.get('notes') or '').strip()
+    date_change_reason = (body.get('date_change_reason') or '').strip()
+    triggered_items    = body.get('triggered', [])
+    if not isinstance(triggered_items, list):
         triggered_items = []
 
     if protocol_event_id not in _FOLLOWUP_CALL_IDS:
@@ -861,10 +853,6 @@ def api_complete_followup_call(homer_id):
         return jsonify({'error': 'Duration must be a positive integer.'}), 400
     if not notes:
         return jsonify({'error': 'Notes are required.'}), 400
-    if not pdf_file or not pdf_file.filename:
-        return jsonify({'error': 'Training log PDF is required.'}), 400
-    if not pdf_file.filename.lower().endswith('.pdf'):
-        return jsonify({'error': 'Attachment must be a PDF file.'}), 400
 
     # Validate triggered items
     patient_meta    = read_patient_meta(folder, homer_id)
@@ -904,12 +892,6 @@ def api_complete_followup_call(homer_id):
     if not entry:
         return jsonify({'error': 'Event not found in incomplete list.'}), 404
 
-    # Save PDF
-    attachment_rel  = _FOLLOWUP_CALL_IDS[protocol_event_id]
-    attachment_path = get_patients_path(folder) / homer_id / attachment_rel
-    attachment_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_file.save(str(attachment_path))
-
     call_id  = entry['id']
     filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -929,7 +911,6 @@ def api_complete_followup_call(homer_id):
                 'paused':       bool(item.get('paused', False)),
                 'pause_date':   None,
                 'allocated_pause_days': None,
-                'attachments':  [],
             })
             triggered_refs.append({'type': 'adverse_event', 'id': new_id})
 
@@ -952,7 +933,6 @@ def api_complete_followup_call(homer_id):
                     }
                     for f in item.get('faults', [])
                 ],
-                'attachments':  [],
             })
             triggered_refs.append({'type': 'robot_issue', 'id': new_id})
 
@@ -974,7 +954,6 @@ def api_complete_followup_call(homer_id):
         'completion_date':  completion_date,
         'filed_at':         filed_at,
         'duration_minutes': duration_minutes,
-        'attachment':       attachment_rel,
         'notes':            notes,
         'triggered':        triggered_refs,
         **({'date_change_reason': date_change_reason} if date_change_reason else {}),
@@ -1336,6 +1315,85 @@ def api_complete_agwatch_timing(homer_id):
                       f'{log_label} AG watch timings recorded ({day_label})')
 
     return jsonify({'ok': True})
+
+
+# ── Attachment upload / download ───────────────────────────────────────────────
+
+@bp.route('/api/patients/<homer_id>/upload-attachment', methods=['POST'])
+def api_upload_attachment(homer_id):
+    """Upload a PDF attachment for a completed protocol event."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    privilege = flask_session.get('privilege', '')
+    if privilege not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    event_id = (request.form.get('event_id') or '').strip()
+    caption  = (request.form.get('caption')  or '').strip()
+    pdf_file = request.files.get('file')
+
+    if not event_id:
+        return jsonify({'error': 'event_id is required'}), 400
+    if not pdf_file or not pdf_file.filename:
+        return jsonify({'error': 'No file provided'}), 400
+    if not pdf_file.filename.lower().endswith('.pdf'):
+        return jsonify({'error': 'Attachment must be a PDF file'}), 400
+    if not caption:
+        return jsonify({'error': 'Caption is required'}), 400
+
+    # Find event in complete list
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found'}), 404
+
+    entry = next(
+        (e for e in events_data.get('complete', []) if e.get('id') == event_id),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Completed event not found'}), 404
+
+    # Save PDF as attachments/<event_id>.pdf
+    attachment_rel  = f'attachments/{event_id}.pdf'
+    attachment_path = get_patients_path(folder) / homer_id / attachment_rel
+    attachment_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_file.save(str(attachment_path))
+
+    # Stamp fields on the entry
+    entry['attachment']         = attachment_rel
+    entry['attachment_caption'] = caption
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/patients/<homer_id>/download-attachment/<event_id>', methods=['GET'])
+def api_download_attachment(homer_id, event_id):
+    """Download the PDF attachment for a completed protocol event."""
+    from flask import send_file
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    privilege = flask_session.get('privilege', '')
+    if privilege not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    attachment_path = get_patients_path(folder) / homer_id / 'attachments' / f'{event_id}.pdf'
+    if not attachment_path.exists():
+        return jsonify({'error': 'Attachment not found'}), 404
+
+    return send_file(str(attachment_path), mimetype='application/pdf',
+                     as_attachment=False,
+                     download_name=f'{homer_id}_{event_id}.pdf')
 
 
 @bp.route('/api/patients/<homer_id>/complete-training', methods=['POST'])

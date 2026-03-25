@@ -402,24 +402,24 @@ function _fmtDate(raw) {
 const _TIMELINE_BASE_FIELDS = new Set([
   'protocol_event_id', 'event_name', 'scheduled_date',
   'completion_date', 'filed_at', 'flagged', '_synthetic',
+  'attachment', 'attachment_caption',
 ]);
 
 // Preferred display order for known extra fields. 'notes' is always rendered last.
 const _FIELD_ORDER = [
   'pluto_id', 'mars_id', 'demo_done',
   'ag_watch_right', 'ag_watch_left',
-  'prescription_file', 'attachments',
+  'prescription_file',
 ];
 
 const _FIELD_LABELS = {
-  ag_watch_right: 'Right Watch',
-  ag_watch_left:  'Left Watch',
-  pluto_id:       'Pluto Device',
+  ag_watch_right:    'Right Watch',
+  ag_watch_left:     'Left Watch',
+  pluto_id:          'Pluto Device',
   mars_id:           'Mars Device',
   demo_done:         'Demo Done',
   prescription_file: 'Prescription File',
   notes:             'Notes',
-  attachments:       'Attachments',
 };
 
 function _timelineExtraFields(ev) {
@@ -452,9 +452,65 @@ function _timelineExtraFields(ev) {
     }
     rows.push(`<div class="flex gap-1.5 text-xs"><span class="text-slate-400 shrink-0">${label}:</span><span class="text-slate-700">${display}</span></div>`);
   }
+  // Attachment: render as download link with caption
+  if (ev.attachment && ev.id) {
+    rows.push(
+      `<div class="flex gap-1.5 text-xs"><span class="text-slate-400 shrink-0">Attachment:</span>` +
+      `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${ev.id}" ` +
+      `target="_blank" class="text-blue-600 hover:underline">Download PDF</a></div>`
+    );
+    if (ev.attachment_caption) {
+      rows.push(
+        `<div class="flex gap-1.5 text-xs"><span class="text-slate-300 shrink-0">Caption:</span>` +
+        `<span class="text-slate-400">${ev.attachment_caption}</span></div>`
+      );
+    }
+  }
+
   return rows.length
     ? `<div class="mt-2 space-y-0.5 border-t border-slate-100 pt-2">${rows.join('')}</div>`
     : '';
+}
+
+// ── Attachment helpers ────────────────────────────────────────────────────────
+
+function _resetAttachment(prefix) {
+  const fi = document.getElementById(`${prefix}-attachment-file`);
+  const ci = document.getElementById(`${prefix}-attachment-caption`);
+  if (fi) fi.value = '';
+  if (ci) ci.value = '';
+}
+
+function _readAttachment(prefix) {
+  const fi = document.getElementById(`${prefix}-attachment-file`);
+  const ci = document.getElementById(`${prefix}-attachment-caption`);
+  return {
+    file:    fi?.files?.[0] || null,
+    caption: ci?.value.trim() || '',
+  };
+}
+
+function _validateAttachment(prefix, errorId) {
+  const { file, caption } = _readAttachment(prefix);
+  if (file && !caption) {
+    setError(errorId, 'Please describe the attachment before saving.');
+    return false;
+  }
+  return true;
+}
+
+async function _uploadAttachment(eventId, file, caption, errorId) {
+  const form = new FormData();
+  form.append('event_id', eventId);
+  form.append('caption',  caption);
+  form.append('file',     file);
+  const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/upload-attachment`, {
+    method: 'POST',
+    body:   form,
+  });
+  const data = await res.json();
+  if (!res.ok) { setError(errorId, data.error || 'Failed to upload attachment.'); return false; }
+  return true;
 }
 
 function _syntheticPatientEvents() {
@@ -643,6 +699,7 @@ async function openDeviceSetupModal(ev) {
   document.getElementById('device-setup-demo').checked = false;
   document.getElementById('device-setup-notes').value = '';
   setError('device-setup-error', '');
+  _resetAttachment('device-setup');
   _attachDateGuard('device-setup-date', 'device-setup-error');
 
   const plutoSel = document.getElementById('device-setup-pluto');
@@ -675,15 +732,21 @@ async function submitDeviceSetup() {
   if (!eventDate) { setError('device-setup-error', 'Please select an event date.'); return; }
   if (!plutoId)   { setError('device-setup-error', 'Please select a Pluto device.'); return; }
   if (!marsId)    { setError('device-setup-error', 'Please select a Mars device.'); return; }
+  if (!_validateAttachment('device-setup', 'device-setup-error')) return;
 
   setLoading('device-setup-submit', true);
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/exp_device_install`,
     { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, demoDone, notes }
   );
-  setLoading('device-setup-submit', false);
+  if (!ok) { setLoading('device-setup-submit', false); setError('device-setup-error', data.error || 'Failed to complete device setup.'); return; }
 
-  if (!ok) { setError('device-setup-error', data.error || 'Failed to complete device setup.'); return; }
+  const { file, caption } = _readAttachment('device-setup');
+  if (file) {
+    const uploaded = await _uploadAttachment(_deviceSetupEventId, file, caption, 'device-setup-error');
+    if (!uploaded) { setLoading('device-setup-submit', false); return; }
+  }
+  setLoading('device-setup-submit', false);
   hideModal('device-setup-modal');
   loadPatientEvents();
 }
@@ -699,6 +762,7 @@ async function openActivationModal(evId) {
   document.getElementById('activation-session-end').value   = '';
   document.getElementById('activation-notes').value         = '';
   setError('activation-error', '');
+  _resetAttachment('activation');
   _attachDateGuard('activation-session-start', 'activation-error');
   _attachSessionEndGuard('activation-session-start', 'activation-session-end', 'activation-error');
 
@@ -736,12 +800,18 @@ async function submitActivation() {
     if (!vcgGroup) { setError('activation-error', 'Please select a VCG group.'); return; }
     body.vcgGroup = vcgGroup;
   }
+  if (!_validateAttachment('activation', 'activation-error')) return;
 
   setLoading('activation-submit', true);
   const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/activate`, body);
-  setLoading('activation-submit', false);
+  if (!ok) { setLoading('activation-submit', false); setError('activation-error', data.error || 'Failed to activate patient.'); return; }
 
-  if (!ok) { setError('activation-error', data.error || 'Failed to activate patient.'); return; }
+  const { file, caption } = _readAttachment('activation');
+  if (file) {
+    const uploaded = await _uploadAttachment(_activationEventId, file, caption, 'activation-error');
+    if (!uploaded) { setLoading('activation-submit', false); return; }
+  }
+  setLoading('activation-submit', false);
   hideModal('activation-modal');
   await loadPatient();
   loadPatientEvents();
@@ -1309,6 +1379,7 @@ function openSimpleEventModal(ev) {
   _simpleProtocolEventId = ev.protocol_event_id;
   document.getElementById('simple-event-title').textContent = ev.event_name;
   document.getElementById('simple-event-notes').value       = '';
+  _resetAttachment('simple-event');
   const err         = document.getElementById('simple-event-error');
   const dateWrap    = document.getElementById('simple-event-date-wrap');
   const sessionWrap = document.getElementById('simple-event-session-wrap');
@@ -1382,6 +1453,8 @@ async function saveSimpleEvent() {
     }
   }
 
+  if (!_validateAttachment('simple-event', 'simple-event-error')) return;
+
   const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/simple`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1395,10 +1468,12 @@ async function saveSimpleEvent() {
     }),
   });
   const data = await res.json();
-  if (!res.ok) {
-    err.textContent = data.error || 'Failed to save.';
-    err.classList.remove('hidden');
-    return;
+  if (!res.ok) { err.textContent = data.error || 'Failed to save.'; err.classList.remove('hidden'); return; }
+
+  const { file, caption } = _readAttachment('simple-event');
+  if (file) {
+    const uploaded = await _uploadAttachment(_simpleEventId, file, caption, 'simple-event-error');
+    if (!uploaded) return;
   }
   hideModal('simple-event-modal');
   await loadPatientEvents();
@@ -1462,8 +1537,8 @@ function openFollowupCallModal(ev) {
   document.getElementById('followup-call-title').textContent             = ev.event_name;
   document.getElementById('followup-call-date').value                    = '';
   document.getElementById('followup-call-duration').value                = '';
-  document.getElementById('followup-call-pdf').value                     = '';
   document.getElementById('followup-call-notes').value                   = '';
+  _resetAttachment('followup-call');
   document.getElementById('followup-call-date-reason').value             = '';
   document.getElementById('followup-call-date-reason-wrap').classList.add('hidden');
   document.getElementById('followup-call-scheduled-display').textContent = _followupCallScheduledDate || '';
@@ -1490,7 +1565,6 @@ function openFollowupCallModal(ev) {
 async function saveFollowupCall() {
   const dateVal    = document.getElementById('followup-call-date').value;
   const duration   = document.getElementById('followup-call-duration').value.trim();
-  const pdfInput   = document.getElementById('followup-call-pdf');
   const notes      = document.getElementById('followup-call-notes').value.trim();
   const reasonWrap = document.getElementById('followup-call-date-reason-wrap');
   const dateReason = document.getElementById('followup-call-date-reason').value.trim();
@@ -1502,9 +1576,9 @@ async function saveFollowupCall() {
 
   if (!dateVal)                            { err.textContent = 'Call date is required.';                    err.classList.remove('hidden'); return; }
   if (!duration || parseInt(duration) < 1) { err.textContent = 'Duration must be at least 1 minute.';       err.classList.remove('hidden'); return; }
-  if (!pdfInput.files.length)              { err.textContent = 'Training log PDF is required.';             err.classList.remove('hidden'); return; }
   if (dateChanged && !dateReason)          { err.textContent = 'Please explain why the date is different.'; err.classList.remove('hidden'); return; }
   if (!notes)                              { err.textContent = 'Notes are required.';                       err.classList.remove('hidden'); return; }
+  if (!_validateAttachment('followup-call', 'followup-call-error')) return;
 
   // Collect triggered items
   const triggered = [];
@@ -1546,28 +1620,32 @@ async function saveFollowupCall() {
     triggered.push({ type: 'watch_record' });
   }
 
-  const form = new FormData();
-  form.append('event_id',          _followupCallEventId);
-  form.append('protocol_event_id', _followupCallProtocolEventId);
-  form.append('completion_date',   dateVal);
-  form.append('duration_minutes',  duration);
-  if (dateChanged) form.append('date_change_reason', dateReason);
-  form.append('notes',      notes);
-  form.append('attachment', pdfInput.files[0]);
-  form.append('triggered',  JSON.stringify(triggered));
+  const body = {
+    event_id:          _followupCallEventId,
+    protocol_event_id: _followupCallProtocolEventId,
+    completion_date:   dateVal,
+    duration_minutes:  parseInt(duration),
+    notes,
+    triggered,
+    ...(dateChanged ? { date_change_reason: dateReason } : {}),
+  };
 
   saveBtn.disabled = true;
-  const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/followup-call`, {
-    method: 'POST',
-    body:   form,
-  });
-  saveBtn.disabled = false;
-  const data = await res.json();
-  if (!res.ok) {
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/followup-call`, body);
+  if (!ok) {
+    saveBtn.disabled = false;
     err.textContent = data.error || 'Failed to save.';
     err.classList.remove('hidden');
     return;
   }
+
+  const { file, caption } = _readAttachment('followup-call');
+  if (file) {
+    const uploaded = await _uploadAttachment(_followupCallEventId, file, caption, 'followup-call-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  saveBtn.disabled = false;
   hideModal('followup-call-modal');
   await loadPatientEvents();
 }
@@ -1625,6 +1703,7 @@ async function openWatchRecordModal(ev) {
   document.getElementById('wr-worn-datetime').value  = '';
   document.getElementById('wr-next-days').value      = '';
   document.getElementById('wr-notes').value          = '';
+  _resetAttachment('wr');
   setError('wr-error', '');
 
   _attachDateGuard('wr-sync-datetime', 'wr-error');
@@ -1746,6 +1825,7 @@ async function saveWatchRecord() {
   if ((rightNoWatch || leftNoWatch) && !notes) {
     setError('wr-error', 'Notes are required when a watch is not assigned — explain why.'); return;
   }
+  if (!_validateAttachment('wr', 'wr-error')) return;
 
   // Force unused limb to null when patient has only one watch
   const finalRight = _wrOldRight ? (newRight === NO_WATCH ? null : newRight) : null;
@@ -1768,9 +1848,19 @@ async function saveWatchRecord() {
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/watch-record`, body);
-  saveBtn.disabled = false;
+  if (!ok) {
+    saveBtn.disabled = false;
+    setError('wr-error', data.error || 'Failed to save.');
+    return;
+  }
 
-  if (!ok) { setError('wr-error', data.error || 'Failed to save.'); return; }
+  const { file: wrFile, caption: wrCaption } = _readAttachment('wr');
+  if (wrFile) {
+    const uploaded = await _uploadAttachment(_wrEventId, wrFile, wrCaption, 'wr-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  saveBtn.disabled = false;
   hideModal('watch-record-modal');
   await loadPatient();
   loadPatientEvents();
@@ -1789,6 +1879,7 @@ async function openAgwatchTimingModal(ev) {
 
   document.getElementById('agwatch-timing-title').textContent = ev.event_name;
   document.getElementById('agwatch-timing-notes').value       = '';
+  _resetAttachment('agwatch');
   const errEl = document.getElementById('agwatch-timing-error');
   errEl.textContent = '';
   errEl.classList.add('hidden');
@@ -1923,22 +2014,26 @@ async function saveAgwatchTiming() {
     }
   }
 
-  const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/agwatch-timing`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({
-      event_id:          _agwatchEventId,
-      protocol_event_id: _agwatchProtocolEventId,
-      timings,
-      notes: globalNotes,
-    }),
+  if (!_validateAttachment('agwatch', 'agwatch-timing-error')) return;
+
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/agwatch-timing`, {
+    event_id:          _agwatchEventId,
+    protocol_event_id: _agwatchProtocolEventId,
+    timings,
+    notes: globalNotes,
   });
-  const data = await res.json();
-  if (!res.ok) {
+  if (!ok) {
     errEl.textContent = data.error || 'Failed to save.';
     errEl.classList.remove('hidden');
     return;
   }
+
+  const { file: awFile, caption: awCaption } = _readAttachment('agwatch');
+  if (awFile) {
+    const uploaded = await _uploadAttachment(_agwatchEventId, awFile, awCaption, 'agwatch-timing-error');
+    if (!uploaded) return;
+  }
+
   hideModal('agwatch-timing-modal');
   if (_agwatchProtocolEventId?.startsWith('adl_')) _adlTabLoaded = false;
   if (_agwatchProtocolEventId?.startsWith('vcg_')) _vcgTabLoaded = false;

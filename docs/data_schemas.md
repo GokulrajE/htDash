@@ -306,6 +306,23 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
   - Categorisation always uses `start` for upcoming, `end` for overdue and broken-protocol detection.
 - `flagged` — `true` if `completion_date` falls outside the event's window (auto-set).
 
+### Optional attachment fields on `complete` entries
+
+Modals that include the attachment widget (see CLAUDE.md → Attachment Module) always store both fields when a file is uploaded:
+
+```json
+{
+  "attachment": "attachments/<event_id>.pdf",
+  "attachment_caption": "Brief description of the document"
+}
+```
+
+- `attachment` — relative path from the patient folder root to the uploaded PDF. Filename is always `<event_id>.pdf` where `event_id` is the event's UUID. `null` if no file was uploaded.
+- `attachment_caption` — required when `attachment` is non-null; the therapist must provide a description whenever a file is attached. `null` if no file was uploaded.
+- Both fields are absent entirely on events whose modal does not include the attachment widget.
+- Files are stored in `data/<site>/patients/<homer_id>/attachments/`. Every file in that folder must be referenced by an event in `protocol_events.json`.
+- Download access: admin and therapist roles only. Download links appear only in the Timeline tab (`GET /api/patients/<homer_id>/download-attachment/<event_id>`).
+
 ### Type-specific extra fields on `complete` entries
 
 **Home visit events** (`activation`, `home_visit_d02`, `home_visit_d03`, `home_visit_d15`)

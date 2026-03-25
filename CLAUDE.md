@@ -203,6 +203,60 @@ Tabs appear left-to-right in this order. Visibility is per group.
 
 ---
 
+## Attachment Module
+
+Every modal can optionally include a reusable attachment widget. The widget is a Jinja2 macro with no parameters — it always renders a PDF file input and a caption textarea:
+
+```
+{{ attachment_section() }}
+```
+
+### Rules
+- **One PDF file per event**, optional. The therapist is never forced to upload.
+- **Caption textarea always present** alongside the file input. If a file is selected, the caption is **required** — the therapist must describe what the attachment is. If no file is selected, the caption is ignored.
+- **Storage:** `data/<site>/patients/<homer_id>/attachments/<event_id>.pdf` — filename is the event UUID. Relative path stored in the event JSON as `"attachment": "attachments/<event_id>.pdf"`.
+- **`attachment_caption`** always stored on events with the widget (`null` if left blank).
+- **Download access:** admin and therapist roles only. Engineers cannot download attachments.
+- **Download location:** the Timeline tab is the single place where attachment download links appear. Each completed event in the timeline that has an `attachment` field shows a download link. No other tab or page exposes attachment downloads.
+- **Download endpoint:** `GET /api/patients/<homer_id>/download-attachment/<event_id>` — server checks role, locates `attachments/<event_id>.pdf` in the patient folder, and serves it.
+- **Upload endpoint:** `POST /api/patients/<homer_id>/upload-attachment` — generic, shared by all modals.
+- **Template macro location:** `templates/macros/attachment_section.html` (imported per template).
+- **JS utility:** shared `saveAttachment(eventId, file)` helper in `patient_detail.js`; called by each `save*()` function that has the widget.
+
+### Per-modal attachment configuration
+
+Fill in ✅ / ⬜. Caption is always included when attachment is ✅.
+
+| Modal / Event | Attachment |
+|---|---|
+| `exp_device_install` | ✅ |
+| `activation` | ✅ |
+| `adl_prescription_d01` | ⬜ |
+| `adl_prescription_d15` | ⬜ |
+| `vcg_prescription_d01` | ⬜ |
+| `vcg_prescription_d15` | ⬜ |
+| `prescription_printout_d01` | ⬜ |
+| `prescription_printout_d15` | ⬜ |
+| `home_visit_d02` | ✅ |
+| `home_visit_d03` | ✅ |
+| `home_visit_d15` | ✅ |
+| `followup_call_d07` | ✅ |
+| `followup_call_d21` | ✅ |
+| `training_completion_d29` | ✅ |
+| `adl_agwatch_timing_d03` | ✅ |
+| `adl_agwatch_timing_d15` | ✅ |
+| `vcg_agwatch_timing_d03` | ✅ |
+| `vcg_agwatch_timing_d15` | ✅ |
+| `watch_record` | ✅ |
+| `a1_assessment` | ⬜ |
+| `a2_assessment` | ⬜ |
+| `patient_call` | ✅ |
+| `adverse_event` | ✅ |
+| `robot_issue` | ✅ |
+| `discontinuation` | ✅ |
+
+---
+
 ## JS Coding Conventions
 
 - **One JS file per page** (`static/js/app/<page>.js`). All modals for a page live in that page's file — do not extract individual modals into separate files. If the file grows too large to manage, split *all* modals out together into a `static/js/app/<page>/` directory, not just one.
