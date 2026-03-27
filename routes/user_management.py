@@ -204,6 +204,21 @@ def api_patient_events(homer_id):
         item = dict(entry)
         item['event_name'] = event_defs.get(pid, {}).get('name', pid)
         complete_list.append(item)
+
+    # Free events are already "complete" — include them so they appear in the
+    # timeline and completed-events count.
+    _FREE_EVENT_NAMES = {
+        'patient_call':  'Patient Call',
+        'adverse_event': 'Adverse Event',
+        'robot_issue':   'Robot Issue',
+    }
+    for free_type, free_name in _FREE_EVENT_NAMES.items():
+        for entry in events_data.get('free', {}).get(free_type, []):
+            item = dict(entry)
+            item['event_name']        = free_name
+            item['protocol_event_id'] = free_type
+            complete_list.append(item)
+
     complete_list.sort(key=lambda x: x.get('filed_at') or x.get('completion_date') or '', reverse=True)
 
     return jsonify({'overdue': overdue, 'upcoming': upcoming, 'complete': complete_list})

@@ -61,8 +61,9 @@ function switchTab(tab) {
   });
   if (tab === 'adl')      loadAdlTab();
   if (tab === 'vcg')      loadVcgTab();
-  if (tab === 'calls')    renderCallLogsTab();
-  if (tab === 'timeline') renderTimelineTab();
+  if (tab === 'calls')         renderCallLogsTab();
+  if (tab === 'watch-records') renderWatchRecordsTab();
+  if (tab === 'timeline')      renderTimelineTab();
 }
 
 // ── Modal helpers ─────────────────────────────────────────────────────────────
@@ -353,6 +354,7 @@ async function loadPatientEvents() {
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
     renderTimelineTab();
+    renderWatchRecordsTab();
 
     document.getElementById('patient-completed-count').textContent = (complete || []).length;
     document.getElementById('patient-overdue-count').textContent   = overdue.length;
@@ -404,7 +406,7 @@ function _fmtDate(raw) {
 
 // Fields always rendered in the main timeline layout — skip in extra fields
 const _TIMELINE_BASE_FIELDS = new Set([
-  'protocol_event_id', 'event_name', 'scheduled_date',
+  'id', 'protocol_event_id', 'event_name', 'scheduled_date',
   'completion_date', 'filed_at', 'flagged', '_synthetic',
   'attachment', 'attachment_caption',
 ]);
@@ -417,13 +419,24 @@ const _FIELD_ORDER = [
 ];
 
 const _FIELD_LABELS = {
-  ag_watch_right:    'Right Watch',
-  ag_watch_left:     'Left Watch',
-  pluto_id:          'Pluto Device',
-  mars_id:           'Mars Device',
-  demo_done:         'Demo Done',
-  prescription_file: 'Prescription File',
-  notes:             'Notes',
+  ag_watch_right:      'Right Watch',
+  ag_watch_left:       'Left Watch',
+  pluto_id:            'Pluto Device',
+  mars_id:             'Mars Device',
+  demo_done:           'Demo Done',
+  prescription_file:   'Prescription File',
+  duration_minutes:    'Duration',
+  worn_datetime:       'Worn Date/Time',
+  sync_datetime:       'Sync Date/Time',
+  next_followup_days:  'Next Follow-up (days)',
+  description:         'Description',
+  action_taken:        'Action Taken',
+  date_change_reason:  'Date Change Reason',
+  triggered_by:        'Triggered By',
+  triggered:           'Triggered',
+  faults:              'Faults',
+  paused:              'Paused',
+  notes:               'Notes',
 };
 
 function _timelineExtraFields(ev) {
@@ -444,6 +457,19 @@ function _timelineExtraFields(ev) {
     let display;
     if (typeof val === 'boolean') {
       display = val ? 'Yes' : 'No';
+    } else if (key === 'triggered_by' && val && typeof val === 'object') {
+      const typeLabel   = _WR_TRIGGER_NAMES[val.type] || (val.type || '').replace(/_/g, ' ');
+      const triggerEv   = (_completeEventsCache || []).find(e => e.id === val.id);
+      const triggerDate = triggerEv?.completion_date ? ` — ${_fmtDateTime(triggerEv.completion_date)}` : '';
+      display = typeLabel + triggerDate;
+    } else if (key === 'triggered' && Array.isArray(val)) {
+      if (!val.length) continue;
+      display = val.map(t => _TRIGGERED_LABELS[t.type] || (t.type || '').replace(/_/g, ' ')).join(', ');
+    } else if (key === 'faults' && Array.isArray(val)) {
+      if (!val.length) continue;
+      display = val.map(f => `${f.device}: ${f.fault_description}`).join('; ');
+    } else if (key === 'duration_minutes') {
+      display = `${val} min`;
     } else if (Array.isArray(val)) {
       display = val.join(', ');
     } else if (val && typeof val === 'object' && 'new_id' in val) {
@@ -476,7 +502,7 @@ function _timelineExtraFields(ev) {
     : '';
 }
 
-// ── Attachment helpers ────────────────────────────────────────────────────────
+// ── Attachment helpers ─────────────────────────────────────���──────────────────
 
 function _resetAttachment(prefix) {
   const fi = document.getElementById(`${prefix}-attachment-file`);
@@ -687,6 +713,100 @@ function _callCard(c) {
         ${reasonNote}
         ${attachmentLink}
         ${triggered ? `<div class="flex flex-wrap gap-1.5 pt-1">${triggered}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+// ── Watch Records tab ─────────────────────────────────────────────────────────
+
+function renderWatchRecordsTab() {
+  const container = document.getElementById('watch-records-content');
+  if (!container) return;
+
+  const records = (_completeEventsCache || [])
+    .filter(e => e.protocol_event_id === 'watch_record')
+    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+
+  if (!records.length) {
+    container.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-16 text-slate-300">
+        <i class="fas fa-clock text-3xl mb-3"></i>
+        <p class="text-sm">No watch records yet.</p>
+      </div>`;
+    return;
+  }
+  container.innerHTML = records.map(_watchRecordCard).join('');
+}
+
+function _watchAssignmentRow(side, wr) {
+  const key  = `ag_watch_${side}`;
+  const data = wr[key];
+  if (!data) return '';
+  const { old_id, old_lost, new_id } = data;
+  // Skip limb entirely if neither old nor new was ever assigned
+  if (!old_id && !new_id) return '';
+
+  let arrow;
+  if (old_id === new_id) {
+    arrow = `<span class="text-slate-500">${old_id ?? 'None'}</span> <span class="text-slate-300 text-xs">no change</span>`;
+  } else {
+    const oldPart = old_id
+      ? `${old_id}${old_lost ? ' <span class="text-red-500 text-xs">(lost)</span>' : ''}`
+      : '<span class="text-slate-400">—</span>';
+    const newPart = new_id
+      ? `<span class="font-medium text-slate-800">${new_id}</span>`
+      : '<span class="text-slate-400 text-xs">None</span>';
+    arrow = `${oldPart} <span class="text-slate-400 mx-1">→</span> ${newPart}`;
+  }
+  const label = side.charAt(0).toUpperCase() + side.slice(1);
+  return `<div class="flex items-center gap-2 text-xs">
+    <span class="text-slate-400 w-8 shrink-0">${label}</span>
+    <span>${arrow}</span>
+  </div>`;
+}
+
+function _watchRecordCard(wr) {
+  const dayNum   = _dayNumber(wr.completion_date);
+  const dayBadge = dayNum !== null ? `<span class="text-xs font-semibold text-teal-500">Day ${dayNum}</span>` : '';
+  const dateStr  = wr.completion_date ? _fmtDateTime(wr.completion_date) : '—';
+
+  const rightRow = _watchAssignmentRow('right', wr);
+  const leftRow  = _watchAssignmentRow('left', wr);
+
+  const syncStr  = wr.sync_datetime  ? `<div class="text-xs text-slate-500"><span class="text-slate-400">Sync:</span> ${_fmtDateTime(wr.sync_datetime)}</div>`  : '';
+  const wornStr  = wr.worn_datetime  ? `<div class="text-xs text-slate-500"><span class="text-slate-400">Worn:</span> ${_fmtDateTime(wr.worn_datetime)}</div>`   : '';
+  const nextStr  = wr.next_followup_days != null
+    ? `<div class="text-xs text-slate-500"><span class="text-slate-400">Next check:</span> ${wr.next_followup_days} days</div>` : '';
+
+  let triggerStr = '';
+  if (wr.triggered_by) {
+    const typeLabel  = _WR_TRIGGER_NAMES[wr.triggered_by.type] || (wr.triggered_by.type || '').replace(/_/g, ' ');
+    const triggerEv  = (_completeEventsCache || []).find(e => e.id === wr.triggered_by.id);
+    const triggerDate = triggerEv?.completion_date ? ` — ${_fmtDateTime(triggerEv.completion_date)}` : '';
+    triggerStr = `<div class="text-xs text-slate-500"><span class="text-slate-400">Triggered by:</span> ${typeLabel}${triggerDate}</div>`;
+  }
+
+  const notesStr = wr.notes
+    ? `<div class="text-xs text-slate-500 mt-1"><span class="text-slate-400">Notes:</span> ${wr.notes}</div>` : '';
+
+  const attachmentStr = (wr.attachment && wr.id)
+    ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${wr.id}" target="_blank"
+         class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1">
+         <i class="fas fa-paperclip"></i>Download attachment</a>` : '';
+
+  return `
+    <div class="bg-white rounded-xl border border-teal-200 shadow-sm mb-3 overflow-hidden">
+      <div class="bg-teal-50 border-b border-teal-100 px-4 py-2.5 flex items-center justify-between">
+        <span class="text-sm font-semibold text-teal-800">Watch Record</span>
+        <div class="flex items-center gap-3">
+          ${dayBadge}
+          <span class="text-xs text-slate-500">${dateStr}</span>
+        </div>
+      </div>
+      <div class="px-4 py-3 space-y-1.5">
+        ${rightRow}
+        ${leftRow}
+        ${syncStr}${wornStr}${nextStr}${triggerStr}${notesStr}${attachmentStr}
       </div>
     </div>`;
 }
