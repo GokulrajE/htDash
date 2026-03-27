@@ -62,6 +62,7 @@ function switchTab(tab) {
   if (tab === 'adl')      loadAdlTab();
   if (tab === 'vcg')      loadVcgTab();
   if (tab === 'calls')         renderCallLogsTab();
+  if (tab === 'adverse')       renderAdverseEventsTab();
   if (tab === 'watch-records') renderWatchRecordsTab();
   if (tab === 'timeline')      renderTimelineTab();
 }
@@ -354,6 +355,7 @@ async function loadPatientEvents() {
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
     renderTimelineTab();
+    renderAdverseEventsTab();
     renderWatchRecordsTab();
 
     document.getElementById('patient-completed-count').textContent = (complete || []).length;
@@ -717,6 +719,68 @@ function _callCard(c) {
     </div>`;
 }
 
+// ── Adverse Events tab ────────────────────────────────────────────────────────
+
+function renderAdverseEventsTab() {
+  const container = document.getElementById('adverse-events-content');
+  if (!container) return;
+
+  const events = (_completeEventsCache || [])
+    .filter(e => e.protocol_event_id === 'adverse_event')
+    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+
+  if (!events.length) {
+    container.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-16 text-slate-300">
+        <i class="fas fa-exclamation-triangle text-3xl mb-3"></i>
+        <p class="text-sm">No adverse events recorded.</p>
+      </div>`;
+    return;
+  }
+  container.innerHTML = events.map(_adverseEventCard).join('');
+}
+
+function _adverseEventCard(ev) {
+  const dayNum   = _dayNumber(ev.completion_date);
+  const dayBadge = dayNum !== null ? `<span class="text-xs font-semibold text-red-500">Day ${dayNum}</span>` : '';
+  const dateStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
+
+  let triggerStr = '';
+  if (ev.triggered_by) {
+    const typeLabel   = _WR_TRIGGER_NAMES[ev.triggered_by.type] || (ev.triggered_by.type || '').replace(/_/g, ' ');
+    const triggerEv   = (_completeEventsCache || []).find(e => e.id === ev.triggered_by.id);
+    const triggerDate = triggerEv?.completion_date ? ` — ${_fmtDateTime(triggerEv.completion_date)}` : '';
+    triggerStr = `<div class="text-xs text-slate-500"><span class="text-slate-400">Triggered by:</span> ${typeLabel}${triggerDate}</div>`;
+  }
+
+  const pausedStr = ev.paused
+    ? `<div class="inline-flex items-center gap-1 text-xs bg-red-50 text-red-700 border border-red-200 rounded-full px-2 py-0.5"><i class="fas fa-pause text-[10px]"></i>Training paused</div>`
+    : '';
+
+  const attachmentStr = (ev.attachment && ev.id)
+    ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${ev.id}" target="_blank"
+         class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
+         <i class="fas fa-paperclip"></i>Download attachment</a>` : '';
+
+  return `
+    <div class="bg-white rounded-xl border border-red-200 shadow-sm mb-3 overflow-hidden">
+      <div class="bg-red-50 border-b border-red-100 px-4 py-2.5 flex items-center justify-between">
+        <span class="text-sm font-semibold text-red-800">Adverse Event</span>
+        <div class="flex items-center gap-3">
+          ${dayBadge}
+          <span class="text-xs text-slate-500">${dateStr}</span>
+        </div>
+      </div>
+      <div class="px-4 py-3 space-y-1.5">
+        ${ev.description ? `<p class="text-sm text-slate-700">${ev.description}</p>` : ''}
+        ${ev.action_taken ? `<div class="text-xs text-slate-500"><span class="text-slate-400">Action taken:</span> ${ev.action_taken}</div>` : ''}
+        ${pausedStr}
+        ${triggerStr}
+        ${attachmentStr}
+      </div>
+    </div>`;
+}
+
 // ── Watch Records tab ─────────────────────────────────────────────────────────
 
 function renderWatchRecordsTab() {
@@ -767,7 +831,7 @@ function _watchAssignmentRow(side, wr) {
 
 function _watchRecordCard(wr) {
   const dayNum   = _dayNumber(wr.completion_date);
-  const dayBadge = dayNum !== null ? `<span class="text-xs font-semibold text-teal-500">Day ${dayNum}</span>` : '';
+  const dayBadge = dayNum !== null ? `<span class="text-xs font-semibold text-indigo-500">Day ${dayNum}</span>` : '';
   const dateStr  = wr.completion_date ? _fmtDateTime(wr.completion_date) : '—';
 
   const rightRow = _watchAssignmentRow('right', wr);
@@ -795,9 +859,9 @@ function _watchRecordCard(wr) {
          <i class="fas fa-paperclip"></i>Download attachment</a>` : '';
 
   return `
-    <div class="bg-white rounded-xl border border-teal-200 shadow-sm mb-3 overflow-hidden">
-      <div class="bg-teal-50 border-b border-teal-100 px-4 py-2.5 flex items-center justify-between">
-        <span class="text-sm font-semibold text-teal-800">Watch Record</span>
+    <div class="bg-white rounded-xl border border-indigo-200 shadow-sm mb-3 overflow-hidden">
+      <div class="bg-indigo-50 border-b border-indigo-100 px-4 py-2.5 flex items-center justify-between">
+        <span class="text-sm font-semibold text-indigo-800">Watch Record</span>
         <div class="flex items-center gap-3">
           ${dayBadge}
           <span class="text-xs text-slate-500">${dateStr}</span>
