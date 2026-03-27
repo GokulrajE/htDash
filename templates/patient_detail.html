@@ -19,9 +19,10 @@
   <label class="block text-sm font-medium text-slate-700">Attachment <span class="text-slate-400 font-normal">(optional, PDF only)</span></label>
   <input type="file" id="{{ prefix }}-attachment-file" accept=".pdf"
     class="w-full text-sm text-slate-500 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-slate-100 file:text-slate-600 hover:file:bg-slate-200 cursor-pointer">
-  <textarea id="{{ prefix }}-attachment-caption" rows="2"
-    class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
-    placeholder="Describe this attachment… (required if file selected)"></textarea>
+  <label class="block text-xs text-slate-500 mt-0.5">Attachment Description <span class="text-slate-400 font-normal">(required if file selected)</span></label>
+  <textarea id="{{ prefix }}-attachment-caption" rows="2" disabled
+    class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+    placeholder="Describe this attachment…"></textarea>
 </div>
 {% endmacro %}
 <div class="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -362,7 +363,7 @@
       <label for="device-setup-demo" class="text-sm font-medium text-slate-700">Demo completed</label>
     </div>
     <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">Notes</label>
+      <label class="block text-sm font-medium text-slate-700 mb-2">Event Notes</label>
       <textarea id="device-setup-notes" rows="3"
                 class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                 placeholder="Optional notes…"></textarea>
@@ -408,7 +409,7 @@
       </select>
     </div>
     <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">Notes</label>
+      <label class="block text-sm font-medium text-slate-700 mb-2">Event Notes</label>
       <textarea id="activation-notes" rows="3"
                 class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                 placeholder="Optional notes…"></textarea>
@@ -585,7 +586,7 @@
         </div>
       </div>
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Event Notes <span class="text-slate-400 font-normal">(optional)</span></label>
         <textarea id="simple-event-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Add any notes…"></textarea>
       </div>
       {{ attachment_section('simple-event') }}
@@ -618,7 +619,7 @@
         <input id="followup-call-duration" type="number" min="1" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="e.g. 20" />
       </div>
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Notes</label>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Event Notes</label>
         <textarea id="followup-call-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Summary of the call…"></textarea>
       </div>
 
@@ -738,7 +739,7 @@
     </div>
     <div class="px-6 pt-4 pb-6 shrink-0 space-y-4">
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Global notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Event Notes <span class="text-slate-400 font-normal">(optional)</span></label>
         <textarea id="agwatch-timing-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Overall session notes…"></textarea>
       </div>
       {{ attachment_section('agwatch') }}
@@ -784,6 +785,7 @@
             </label>
           </div>
         </div>
+        <p id="wr-no-watches-msg" class="hidden text-sm text-slate-400 italic">No watches assigned.</p>
       </div>
       <!-- New watch right -->
       <div id="wr-right-wrap">
@@ -819,7 +821,7 @@
       </div>
       <!-- Notes -->
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Event Notes <span class="text-slate-400 font-normal">(optional)</span></label>
         <textarea id="wr-notes" rows="3" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Optional notes…"></textarea>
       </div>
       {{ attachment_section('wr') }}

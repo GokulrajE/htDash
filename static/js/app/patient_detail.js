@@ -375,7 +375,7 @@ function _dayNumber(completionDate) {
   const act  = new Date(actRaw.replace(' ', 'T'));
   const comp = new Date(completionDate.replace(' ', 'T'));
   if (isNaN(act) || isNaN(comp)) return null;
-  return Math.round((comp - act) / 86400000);
+  return Math.round((comp - act) / 86400000) + 1;
 }
 
 function _fmtDateTime(raw) {
@@ -478,7 +478,13 @@ function _resetAttachment(prefix) {
   const fi = document.getElementById(`${prefix}-attachment-file`);
   const ci = document.getElementById(`${prefix}-attachment-caption`);
   if (fi) fi.value = '';
-  if (ci) ci.value = '';
+  if (ci) { ci.value = ''; ci.disabled = true; }
+  if (fi && ci) {
+    fi.onchange = () => {
+      ci.disabled = !fi.files.length;
+      if (!fi.files.length) ci.value = '';
+    };
+  }
 }
 
 function _readAttachment(prefix) {
@@ -1680,20 +1686,25 @@ async function openWatchRecordModal(ev) {
   // Current watches + Lost checkboxes
   _wrOldRight = patientData?.agWatchRightID || null;
   _wrOldLeft  = patientData?.agWatchLeftID  || null;
-  const twoWatches = !!(_wrOldRight && _wrOldLeft);
+  // Initial assignment (activation): neither watch exists yet — treat as two-watch.
+  const bothNull   = !_wrOldRight && !_wrOldLeft;
+  const twoWatches = !!(_wrOldRight && _wrOldLeft) || bothNull;
+  const showRight  = !!_wrOldRight || bothNull;
+  const showLeft   = !!_wrOldLeft  || bothNull;
 
-  document.getElementById('wr-old-right').textContent = _wrOldRight || 'Not assigned';
-  document.getElementById('wr-old-left').textContent  = _wrOldLeft  || 'Not assigned';
+  document.getElementById('wr-old-right').textContent = _wrOldRight || '';
+  document.getElementById('wr-old-left').textContent  = _wrOldLeft  || '';
   document.getElementById('wr-right-lost-wrap').classList.toggle('hidden', !_wrOldRight);
   document.getElementById('wr-left-lost-wrap').classList.toggle('hidden',  !_wrOldLeft);
+  document.getElementById('wr-no-watches-msg').classList.toggle('hidden',  !bothNull);
   document.getElementById('wr-right-lost').checked = false;
   document.getElementById('wr-left-lost').checked  = false;
 
   // Show/hide selectors and sync based on watch count
   document.getElementById('wr-right-current-row').classList.toggle('hidden', !_wrOldRight);
   document.getElementById('wr-left-current-row').classList.toggle('hidden',  !_wrOldLeft);
-  document.getElementById('wr-right-wrap').classList.toggle('hidden', !_wrOldRight);
-  document.getElementById('wr-left-wrap').classList.toggle('hidden',  !_wrOldLeft);
+  document.getElementById('wr-right-wrap').classList.toggle('hidden', !showRight);
+  document.getElementById('wr-left-wrap').classList.toggle('hidden',  !showLeft);
   document.getElementById('wr-sync-wrap').classList.toggle('hidden',  !twoWatches);
 
   // Reset fields
@@ -1804,36 +1815,41 @@ async function saveWatchRecord() {
   const nextDays = document.getElementById('wr-next-days').value;
   const notes    = document.getElementById('wr-notes').value.trim();
   const NO_WATCH   = '__none__';
-  const twoWatches = !!(_wrOldRight && _wrOldLeft);
+  const bothNull   = !_wrOldRight && !_wrOldLeft;
+  const twoWatches = !!(_wrOldRight && _wrOldLeft) || bothNull;
+  const showRight  = !!_wrOldRight || bothNull;
+  const showLeft   = !!_wrOldLeft  || bothNull;
 
-  if (_wrOldRight && !newRight) { setError('wr-error', 'Please select a right watch or "No Watch Available".'); return; }
-  if (_wrOldLeft  && !newLeft)  { setError('wr-error', 'Please select a left watch or "No Watch Available".'); return; }
+  if (showRight && !newRight) { setError('wr-error', 'Please select a right watch or "No Watch Available".'); return; }
+  if (showLeft  && !newLeft)  { setError('wr-error', 'Please select a left watch or "No Watch Available".'); return; }
   if (twoWatches && newRight !== NO_WATCH && newRight === newLeft) {
     setError('wr-error', 'Right and left watches must be different.'); return;
   }
 
+  const rightLost = (document.getElementById('wr-right-lost')?.checked && !!_wrOldRight) || false;
+  const leftLost  = (document.getElementById('wr-left-lost')?.checked  && !!_wrOldLeft)  || false;
+  const anyLost   = rightLost || leftLost;
+
   // Determine whether either watch is changing vs being kept as-is
-  const bothCurrent = twoWatches && newRight === _wrOldRight && newLeft === _wrOldLeft;
+  const bothCurrent = !bothNull && twoWatches && !anyLost && newRight === _wrOldRight && newLeft === _wrOldLeft;
   const syncRequired = twoWatches && !bothCurrent;
   const wornRequired = !bothCurrent;
 
   if (syncRequired && !syncDt) { setError('wr-error', 'Sync date & time is required when watches are changed.'); return; }
   if (wornRequired && !wornDt) { setError('wr-error', 'Worn date & time is required.'); return; }
   if (!nextDays || parseInt(nextDays) < 1) { setError('wr-error', 'Next follow-up days must be at least 1.'); return; }
-  const rightNoWatch = _wrOldRight && newRight === NO_WATCH;
-  const leftNoWatch  = _wrOldLeft  && newLeft  === NO_WATCH;
+  const rightNoWatch = showRight && newRight === NO_WATCH;
+  const leftNoWatch  = showLeft  && newLeft  === NO_WATCH;
   if ((rightNoWatch || leftNoWatch) && !notes) {
     setError('wr-error', 'Notes are required when a watch is not assigned — explain why.'); return;
   }
   if (!_validateAttachment('wr', 'wr-error')) return;
 
-  // Force unused limb to null when patient has only one watch
-  const finalRight = _wrOldRight ? (newRight === NO_WATCH ? null : newRight) : null;
-  const finalLeft  = _wrOldLeft  ? (newLeft  === NO_WATCH ? null : newLeft)  : null;
+  // Resolve final watch IDs (null for unshown limbs or "No Watch Available")
+  const finalRight = showRight ? (newRight === NO_WATCH ? null : newRight) : null;
+  const finalLeft  = showLeft  ? (newLeft  === NO_WATCH ? null : newLeft)  : null;
 
-  const saveBtn   = document.getElementById('wr-save');
-  const rightLost = (document.getElementById('wr-right-lost')?.checked && !!_wrOldRight) || false;
-  const leftLost  = (document.getElementById('wr-left-lost')?.checked  && !!_wrOldLeft)  || false;
+  const saveBtn = document.getElementById('wr-save');
   const body = {
     event_id:                 _wrEventId,
     ag_watch_right_new:       finalRight,
