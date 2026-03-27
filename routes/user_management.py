@@ -1396,6 +1396,43 @@ def api_download_attachment(homer_id, event_id):
                      download_name=f'{homer_id}_{event_id}.pdf')
 
 
+@bp.route('/api/patients/<homer_id>/call-logs', methods=['GET'])
+def api_call_logs(homer_id):
+    """Return all call records: scheduled follow-up calls + free patient calls."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    protocol    = load_study_protocol()
+    patient     = read_patient_meta(folder, homer_id)
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'followup_calls': [], 'patient_calls': []})
+
+    event_defs = {}
+    for e in protocol.get('shared', []):
+        event_defs[e['id']] = e
+    for e in protocol.get((patient or {}).get('group', ''), []):
+        event_defs[e['id']] = e
+
+    FOLLOWUP_IDS = {'followup_call_d07', 'followup_call_d21'}
+    followup_calls = []
+    for entry in events_data.get('complete', []):
+        pid = entry.get('protocol_event_id', '')
+        if pid in FOLLOWUP_IDS:
+            item = dict(entry)
+            item['event_name'] = event_defs.get(pid, {}).get('name', pid)
+            followup_calls.append(item)
+    followup_calls.sort(key=lambda x: x.get('completion_date') or '', reverse=True)
+
+    patient_calls = list(events_data.get('free', {}).get('patient_call', []))
+    patient_calls.sort(key=lambda x: x.get('completion_date') or '', reverse=True)
+
+    return jsonify({'followup_calls': followup_calls, 'patient_calls': patient_calls})
+
+
 @bp.route('/api/patients/<homer_id>/complete-training', methods=['POST'])
 def api_complete_training(homer_id):
     if not flask_session.get('login_place'):

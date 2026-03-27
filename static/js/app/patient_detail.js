@@ -60,6 +60,7 @@ function switchTab(tab) {
   });
   if (tab === 'adl')      loadAdlTab();
   if (tab === 'vcg')      loadVcgTab();
+  if (tab === 'calls')    renderCallLogsTab();
   if (tab === 'timeline') renderTimelineTab();
 }
 
@@ -337,6 +338,7 @@ async function submitDiscontinue() {
 // ── Patient events ────────────────────────────────────────────────────────────
 
 let _completeEventsCache = null;  // null = not yet loaded
+let _callLogsCache      = null;  // null = not yet loaded
 
 async function loadPatientEvents() {
   const completedEl = document.getElementById('patient-completed-events');
@@ -348,6 +350,7 @@ async function loadPatientEvents() {
     const { overdue, upcoming, complete } = await res.json();
     eventsCache = [...overdue, ...upcoming];
     _completeEventsCache = complete || [];
+    _callLogsCache = null;  // invalidate so call logs tab re-fetches
     renderTimelineTab();
 
     document.getElementById('patient-completed-count').textContent = (complete || []).length;
@@ -595,6 +598,96 @@ function renderTimelineTab() {
       </div>`;
   }).join('');
   container.innerHTML = `<div>${items}</div>`;
+}
+
+// ── Call Logs tab ─────────────────────────────────────────────────────────────
+
+async function renderCallLogsTab() {
+  const container = document.getElementById('call-logs-content');
+  if (!container) return;
+  if (_callLogsCache) { _renderCallLogs(container, _callLogsCache); return; }
+
+  container.innerHTML = `<div class="flex items-center justify-center py-16 text-slate-300"><p class="text-sm">Loading…</p></div>`;
+
+  try {
+    const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/call-logs`);
+    const data = await res.json();
+    _callLogsCache = data;
+    _renderCallLogs(container, data);
+  } catch {
+    container.innerHTML = `<p class="text-sm text-red-500 p-4">Failed to load call logs.</p>`;
+  }
+}
+
+function _renderCallLogs(container, data) {
+  const all = [
+    ...(data.followup_calls || []).map(c => ({ ...c, _callType: 'followup' })),
+    ...(data.patient_calls  || []).map(c => ({ ...c, _callType: 'patient'  })),
+  ];
+  all.sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+
+  if (!all.length) {
+    container.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-16 text-slate-300">
+        <i class="fas fa-phone text-3xl mb-3"></i>
+        <p class="text-sm">No calls recorded yet.</p>
+      </div>`;
+    return;
+  }
+  container.innerHTML = all.map(_callCard).join('');
+}
+
+const _TRIGGERED_LABELS = {
+  adverse_event: 'Adverse event logged',
+  robot_issue:   'Robot issue logged',
+  watch_record:  'Watch record triggered',
+};
+
+function _callCard(c) {
+  const isFollowup   = c._callType === 'followup';
+  const borderCls    = isFollowup ? 'border-blue-200'   : 'border-violet-200';
+  const headerBg     = isFollowup ? 'bg-blue-50 border-b border-blue-100'   : 'bg-violet-50 border-b border-violet-100';
+  const titleCls     = isFollowup ? 'text-blue-800'     : 'text-violet-800';
+  const dayBadgeCls  = isFollowup ? 'text-blue-500'     : 'text-violet-500';
+
+  const dayNum  = _dayNumber(c.completion_date);
+  const dayBadge = dayNum !== null
+    ? `<span class="text-xs font-semibold ${dayBadgeCls}">Day ${dayNum}</span>` : '';
+  const dateStr  = c.completion_date ? _fmtDateTime(c.completion_date) : '—';
+  const duration = c.duration_minutes ? `${c.duration_minutes} min` : '—';
+
+  const triggered = (c.triggered || []).map(t =>
+    `<span class="inline-flex items-center gap-1 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2 py-0.5">` +
+    `<i class="fas fa-arrow-right text-[10px]"></i>${_TRIGGERED_LABELS[t.type] || t.type}</span>`
+  ).join('');
+
+  const reasonNote = c.date_change_reason
+    ? `<p class="text-xs text-amber-600"><i class="fas fa-info-circle mr-1"></i>Date changed: ${c.date_change_reason}</p>`
+    : '';
+
+  const attachmentLink = (c.attachment && c.id)
+    ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${c.id}" target="_blank" ` +
+      `class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">` +
+      `<i class="fas fa-paperclip"></i>Download attachment</a>`
+    : '';
+
+  return `
+    <div class="bg-white rounded-xl border ${borderCls} shadow-sm mb-3 overflow-hidden">
+      <div class="${headerBg} px-4 py-2.5 flex items-center justify-between">
+        <span class="text-sm font-semibold ${titleCls}">${c.event_name || 'Patient Call'}</span>
+        <div class="flex items-center gap-3">
+          ${dayBadge}
+          <span class="text-xs text-slate-500">${dateStr}</span>
+        </div>
+      </div>
+      <div class="px-4 py-3 space-y-1.5">
+        <p class="text-xs text-slate-500"><i class="fas fa-clock mr-1"></i>${duration}</p>
+        ${c.notes ? `<p class="text-sm text-slate-700">${c.notes}</p>` : ''}
+        ${reasonNote}
+        ${attachmentLink}
+        ${triggered ? `<div class="flex flex-wrap gap-1.5 pt-1">${triggered}</div>` : ''}
+      </div>
+    </div>`;
 }
 
 function completedTimeline(events) {
