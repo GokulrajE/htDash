@@ -4,7 +4,8 @@
    ============================================================ */
 
 let patientData = null;
-let isAdmin = false;
+let isAdmin      = false;
+let userPrivilege = '';
 let eventsCache = [];
 
 // ── Status helpers ────────────────────────────────────────────────────────────
@@ -1749,6 +1750,120 @@ async function saveFollowupCall() {
   await loadPatientEvents();
 }
 
+// ── Patient Call modal ────────────────────────────────────────────────────────
+
+function _pcToggleSubform(type) {
+  const checked = document.getElementById(`pc-trigger-${type}`).checked;
+  const formEl  = document.getElementById(`pc-${type}-form`) || document.getElementById(`pc-${type}-note`);
+  if (formEl) formEl.classList.toggle('hidden', !checked);
+  if (!checked) {
+    if (type === 'adverse') {
+      document.getElementById('pc-adverse-desc').value   = '';
+      document.getElementById('pc-adverse-action').value = '';
+      document.getElementById('pc-adverse-paused').checked = false;
+    } else if (type === 'robot') {
+      document.getElementById('pc-robot-desc').value   = '';
+      document.getElementById('pc-robot-paused').checked = false;
+      ['pluto', 'mars'].forEach(d => _pcClearDevice(d));
+    }
+  }
+}
+
+function _pcToggleDevice(device) {
+  const checked = document.getElementById(`pc-robot-${device}-on`).checked;
+  document.getElementById(`pc-robot-${device}-form`).classList.toggle('hidden', !checked);
+  if (!checked) _pcClearDevice(device);
+}
+
+function _pcClearDevice(device) {
+  document.getElementById(`pc-robot-${device}-on`).checked       = false;
+  document.getElementById(`pc-robot-${device}-form`).classList.add('hidden');
+  document.getElementById(`pc-robot-${device}-desc`).value       = '';
+  document.getElementById(`pc-robot-${device}-resolved`).checked = false;
+}
+
+function openPatientCallModal() {
+  document.getElementById('pc-date').value     = '';
+  document.getElementById('pc-duration').value = '';
+  document.getElementById('pc-notes').value    = '';
+  _resetAttachment('pc');
+
+  ['adverse', 'robot', 'watch'].forEach(type => {
+    const cb = document.getElementById(`pc-trigger-${type}`);
+    if (cb) { cb.checked = false; _pcToggleSubform(type); }
+  });
+  document.getElementById('pc-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
+  document.getElementById('pc-trigger-watch-wrap').classList.toggle('hidden',
+    !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
+
+  setError('pc-error', '');
+  _attachDateGuard('pc-date', 'pc-error');
+  showModal('patient-call-modal');
+}
+
+async function savePatientCall() {
+  const dateVal  = document.getElementById('pc-date').value;
+  const duration = document.getElementById('pc-duration').value.trim();
+  const notes    = document.getElementById('pc-notes').value.trim();
+  const saveBtn  = document.getElementById('pc-save');
+
+  if (!dateVal)                            { setError('pc-error', 'Call date is required.'); return; }
+  if (!duration || parseInt(duration) < 1) { setError('pc-error', 'Duration must be at least 1 minute.'); return; }
+  if (!notes)                              { setError('pc-error', 'Notes are required.'); return; }
+  if (!_validateAttachment('pc', 'pc-error')) return;
+
+  const triggered = [];
+
+  if (document.getElementById('pc-trigger-adverse').checked) {
+    const desc   = document.getElementById('pc-adverse-desc').value.trim();
+    const action = document.getElementById('pc-adverse-action').value.trim();
+    if (!desc)   { setError('pc-error', 'Adverse event description is required.'); return; }
+    if (!action) { setError('pc-error', 'Adverse event action taken is required.'); return; }
+    triggered.push({
+      type: 'adverse_event', description: desc, action_taken: action,
+      paused: document.getElementById('pc-adverse-paused').checked,
+    });
+  }
+
+  const robotCb = document.getElementById('pc-trigger-robot');
+  if (robotCb && robotCb.checked) {
+    const desc = document.getElementById('pc-robot-desc').value.trim();
+    if (!desc) { setError('pc-error', 'Robot issue description is required.'); return; }
+    const faults = [];
+    for (const device of ['pluto', 'mars']) {
+      if (document.getElementById(`pc-robot-${device}-on`).checked) {
+        const fd = document.getElementById(`pc-robot-${device}-desc`).value.trim();
+        if (!fd) { setError('pc-error', `${device.charAt(0).toUpperCase() + device.slice(1)} fault description is required.`); return; }
+        faults.push({ device, fault_description: fd,
+          resolved_same_day: document.getElementById(`pc-robot-${device}-resolved`).checked });
+      }
+    }
+    triggered.push({ type: 'robot_issue', description: desc, faults,
+      paused: document.getElementById('pc-robot-paused').checked });
+  }
+
+  if (document.getElementById('pc-trigger-watch').checked) {
+    triggered.push({ type: 'watch_record' });
+  }
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/log-patient-call`,
+    { completion_date: dateVal, duration_minutes: parseInt(duration), notes, triggered }
+  );
+  if (!ok) { setError('pc-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('pc');
+  if (file) {
+    const uploaded = await _uploadAttachment(data.id, file, caption, 'pc-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('patient-call-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
 // ── Watch Record modal ────────────────────────────────────────────────────────
 
 const _WR_TRIGGER_NAMES = {
@@ -2160,6 +2275,13 @@ async function loadPatient() {
       return;
     }
     renderOverview(patientData);
+    // Show "Log Call" button for admin/therapist on activated patients
+    const logCallBtn = document.getElementById('log-call-btn');
+    if (logCallBtn && patientData.activationDate &&
+        (userPrivilege === 'admin' || userPrivilege === 'therapist')) {
+      logCallBtn.classList.remove('hidden');
+      logCallBtn.classList.add('flex');
+    }
   } catch (e) {
     console.error('Error loading patient:', e);
   }
@@ -2170,7 +2292,8 @@ async function loadPrivilege() {
     const res = await fetch('/api/me');
     if (res.ok) {
       const s = await res.json();
-      isAdmin = s.privilege === 'admin';
+      userPrivilege = s.privilege || '';
+      isAdmin = userPrivilege === 'admin';
     }
   } catch (_) {}
 }

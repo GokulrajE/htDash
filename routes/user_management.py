@@ -1396,6 +1396,152 @@ def api_download_attachment(homer_id, event_id):
                      download_name=f'{homer_id}_{event_id}.pdf')
 
 
+@bp.route('/api/patients/<homer_id>/log-patient-call', methods=['POST'])
+def api_log_patient_call(homer_id):
+    """Append a patient call to free.patient_call and process triggered events."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body             = request.get_json() or {}
+    completion_date  = (body.get('completion_date') or '').strip()
+    duration_str     = str(body.get('duration_minutes', '')).strip()
+    notes            = (body.get('notes') or '').strip()
+    triggered_items  = body.get('triggered', [])
+    if not isinstance(triggered_items, list):
+        triggered_items = []
+
+    if not completion_date:
+        return jsonify({'error': 'Call date is required.'}), 400
+    try:
+        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Call date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+    if not duration_str:
+        return jsonify({'error': 'Duration is required.'}), 400
+    try:
+        duration_minutes = int(duration_str)
+        if duration_minutes <= 0:
+            raise ValueError
+    except ValueError:
+        return jsonify({'error': 'Duration must be a positive integer.'}), 400
+    if not notes:
+        return jsonify({'error': 'Notes are required.'}), 400
+
+    patient_meta    = read_patient_meta(folder, homer_id)
+    is_experimental = patient_meta and patient_meta.get('group') == 'experimental'
+
+    for item in triggered_items:
+        t = item.get('type')
+        if t == 'adverse_event':
+            if not (item.get('description') or '').strip():
+                return jsonify({'error': 'Adverse event description is required.'}), 400
+            if not (item.get('action_taken') or '').strip():
+                return jsonify({'error': 'Adverse event action taken is required.'}), 400
+        elif t == 'robot_issue':
+            if not is_experimental:
+                return jsonify({'error': 'Robot issue is only valid for experimental patients.'}), 400
+            if not (item.get('description') or '').strip():
+                return jsonify({'error': 'Robot issue description is required.'}), 400
+            for fault in item.get('faults', []):
+                if not (fault.get('fault_description') or '').strip():
+                    device = fault.get('device', 'device').capitalize()
+                    return jsonify({'error': f'{device} fault description is required.'}), 400
+        elif t == 'watch_record':
+            pass
+        else:
+            return jsonify({'error': f"Unknown triggered type: {t}"}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    call_id  = str(uuid.uuid4())
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+
+    triggered_refs = []
+    for item in triggered_items:
+        t = item.get('type')
+        if t == 'adverse_event':
+            new_id = str(uuid.uuid4())
+            events_data['free'].setdefault('adverse_event', []).append({
+                'id':           new_id,
+                'triggered_by': {'type': 'patient_call', 'id': call_id},
+                'completion_date': completion_date,
+                'filed_at':     filed_at,
+                'description':  item['description'].strip(),
+                'action_taken': item['action_taken'].strip(),
+                'paused':       bool(item.get('paused', False)),
+                'pause_date':   None,
+                'allocated_pause_days': None,
+            })
+            triggered_refs.append({'type': 'adverse_event', 'id': new_id})
+
+        elif t == 'robot_issue':
+            new_id = str(uuid.uuid4())
+            events_data['free'].setdefault('robot_issue', []).append({
+                'id':           new_id,
+                'triggered_by': {'type': 'patient_call', 'id': call_id},
+                'completion_date': completion_date,
+                'filed_at':     filed_at,
+                'description':  item['description'].strip(),
+                'paused':       bool(item.get('paused', False)),
+                'pause_date':   None,
+                'allocated_pause_days': None,
+                'faults': [
+                    {
+                        'device':            f['device'],
+                        'fault_description': f['fault_description'].strip(),
+                        'resolved_same_day': bool(f.get('resolved_same_day', False)),
+                    }
+                    for f in item.get('faults', [])
+                ],
+            })
+            triggered_refs.append({'type': 'robot_issue', 'id': new_id})
+
+        elif t == 'watch_record':
+            wr = next(
+                (e for e in events_data.get('incomplete', [])
+                 if e.get('protocol_event_id') == 'watch_record'),
+                None
+            )
+            if wr:
+                now_hhmm = datetime.now().strftime('%Y-%m-%dT%H:%M')
+                wr['triggered_by']   = {'type': 'patient_call', 'id': call_id}
+                wr['scheduled_date'] = [now_hhmm, now_hhmm]
+                triggered_refs.append({'type': 'watch_record', 'id': wr['id']})
+
+    events_data['free'].setdefault('patient_call', []).append({
+        'id':               call_id,
+        'completion_date':  completion_date,
+        'filed_at':         filed_at,
+        'duration_minutes': duration_minutes,
+        'notes':            notes,
+        'triggered':        triggered_refs,
+    })
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    write_patient_log(folder, homer_id, loginid, session_id, 'Patient call recorded')
+    for ref in triggered_refs:
+        msg = {'adverse_event': 'Adverse event recorded',
+               'robot_issue':   'Robot issue recorded',
+               'watch_record':  'Watch record triggered'}.get(ref['type'])
+        if msg:
+            write_patient_log(folder, homer_id, loginid, session_id, msg)
+
+    return jsonify({'ok': True, 'id': call_id})
+
+
 @bp.route('/api/patients/<homer_id>/call-logs', methods=['GET'])
 def api_call_logs(homer_id):
     """Return all call records: scheduled follow-up calls + free patient calls."""
