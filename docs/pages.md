@@ -87,24 +87,26 @@ Patient list for the user's visible site(s).
 
 #### Patient state transitions
 
-| Current state      | Action                                         | Field set                                                 | Next state         |
-|--------------------|------------------------------------------------|-----------------------------------------------------------|--------------------|
-| unassigned         | Assign group + Record A0                       | `group`, `a0CompletionDate`                               | inactive           |
-| unassigned         | Pre-Discontinue                                | `discontinuationDate`                                     | pre_discontinued   |
-| inactive           | Activate                                       | `activationDate`                                          | active             |
-| inactive           | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
-| inactive           | *(today > a0 + 5 days)*                        | *(none — derived)*                                        | broken_protocol    |
-| broken_protocol    | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
-| active             | Complete training                              | `trainingCompletionDate`                                  | training_completed |
-| active             | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
-| active             | Adverse event / robot issue — training paused  | `trainingPausedDate` set                                  | paused             |
-| paused             | Resume training                                | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active       |
-| paused             | Extend pause (cumulative ≤ 10 days)            | `cumulativePauseDays` incremented                         | paused             |
-| paused             | Extend pause (cumulative > 10 days)            | `cumulativePauseDays` incremented                         | broken_protocol    |
-| training_completed | Record A1                                      | `a1CompletionDate`                                        | a1_completed       |
-| training_completed | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
-| a1_completed       | Record A2                                      | `a2CompletionDate`                                        | all_completed      |
-| a1_completed       | Discontinue                                    | `discontinuationDate`                                     | discontinued       |
+| Current state      | Action                                         | Field set                                                       | Next state         |
+|--------------------|------------------------------------------------|-----------------------------------------------------------------|--------------------|
+| unassigned         | Assign group + Record A0                       | `group`, `a0CompletionDate`                                     | inactive           |
+| unassigned         | Pre-Discontinue                                | `discontinuationDate`                                           | pre_discontinued   |
+| inactive           | Activate                                       | `activationDate`                                                | active             |
+| inactive           | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
+| inactive           | *(today > a0 + 5 days)*                        | *(none — derived)*                                              | broken_protocol    |
+| broken_protocol    | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
+| active             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
+| active             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
+| active             | Adverse event / robot issue — training paused  | `trainingPausedDate` set                                        | paused             |
+| paused             | Resume training                                | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active             |
+| paused             | Extend pause (cumulative ≤ 10 days)            | `cumulativePauseDays` incremented                               | paused             |
+| paused             | Extend pause (cumulative > 10 days)            | `cumulativePauseDays` incremented                               | broken_protocol    |
+| paused             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
+| paused             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
+| training_completed | Record A1                                      | `a1CompletionDate`                                              | a1_completed       |
+| training_completed | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
+| a1_completed       | Record A2                                      | `a2CompletionDate`                                              | all_completed      |
+| a1_completed       | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
 
 **Actions:** [Add Patient](#add-patient), [Assign Group](#assign-group), [Pre-Discontinue](#pre-discontinue)
 
@@ -169,7 +171,7 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 - **Stub tabs** — Devices, Call Logs, Adverse Events, Watch Records, Robot Issues show "Coming soon"
 
 
-**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [Complete Training](#complete-training), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
+**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
 
 ---
 
@@ -247,24 +249,16 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Event Date (datetime, required; cannot be in the future)
   - **VCG Group** (dropdown: VCG 2 / VCG 3 / VCG 4–5; required; **control patients only**) — therapist selects the patient's VCG level at the activation visit; fixed for the entire study duration
   - Notes (textarea, optional). The notes text area must be large enough for the user to write their notes comfortably.
+  - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only), and/or watch record as a consequence of this visit. Each toggle shows an info note only — no sub-form fields. Watch Record toggle only shown if at least one watch is currently assigned.
 - Server actions:
   - Verify `depends_on` prerequisites are met (server-side safety check — the UI already blocks the action, but the endpoint rejects the request if any prerequisite event is not in `complete`)
   - Update `<homer_id>.json` with `activationDate` and `vcgGroup` (control patients only)
   - Compute and fill `scheduled_date` for all `reference: "activation"` entries in `protocol_events.json`
   - Seed first `watch_record` entry in `incomplete` with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`
+  - For each triggered `adverse_event` / `robot_issue`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"` / `"robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "activation", id: <activation_entry_id>}` — stub is completed later via the standalone modal
+  - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
 - Log message: `Patient activated`
 - UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` (no `href`) with a muted lock icon next to the event name and an amber badge on the right reading "Needs: \<blocking event name\>" in place of the date/urgency label
-
----
-
-### Complete Training
-- Trigger: "Complete Training" button on patient detail (active patients)
-- Allowed users: `admin`, `therapist`
-- Modal fields:
-  - Training Completion Date (datetime, required; cannot be in the future)
-- Server actions:
-  - Update `<homer_id>.json` with `trainingCompletionDate`
-- Log message: `Training completed`
 
 ---
 
@@ -405,12 +399,15 @@ Each action is defined once here. Pages above reference which actions apply to t
 ### Home Visit (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`)
 - Trigger: respective event row on patient detail
 - Allowed users: `admin`, `therapist`
-- Modal: `simple-event-modal` (shared)
+- Modal: `home-visit-modal` (dedicated; not shared)
   - Title: event name (e.g. "Home Visit Day 02")
   - Event Date (datetime, required; cannot be in the future)
   - Notes (textarea, optional)
+  - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only), and/or watch record as a consequence of this visit. Each toggle shows an info note only — no sub-form fields. Watch Record toggle only shown if at least one watch is currently assigned.
 - Server actions:
-  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
+  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`, `triggered: [...]`
+  - For each triggered `adverse_event` / `robot_issue`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"` / `"robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}` — stub is completed later via the standalone modal
+  - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
 - Log message: `Home visit recorded — Day <N>`
 
 ---
@@ -425,35 +422,37 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Duration (integer minutes, required; must be > 0)
   - Training log PDF (file upload, required; `.pdf` only) — photos of the patient's weekly training log, sent by the patient before the call
   - Notes (textarea, required)
-  - **Triggered events section** — same mechanism as [Patient Call](#patient-call): user can optionally record an adverse event, robot issue (exp only), and/or watch record as a consequence of this call. Watch Record toggle only shown if at least one watch is currently assigned.
+  - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only), and/or watch record as a consequence of this call. Each toggle shows an info note only — no sub-form fields. Watch Record toggle only shown if at least one watch is currently assigned.
 - Server actions:
   - Save uploaded PDF to `attachments/followup_call_d07.pdf` (or `d21`) in the patient folder, overwriting if exists
   - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `duration_minutes`, `attachment`, `notes`, `triggered: [...]`; if date differs from scheduled, also adds `date_change_reason`
-  - For each triggered event: same logic as [Patient Call](#patient-call) server actions — append to `free.adverse_event` / `free.robot_issue`, or stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
+  - For each triggered `adverse_event` / `robot_issue`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"` / `"robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "<followup_call_event_id>", id: <entry_id>}` — stub is completed later via the standalone modal
+  - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
 - Log message: `Follow-up call recorded — Day <N>`
 
 ---
 
 ### Patient Call
-- Trigger: "Log Call" button on patient detail (active patients; available from the Call Logs tab)
+- Trigger: "Log Patient Call" button in the tab bar on patient detail (active patients)
 - Allowed users: `admin`, `therapist`
 - Modal: `patient-call-modal`
   - Title: "Log Patient Call"
   - Call Date/Time (datetime, required; cannot be in the future)
   - Duration (integer minutes, required; must be > 0)
   - Notes (textarea, required)
+  - **Therapist initiated** (toggle, default off) — indicates an unplanned outbound call by the therapist (e.g. following up after an adverse event). Protocol follow-up calls (D7/D21) are not recorded here. When toggled on, a **Reason** field (textarea, required) appears to document why the call was made outside the normal protocol.
   - **Triggered events section** — optional; user selects which downstream events arose from this call:
-    - **Adverse Event** (toggle, both groups): if enabled, reveals sub-form fields for the adverse event (description, action taken, paused toggle)
-    - **Robot Issue** (toggle, experimental only — hidden for control patients): if enabled, reveals sub-form fields for the robot issue (description, per-device fault list, paused toggle)
-    - **Watch Record** (toggle, both groups): only shown if at least one watch is currently assigned (`agWatchRightID` or `agWatchLeftID` is not null); if enabled, shows an info note — no sub-form fields required
+    - **Adverse Event** (toggle, both groups): if enabled, shows an info note only — no sub-form fields
+    - **Robot Issue** (toggle, experimental only — hidden for control patients): if enabled, shows an info note only — no sub-form fields
+    - **Watch Record** (toggle, both groups): only shown if at least one watch is currently assigned (`agWatchRightID` or `agWatchLeftID` is not null); if enabled, shows an info note — no sub-form fields
   - Multiple toggles may be enabled simultaneously
 - Server actions:
-  - Append `patient_call` entry to `free.patient_call` in `protocol_events.json`, with `triggered: [...]`
+  - Append `patient_call` entry to `free.patient_call` in `protocol_events.json`, with `call_type`, `reason` (if therapist initiated), `triggered: [...]`
   - For each enabled toggle:
-    - **Adverse event**: append entry to `free.adverse_event` with `triggered_by: {type: "patient_call", id: <call_id>}`
-    - **Robot issue** (exp only): append entry to `free.robot_issue` with `triggered_by: {type: "patient_call", id: <call_id>}`
+    - **Adverse event**: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "patient_call", id: <call_id>}` — stub is completed later via the standalone `adverse-event-modal`
+    - **Robot issue** (exp only): append a stub to `incomplete` with `protocol_event_id = "robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "patient_call", id: <call_id>}` — stub is completed later via the standalone `robot-issue-modal`
     - **Watch record**: stamp `triggered_by: {type: "patient_call", id: <call_id>}` onto the existing open `watch_record` entry in `incomplete`, and update its `scheduled_date` to `[now, now]` — no new entry is created; the entry immediately becomes overdue; the therapist completes it via the Watch Record modal
-- Log message: `Patient call recorded`; additional log entries for each triggered event (e.g. `Adverse event recorded`, `Robot issue recorded`, `Watch record triggered`)
+- Log message: `Patient call recorded`; additional log entries for each triggered event (e.g. `Adverse event stub created`, `Robot issue stub created`, `Watch record triggered`)
 
 ---
 
@@ -490,7 +489,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Training Completion Visit (`training_completion_d29`)
-- Trigger: `training_completion_d29` event row on patient detail (active patients, day 29)
+- Trigger: `training_completion_d29` event row on patient detail (`active` or `paused` patients, day 29)
 - Allowed users: `admin`, `therapist`
 - Modal: `simple-event-modal` (shared)
   - Title: "Training Completion Day 29"
@@ -498,6 +497,8 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Notes (textarea, optional)
 - Server actions:
   - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
+  - Update `<homer_id>.json` with `trainingCompletionDate = completion_date`
+  - If patient was `paused`, also clear `trainingPausedDate` and increment `cumulativePauseDays`
 - Log message: `Training completion visit recorded`
 
 ---
@@ -518,6 +519,73 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Append assignment record to `devices/assignments/pluto.json` and `devices/assignments/mars.json`
   - Append to `devices/logs/<pluto_id>.log` and `devices/logs/<mars_id>.log`
 - Log message: `Device setup completed — Pluto: <pluto_id>, Mars: <mars_id>`
+
+---
+
+### Adverse Event (`adverse_event`)
+- Trigger: `adverse_event` event row on patient detail — only appears when a stub exists in `incomplete` (created by a triggering event: activation, home visit, follow-up call, or patient call)
+- Allowed users: `admin`, `therapist`
+- Modal: `adverse-event-modal`
+  - **Context banner** (read-only): "Triggered by: \<triggering event name\>" — derived from the stub's `triggered_by.type`
+  - Event Date (datetime, required; cannot be in the future)
+  - Description (textarea, required)
+  - Action taken (textarea, required)
+  - Training paused as a result (checkbox) — when checked, a `resolve_adverse_event` stub is created in `incomplete` (triggered by this event) and the patient transitions to `paused`
+  - Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete` in `protocol_events.json`
+  - Append completed entry to `free.adverse_event` with `completion_date`, `filed_at`, `description`, `action_taken`, `paused`, `triggered_by` (carried from stub), `attachment` (if uploaded)
+  - If `paused` is checked: set `trainingPausedDate` on `<homer_id>.json`; append a `resolve_adverse_event` stub to `incomplete` with `triggered_by: {type: "adverse_event", id: <event_id>}`, `scheduled_date: [now, now]`
+- Log message: `Adverse event recorded`; if paused: also `Training paused — adverse event`
+
+---
+
+### Robot Issue (`robot_issue`)
+- Trigger: `robot_issue` event row on patient detail — only appears when a stub exists in `incomplete` (created by a triggering event)
+- Allowed users: `admin`, `engineer`
+- Experimental patients only — hidden for control patients
+- Modal: `robot-issue-modal`
+  - **Context banner** (read-only): "Triggered by: \<triggering event name\>"
+  - Event Date (datetime, required; cannot be in the future)
+  - **Affected devices** section — at least one device must be checked:
+    - **Pluto** (checkbox): if checked, reveals:
+      - Notes (textarea, required) — describe the fault and what happened
+      - Outcome (radio, required): `Resolved same day` | `Device swap` | `Swap not possible`
+    - **Mars** (checkbox): same fields as Pluto
+  - Training paused as a result (checkbox) — event-level; checked when the session was lost regardless of which device caused it. When checked, a `resolve_robot_issue` stub is created in `incomplete` (triggered by this event) and the patient transitions to `paused`.
+  - Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete` in `protocol_events.json`
+  - Append completed entry to `free.robot_issue` with `completion_date`, `filed_at`, `faults`, `paused`, `triggered_by` (carried from stub), `attachment` (if uploaded)
+  - If `paused` is checked: set `trainingPausedDate` on `<homer_id>.json`; append a `resolve_robot_issue` stub to `incomplete` with `triggered_by: {type: "robot_issue", id: <event_id>}`, `scheduled_date: [now, now]`
+- Log message: `Robot issue recorded`; if paused: also `Training paused — robot issue`
+
+---
+
+### Resolve Adverse Event (`resolve_adverse_event`)
+- Trigger: `resolve_adverse_event` event row on patient detail — only appears when a stub exists in `incomplete` (created when an adverse event is completed with "Training paused" checked)
+- Allowed users: `admin`, `therapist`
+- Modal: `resolve-adverse-event-modal` *(details TBD)*
+- Server actions:
+  - Remove the stub from `incomplete` in `protocol_events.json`
+  - Append completed entry to `free.resolve_adverse_event`
+  - Increment `cumulativePauseDays` on `<homer_id>.json` by the number of days between `trainingPausedDate` and the resolve date
+  - If no other `resolve_adverse_event` or `resolve_robot_issue` stubs remain in `incomplete`: clear `trainingPausedDate` on `<homer_id>.json` (patient returns to `active`); if `cumulativePauseDays` > 10, patient transitions to `broken_protocol` instead
+- Log message: `Adverse event resolved`
+
+---
+
+### Resolve Robot Issue (`resolve_robot_issue`)
+- Trigger: `resolve_robot_issue` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue is completed with "Training paused" checked)
+- Allowed users: `admin`, `engineer`
+- Experimental patients only
+- Modal: `resolve-robot-issue-modal` *(details TBD)*
+- Server actions:
+  - Remove the stub from `incomplete` in `protocol_events.json`
+  - Append completed entry to `free.resolve_robot_issue`
+  - Increment `cumulativePauseDays` on `<homer_id>.json` by the number of days between `trainingPausedDate` and the resolve date
+  - If no other `resolve_adverse_event` or `resolve_robot_issue` stubs remain in `incomplete`: clear `trainingPausedDate` on `<homer_id>.json` (patient returns to `active`); if `cumulativePauseDays` > 10, patient transitions to `broken_protocol` instead
+- Log message: `Robot issue resolved`
 
 ---
 
@@ -552,3 +620,22 @@ Each action is defined once here. Pages above reference which actions apply to t
   - For each lost watch: write device log `Lost — reported by <homer_id>`
   - Seed next `watch_record` entry in `incomplete` with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`
 - Log message: `Watch record filed`
+
+---
+
+## Future Requirements
+
+### Device Repair (Devices page — not yet implemented)
+
+**Context:** When a robot issue causes a training pause but the patient completes training (day 29) before the `resolve_robot_issue` stub is filled, the stub is auto-discarded (robot is returned on day 29). However, the device may still be physically faulty — it has not been repaired and cannot be safely assigned to a new patient.
+
+**Required feature:** A **"Repair Device"** action in the Devices page, available to `engineer` and `admin`, that:
+- Lists Pluto/Mars devices flagged as faulty (i.e. their last robot issue was not formally resolved before training completion)
+- Allows the engineer to record:
+  - Repair date
+  - Description of repair / action taken
+  - Outcome: `repaired` | `condemned` (beyond repair, permanently retired)
+- On save: clears the faulty flag on the device inventory record; if `condemned`, marks the device as inactive so it can never be assigned again
+- Log message written to the device log
+
+This ensures the device inventory accurately reflects availability for new patient assignments, independent of the patient protocol lifecycle.

@@ -130,8 +130,8 @@ All fields are factual — status is never stored but always derived.
 - Date fields cannot exceed the current local time — no future datetimes are allowed.
 
 **Pause fields (both groups):**
-- `trainingPausedDate` — set when training is paused (adverse event or robot issue); `null` when not paused. For experimental patients, pausing one device pauses everything.
-- `cumulativePauseDays` — total pause days accumulated across all episodes. Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`.
+- `trainingPausedDate` — set when training is paused (adverse event or robot issue with `paused: true`); `null` when not paused. Cleared when all outstanding `resolve_adverse_event` and `resolve_robot_issue` stubs in `incomplete` are completed.
+- `cumulativePauseDays` — total pause days accumulated across all episodes. Incremented by each resolve event (days between `trainingPausedDate` and resolve date). Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`. A patient can have multiple simultaneous pauses (e.g. adverse event + robot issue both unresolved); `trainingPausedDate` is only cleared when all resolve stubs are gone.
 
 **Broken protocol detection field:**
 - `brokenProtocolDate` — date when `broken_protocol` was first detected; set automatically on login. `null` until first detected. Never cleared once set.
@@ -221,6 +221,8 @@ Static files managed externally — htDash reads but never writes them.
 - `inclusion_date` / `removal_date` — device lifecycle dates. Active = `removal_date: null`.
 - `lost_date` — date the device was reported lost (`"YYYY-MM-DD"`), or `null`. Set by htDash when a watch_record is saved with `old_lost: true`. A device with `lost_date` set is excluded from the available devices list and no further assignments are created for it. `removal_date` is for intentional decommissioning by the engineer; `lost_date` is for patient-reported loss.
 - **On-login check (Pluto and Mars):** at least one active `clinic_only: true` device must exist per type. Site users get a hard error; admin gets a warning.
+
+> **Future requirement — faulty device flag:** When a robot issue causes a training pause but training completes (day 29) before the `resolve_robot_issue` stub is filled, the robot is returned to the engineer but may still be physically faulty. A `faulty` flag (and associated `faulty_since` date) needs to be added to the inventory record so the device is excluded from new patient assignments until formally repaired. A **"Repair Device"** action in the Devices page (engineer/admin only) will allow recording the repair outcome (`repaired` | `condemned`) and clearing the flag. See `pages.md` → Future Requirements for the full spec.
 
 ### `devices/assignments/<type>.json`
 
@@ -393,7 +395,7 @@ The complete entry stores only a relative path to the timing file. See [AG Watch
   "worn_datetime":     "",
   "next_followup_days": null,
   "notes":             "",
-  "triggered_by":      { "type": "activation | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid>" }
+  "triggered_by":      { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid>" }
 }
 ```
 
@@ -401,9 +403,10 @@ The complete entry stores only a relative path to the timing file. See [AG Watch
 - `sync_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the watches were synced / data downloaded. Required when the patient has **two watches** assigned; not required when only one watch is assigned; omitted when both `new_id` values are `null`.
 - `worn_datetime`: ISO datetime (`YYYY-MM-DDTHH:MM`) when the patient put the watch(es) on. Required when at least one new watch is assigned; omitted when both `new_id` values are `null`.
 - `next_followup_days`: integer — number of days until the next watch record follow-up. Used to compute `scheduled_date` of the seeded chain entry: `[completion_date + N days, completion_date + N days]`.
-- `triggered_by`: *(optional)* present when activation, a patient call, or a follow-up call is the reason this record was created/claimed.
+- `triggered_by`: *(optional)* present when activation, a home visit, a patient call, or a follow-up call is the reason this record was created/claimed.
   - For **activation-triggered**: `type = "activation"`. The seeded entry has `scheduled_date = [activationDate, activationDate]` so it is immediately overdue.
-  - For **call-triggered**: `type = "patient_call" | "followup_call_d07" | "followup_call_d21"`. **Stamped onto the existing open `incomplete` chain entry at call-save time** — no new entry is created. At the same time, `scheduled_date` is updated to `[now, now]` so the entry appears immediately in the overdue section. Absent for standalone records.
+  - For **home-visit-triggered**: `type = "home_visit_d02" | "home_visit_d03" | "home_visit_d15"`. **Stamped onto the existing open `incomplete` chain entry at home-visit-save time** — no new entry is created. `scheduled_date` updated to `[now, now]`.
+  - For **call-triggered**: `type = "patient_call" | "followup_call_d07" | "followup_call_d21"`. Same stamping logic as home-visit-triggered.
   - `triggered_by` can appear on **both `incomplete` and `complete`** entries — it is written when the triggering event is saved, before the watch record itself is filled.
 
 For the initial record (first fill after activation), `old_id` is always `null` and `triggered_by.type = "activation"`. `old_id` → `new_id` transitions are the source of truth for data gaps:
@@ -465,24 +468,39 @@ Extra fields on `complete`:
 
 ```json
 {
-  "adverse_event":       [],
-  "robot_issue":         [],
-  "patient_call":        [],
-  "pre_discontinuation": null,
-  "discontinuation":     null
+  "adverse_event":          [],
+  "resolve_adverse_event":  [],
+  "robot_issue":            [],
+  "resolve_robot_issue":    [],
+  "patient_call":           [],
+  "pre_discontinuation":    null,
+  "discontinuation":        null
 }
 ```
 
-`robot_issue` is only present for experimental patients.
+`robot_issue` and `resolve_robot_issue` are only present for experimental patients.
 
 **`adverse_event`**
 
-Created only as a downstream consequence of a `patient_call` or follow-up call (`followup_call_d07` / `followup_call_d21`). Never created standalone.
+Uses a **two-phase model**. Never created standalone — always triggered by a home visit or call event.
 
+**Phase 1 — stub** (lives in `incomplete` until completed):
 ```json
 {
   "id": "<uuid>",
-  "triggered_by": { "type": "patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of call entry>" },
+  "protocol_event_id": "adverse_event",
+  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "filed_at": "YYYY-MM-DDTHH:MM:SS"
+}
+```
+`scheduled_date` is set to `[now, now]` at creation so the stub appears immediately as overdue.
+
+**Phase 2 — completed record** (moves from `incomplete` → `free.adverse_event`):
+```json
+{
+  "id": "<uuid>",
+  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "description": "",
@@ -490,34 +508,51 @@ Created only as a downstream consequence of a `patient_call` or follow-up call (
   "paused": false,
   "pause_date": null,
   "allocated_pause_days": null,
-  "attachments": []
+  "attachment": null,
+  "attachment_caption": null
 }
 ```
 
 **`robot_issue`** *(experimental only)*
 
-Created only as a downstream consequence of a `patient_call` or follow-up call. Never created standalone.
+Uses the same **two-phase model** as `adverse_event`. Never created standalone.
 
+**Phase 1 — stub** (lives in `incomplete` until completed):
 ```json
 {
   "id": "<uuid>",
-  "triggered_by": { "type": "patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of call entry>" },
+  "protocol_event_id": "robot_issue",
+  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "filed_at": "YYYY-MM-DDTHH:MM:SS"
+}
+```
+
+**Phase 2 — completed record** (moves from `incomplete` → `free.robot_issue`):
+```json
+{
+  "id": "<uuid>",
+  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
-  "description": "",
   "paused": false,
-  "pause_date": null,
-  "allocated_pause_days": null,
   "faults": [
     {
       "device": "pluto | mars",
-      "fault_description": "",
-      "resolved_same_day": false
+      "notes": "",
+      "outcome": "resolved_same_day | device_swap | swap_not_possible"
     }
   ],
-  "attachments": []
+  "attachment": null,
+  "attachment_caption": null
 }
 ```
+
+- `faults`: list of affected devices; at least one entry required. Each entry:
+  - `device`: `"pluto"` or `"mars"`
+  - `notes`: free-text description of the fault and what happened (required)
+  - `outcome`: one of `"resolved_same_day"`, `"device_swap"`, `"swap_not_possible"`
+- `paused`: event-level flag; `true` if the session was lost regardless of which device caused it. When `true`, a `resolve_robot_issue` stub is created in `incomplete`.
 
 **`patient_call`**
 
@@ -529,6 +564,8 @@ Stores both the call details and forward references to any downstream events it 
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "duration_minutes": 15,
+  "call_type": "patient_initiated | therapist_initiated",
+  "reason": null,
   "notes": "",
   "triggered": [
     { "type": "adverse_event | robot_issue | watch_record", "id": "<uuid of triggered entry>" }
@@ -536,8 +573,58 @@ Stores both the call details and forward references to any downstream events it 
 }
 ```
 
+- `call_type`: `"patient_initiated"` (default) or `"therapist_initiated"` (unplanned outbound call by therapist).
+- `reason`: required and non-null when `call_type = "therapist_initiated"`; documents why the call was made outside the normal protocol. `null` for patient-initiated calls.
 - `triggered`: list of downstream events created as a result of this call; empty list `[]` if none.
 - `type` in triggered entries: `"adverse_event"`, `"robot_issue"`, or `"watch_record"` (referring to a `watch_record` entry in `incomplete`/`complete`).
+
+**`resolve_adverse_event`**
+
+Created as a stub in `incomplete` when an adverse event is completed with `paused: true`. Completed by therapist/admin.
+
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "resolve_adverse_event",
+  "triggered_by": { "type": "adverse_event", "id": "<uuid of adverse_event entry in free>" },
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "filed_at": "YYYY-MM-DDTHH:MM:SS"
+}
+```
+
+Extra fields on completed record (moves to `free.resolve_adverse_event`):
+```json
+{
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "notes": "",
+  "attachment": null,
+  "attachment_caption": null
+}
+```
+
+**`resolve_robot_issue`** *(experimental only)*
+
+Created as a stub in `incomplete` when a robot issue is completed with `paused: true`. Completed by engineer/admin.
+
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "resolve_robot_issue",
+  "triggered_by": { "type": "robot_issue", "id": "<uuid of robot_issue entry in free>" },
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "filed_at": "YYYY-MM-DDTHH:MM:SS"
+}
+```
+
+Extra fields on completed record (moves to `free.resolve_robot_issue`):
+```json
+{
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "notes": "",
+  "attachment": null,
+  "attachment_caption": null
+}
+```
 
 **`pre_discontinuation`** / **`discontinuation`**
 ```json
@@ -808,7 +895,7 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 |----|------|------|-----------|--------|--------------|--------------|---------|
 | `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
 | `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
-| `robot_issue` | Robot Issue | anytime | — | — | `activation` | `user` | Document any robot (Pluto/Mars) malfunction affecting therapy delivery. Created only via a patient call or follow-up call. May trigger a training pause. |
+| `robot_issue` | Robot Issue | anytime | — | — | `activation` | `user` | Document any robot (Pluto/Mars) malfunction affecting therapy delivery. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
 | `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
 | `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
 
@@ -841,7 +928,7 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 | `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |
 | `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | `user` | Six-month follow-up clinical outcome assessment. |
 | `watch_record` | Watch Record | chained | — | — | — | `user` | Track actigraph watch assignments and swaps throughout the study. First entry seeded at activation; each completion seeds the next. Can also be triggered by activation, a patient call, or a follow-up call — the existing open chain entry is claimed (stamped with `triggered_by` and `scheduled_date` set to now) rather than a new entry being created. |
-| `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. Created only via a patient call or follow-up call. May trigger a training pause. |
+| `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
 | `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue` (exp only), and/or `watch_record` entries. |
 | `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study before group assignment. |
 | `discontinuation` | Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study after group assignment. |

@@ -3,6 +3,11 @@
 HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managing the HOMER RCT therapy intervention.
 
 ---
+## Important Instructions for Interaction.
+1. When asked a question, reply to the question. This is an attempt to brainstrom. Do not start coding without explicit permission.
+2. Never code without updating the .md files. Any feature that must be recorded in the .md file must be recorded first before coding.
+
+---
 
 ## Project Overview
 
@@ -155,10 +160,13 @@ The script shifts the patient's entire timeline by N days (positive or negative)
 - **AG Watch timing session bounds (hard validation):** the `adl_agwatch_timing_d03` / `vcg_agwatch_timing_d03` modals enforce that every non-null exercise `start`/`end` falls within the `session_start`/`session_end` from `home_visit_d03`. The `adl_agwatch_timing_d15` / `vcg_agwatch_timing_d15` modals apply the same hard constraint using `home_visit_d15`. The form cannot be saved if any timing falls outside the session window.
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
 - Free event types: `patient_call`, `adverse_event`, `robot_issue` (experimental only), `watch_record`, `discontinuation`. `technical_fault` was renamed to `robot_issue` — do not use the old name anywhere.
-- **Triggered events:** `adverse_event` and `robot_issue` can **only** be created via a `patient_call` or follow-up call modal — never standalone. `watch_record` can be standalone (open chain entry) or triggered by a call.
-  - Bidirectional references: calling event stores `triggered: [{type, id}, ...]`; spawned event stores `triggered_by: {type, id}`.
-  - For `watch_record` triggered by a call: the existing open `incomplete` chain entry is **claimed** (no new entry created). `triggered_by` is stamped on the `incomplete` entry at call-save time. `scheduled_date` is also updated to `[now, now]` so it appears immediately as overdue.
-  - Watch record trigger toggle in call modals is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
+- **Triggered events:** `adverse_event`, `robot_issue`, and `watch_record` can only be created as triggered events — never standalone. They are triggered by: `activation`, `home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `patient_call`, `followup_call_d07`, or `followup_call_d21`. `robot_issue` is experimental-only and hidden for control patients in all modals.
+  - Bidirectional references: the triggering event stores `triggered: [{type, id}, ...]`; the spawned event stores `triggered_by: {type, id}`.
+  - **`adverse_event` and `robot_issue` use a two-phase model:**
+    1. **Trigger phase** (in the triggering modal): checking the toggle shows an info note only — no sub-form fields. On save, a stub entry is appended to `incomplete` in `protocol_events.json` with `protocol_event_id = "adverse_event"` / `"robot_issue"`, `scheduled_date = [now, now]`, and `triggered_by`. The stub appears immediately as an overdue event.
+    2. **Complete phase** (via standalone modal): the therapist clicks the overdue stub to open the dedicated `adverse-event-modal` / `robot-issue-modal`, fills in description/action/device details, and saves. The stub moves from `incomplete` to `free.adverse_event` / `free.robot_issue`.
+  - For `watch_record` triggered by any of the above: the existing open `incomplete` chain entry is **claimed** (no new entry created). `triggered_by` is stamped on the `incomplete` entry at save time. `scheduled_date` is also updated to `[now, now]` so it appears immediately as overdue.
+  - Watch record trigger toggle is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
 - **Watch record chain:** seeded at activation with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`. On each completion, a new open chain entry is seeded with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`.
 - **Lost watch:** when a watch is marked lost in the watch record modal, htDash sets `lost_date` on the inventory record and closes the assignment with `lost: true`. `get_available_devices` filters out devices where `lost_date is not None`. Lost watches are permanently retired — no further assignments or records.
 - **Watch record modal — full interaction model:**

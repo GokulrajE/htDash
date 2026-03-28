@@ -64,6 +64,7 @@ function switchTab(tab) {
   if (tab === 'calls')         renderCallLogsTab();
   if (tab === 'adverse')       renderAdverseEventsTab();
   if (tab === 'watch-records') renderWatchRecordsTab();
+  if (tab === 'robot')         renderRobotIssuesTab();
   if (tab === 'timeline')      renderTimelineTab();
 }
 
@@ -225,25 +226,17 @@ function renderOverview(p) {
 const ACTION_DEFS = {
   inactive: [
     { label: 'Activate',          color: 'bg-blue-600 hover:bg-blue-700 text-white',   action: () => openActivationModal(null) },
-    { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
   ],
   active: [
     { label: 'Complete Training', color: 'bg-teal-600 hover:bg-teal-700 text-white',   action: () => openCompleteTrainingModal() },
-    { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
   ],
-  paused: [
-    { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
-  ],
-  broken_protocol: [
-    { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
-  ],
+  paused: [],
+  broken_protocol: [],
   training_completed: [
     { label: 'Record A1',         color: 'bg-violet-600 hover:bg-violet-700 text-white', action: () => openA1Modal() },
-    { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
   ],
   a1_completed: [
     { label: 'Record A2',         color: 'bg-green-600 hover:bg-green-700 text-white', action: () => openA2Modal() },
-    { label: 'Discontinue',       color: 'bg-red-100 hover:bg-red-200 text-red-700',   action: () => openDiscontinueModal() },
   ],
 };
 
@@ -253,7 +246,7 @@ function renderActions(p) {
   if (!card || !buttons) return;
 
   const defs = ACTION_DEFS[p.status];
-  if (!defs || !isAdmin) { card.classList.add('hidden'); return; }
+  if (!defs || !defs.length || !isAdmin) { card.classList.add('hidden'); return; }
 
   card.classList.remove('hidden');
   buttons.innerHTML = '';
@@ -357,6 +350,7 @@ async function loadPatientEvents() {
     renderTimelineTab();
     renderAdverseEventsTab();
     renderWatchRecordsTab();
+    renderRobotIssuesTab();
 
     document.getElementById('patient-completed-count').textContent = (complete || []).length;
     document.getElementById('patient-overdue-count').textContent   = overdue.length;
@@ -875,6 +869,206 @@ function _watchRecordCard(wr) {
     </div>`;
 }
 
+// ── Robot Issues tab ──────────────────────────────────────────────────────────
+
+function renderRobotIssuesTab() {
+  const container = document.getElementById('robot-issues-content');
+  if (!container) return;
+
+  const issues = (_completeEventsCache || [])
+    .filter(e => e.protocol_event_id === 'robot_issue')
+    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+
+  if (!issues.length) {
+    container.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-16 text-slate-300">
+        <i class="fas fa-robot text-3xl mb-3"></i>
+        <p class="text-sm">No robot issues recorded.</p>
+      </div>`;
+    return;
+  }
+  container.innerHTML = issues.map(_robotIssueCard).join('');
+}
+
+function _robotIssueCard(ev) {
+  const dayNum   = _dayNumber(ev.completion_date);
+  const dayBadge = dayNum !== null ? `<span class="text-xs font-semibold text-orange-500">Day ${dayNum}</span>` : '';
+  const dateStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
+
+  let triggerStr = '';
+  if (ev.triggered_by) {
+    const typeLabel   = _WR_TRIGGER_NAMES[ev.triggered_by.type] || (ev.triggered_by.type || '').replace(/_/g, ' ');
+    const triggerEv   = (_completeEventsCache || []).find(e => e.id === ev.triggered_by.id);
+    const triggerDate = triggerEv?.completion_date ? ` — ${_fmtDateTime(triggerEv.completion_date)}` : '';
+    triggerStr = `<div class="text-xs text-slate-500"><span class="text-slate-400">Triggered by:</span> ${typeLabel}${triggerDate}</div>`;
+  }
+
+  const pausedStr = ev.paused
+    ? `<div class="inline-flex items-center gap-1 text-xs bg-red-50 text-red-700 border border-red-200 rounded-full px-2 py-0.5"><i class="fas fa-pause text-[10px]"></i>Training paused</div>`
+    : '';
+
+  const faultsStr = (ev.faults || []).map(f => {
+    const resolved = f.resolved_same_day
+      ? `<span class="text-green-600 ml-1">(resolved same day)</span>` : '';
+    return `<div class="text-xs text-slate-500"><span class="text-slate-400 capitalize">${f.device}:</span> ${f.fault_description}${resolved}</div>`;
+  }).join('');
+
+  const attachmentStr = (ev.attachment && ev.id)
+    ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${ev.id}" target="_blank"
+         class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
+         <i class="fas fa-paperclip"></i>Download attachment</a>` : '';
+
+  return `
+    <div class="bg-white rounded-xl border border-orange-200 shadow-sm mb-3 overflow-hidden">
+      <div class="bg-orange-50 border-b border-orange-100 px-4 py-2.5 flex items-center justify-between">
+        <span class="text-sm font-semibold text-orange-800">Robot Issue</span>
+        <div class="flex items-center gap-3">
+          ${dayBadge}
+          <span class="text-xs text-slate-500">${dateStr}</span>
+        </div>
+      </div>
+      <div class="px-4 py-3 space-y-1.5">
+        ${ev.description ? `<p class="text-sm text-slate-700">${ev.description}</p>` : ''}
+        ${faultsStr}
+        ${pausedStr}
+        ${triggerStr}
+        ${attachmentStr}
+      </div>
+    </div>`;
+}
+
+// ── Adverse Event modal ────────────────────────────────────────────────────────
+
+const _AE_TRIGGER_NAMES = {
+  activation:        'Patient Activation',
+  home_visit_d02:    'Home Visit Day 02',
+  home_visit_d03:    'Home Visit Day 03',
+  home_visit_d15:    'Home Visit Day 15',
+  followup_call_d07: 'Follow-up Call Day 07',
+  followup_call_d21: 'Follow-up Call Day 21',
+  patient_call:      'Patient Call',
+};
+
+let _aeEventId = null;
+
+function openAdverseEventModal(ev) {
+  _aeEventId = ev.id;
+  const triggerLabel = ev.triggered_by
+    ? (_AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type)
+    : 'Unknown';
+  document.getElementById('ae-context-banner').textContent = `Triggered by: ${triggerLabel}`;
+  document.getElementById('ae-date').value        = '';
+  document.getElementById('ae-description').value = '';
+  document.getElementById('ae-action-taken').value = '';
+  document.getElementById('ae-paused').checked    = false;
+  _resetAttachment('ae');
+  setError('ae-error', '');
+  _attachDateGuard('ae-date', 'ae-error');
+  showModal('adverse-event-modal');
+}
+
+async function saveAdverseEvent() {
+  const date        = document.getElementById('ae-date').value;
+  const description = document.getElementById('ae-description').value.trim();
+  const actionTaken = document.getElementById('ae-action-taken').value.trim();
+  const paused      = document.getElementById('ae-paused').checked;
+  const saveBtn     = document.getElementById('ae-save');
+
+  if (!date)        { setError('ae-error', 'Event date is required.'); return; }
+  if (!description) { setError('ae-error', 'Description is required.'); return; }
+  if (!actionTaken) { setError('ae-error', 'Action taken is required.'); return; }
+  if (!_validateAttachment('ae', 'ae-error')) return;
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event`,
+    { event_id: _aeEventId, completion_date: date, description, action_taken: actionTaken, paused }
+  );
+  if (!ok) { setError('ae-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('ae');
+  if (file) {
+    const uploaded = await _uploadAttachment(_aeEventId, file, caption, 'ae-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('adverse-event-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
+// ── Robot Issue modal ──────────────────────────────────────────────────────────
+
+let _riEventId = null;
+
+function _riToggleDevice(device) {
+  const checked = document.getElementById(`ri-${device}-on`).checked;
+  document.getElementById(`ri-${device}-form`).classList.toggle('hidden', !checked);
+  if (!checked) {
+    document.getElementById(`ri-${device}-desc`).value       = '';
+    document.getElementById(`ri-${device}-resolved`).checked = false;
+  }
+}
+
+function openRobotIssueModal(ev) {
+  _riEventId = ev.id;
+  const triggerLabel = ev.triggered_by
+    ? (_AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type)
+    : 'Unknown';
+  document.getElementById('ri-context-banner').textContent = `Triggered by: ${triggerLabel}`;
+  document.getElementById('ri-date').value        = '';
+  document.getElementById('ri-description').value = '';
+  document.getElementById('ri-paused').checked    = false;
+  ['pluto', 'mars'].forEach(d => {
+    document.getElementById(`ri-${d}-on`).checked = false;
+    document.getElementById(`ri-${d}-form`).classList.add('hidden');
+    document.getElementById(`ri-${d}-desc`).value       = '';
+    document.getElementById(`ri-${d}-resolved`).checked = false;
+  });
+  _resetAttachment('ri');
+  setError('ri-error', '');
+  _attachDateGuard('ri-date', 'ri-error');
+  showModal('robot-issue-modal');
+}
+
+async function saveRobotIssue() {
+  const date        = document.getElementById('ri-date').value;
+  const description = document.getElementById('ri-description').value.trim();
+  const paused      = document.getElementById('ri-paused').checked;
+  const saveBtn     = document.getElementById('ri-save');
+
+  if (!date)        { setError('ri-error', 'Event date is required.'); return; }
+  if (!description) { setError('ri-error', 'Description is required.'); return; }
+
+  const faults = [];
+  for (const device of ['pluto', 'mars']) {
+    if (document.getElementById(`ri-${device}-on`).checked) {
+      const fd = document.getElementById(`ri-${device}-desc`).value.trim();
+      if (!fd) { setError('ri-error', `${device.charAt(0).toUpperCase() + device.slice(1)} fault description is required.`); return; }
+      faults.push({ device, fault_description: fd,
+        resolved_same_day: document.getElementById(`ri-${device}-resolved`).checked });
+    }
+  }
+  if (!_validateAttachment('ri', 'ri-error')) return;
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue`,
+    { event_id: _riEventId, completion_date: date, description, faults, paused }
+  );
+  if (!ok) { setError('ri-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('ri');
+  if (file) {
+    const uploaded = await _uploadAttachment(_riEventId, file, caption, 'ri-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('robot-issue-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
 function completedTimeline(events) {
   const items = events.map((ev, i) => {
     const raw = ev.completion_date || ev.filed_at || '';
@@ -903,9 +1097,9 @@ const EVENT_OPENERS = {
   vcg_prescription_d15:      (ev) => openVcgPrescriptionModal(ev),
   prescription_printout_d01: (ev) => openPrescriptionPrintoutModal(ev),
   prescription_printout_d15: (ev) => openPrescriptionPrintoutModal(ev),
-  home_visit_d02:            (ev) => openSimpleEventModal(ev),
-  home_visit_d03:            (ev) => openSimpleEventModal(ev),
-  home_visit_d15:            (ev) => openSimpleEventModal(ev),
+  home_visit_d02:            (ev) => openHomeVisitModal(ev),
+  home_visit_d03:            (ev) => openHomeVisitModal(ev),
+  home_visit_d15:            (ev) => openHomeVisitModal(ev),
   followup_call_d07:         (ev) => openFollowupCallModal(ev),
   followup_call_d21:         (ev) => openFollowupCallModal(ev),
   training_completion_d29:   (ev) => openSimpleEventModal(ev),
@@ -914,6 +1108,8 @@ const EVENT_OPENERS = {
   vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
   watch_record:              (ev) => openWatchRecordModal(ev),
+  adverse_event:             (ev) => openAdverseEventModal(ev),
+  robot_issue:               (ev) => openRobotIssueModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -1039,6 +1235,12 @@ async function submitDeviceSetup() {
 
 let _activationEventId = null;
 
+function _actToggleSubform(type) {
+  const noteId  = { adverse: 'act-adverse-note', robot: 'act-robot-note', watch: 'act-watch-note' }[type];
+  const checked = document.getElementById(`act-trigger-${type}`).checked;
+  document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
 async function openActivationModal(evId) {
   _activationEventId = typeof evId === 'object' ? evId.id : evId;
   document.getElementById('activation-homer-id').textContent = PATIENT_HOMER_ID;
@@ -1056,6 +1258,18 @@ async function openActivationModal(evId) {
   const isControl = patientData?.group === 'control';
   if (vcgRow) vcgRow.classList.toggle('hidden', !isControl);
   if (vcgSel) vcgSel.value = '';
+
+  // Reset triggered section
+  ['adverse', 'robot', 'watch'].forEach(type => {
+    const cb = document.getElementById(`act-trigger-${type}`);
+    if (cb) { cb.checked = false; _actToggleSubform(type); }
+  });
+  document.getElementById('act-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
+  // Watch record toggle only shown once a watch is assigned (seeded at activation, but triggered_by is for post-seed)
+  // Per spec: "Watch Record toggle only shown if at least one watch is currently assigned."
+  // At activation time, no watch is assigned yet, so we hide it.
+  document.getElementById('act-trigger-watch-wrap').classList.toggle('hidden',
+    !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
 
   showModal('activation-modal');
 }
@@ -1085,6 +1299,18 @@ async function submitActivation() {
     body.vcgGroup = vcgGroup;
   }
   if (!_validateAttachment('activation', 'activation-error')) return;
+
+  // Collect triggered events
+  const triggered = [];
+  if (document.getElementById('act-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (!document.getElementById('act-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('act-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue' });
+  if (!document.getElementById('act-trigger-watch-wrap').classList.contains('hidden') &&
+      document.getElementById('act-trigger-watch').checked)
+    triggered.push({ type: 'watch_record' });
+  body.triggered = triggered;
 
   setLoading('activation-submit', true);
   const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/activate`, body);
@@ -1325,7 +1551,7 @@ async function openAdlPrescriptionModal(ev) {
           const ex = _adlExercises.find(e => e.id === pe.exercise_id);
           return ex ? { exercise: ex, blocks: pe.blocks || 1, reps: pe.repetitions || 1, notes: pe.notes || '', state: 'compact' } : null;
         }).filter(Boolean);
-        document.getElementById('adl-prescription-notes').value = prev.notes || '';
+        document.getElementById('adl-prescription-notes').value = '';
         renderPrescSelected('adl');
       }
     }
@@ -1763,6 +1989,96 @@ async function saveSimpleEvent() {
   await loadPatientEvents();
 }
 
+// ── Home Visit modal ───────────────────────────────────────────────────────────
+
+let _hvEventId         = null;
+let _hvProtocolEventId = null;
+
+function _hvToggleSubform(type) {
+  const noteId  = { adverse: 'hv-adverse-note', robot: 'hv-robot-note', watch: 'hv-watch-note' }[type];
+  const checked = document.getElementById(`hv-trigger-${type}`).checked;
+  document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+const _HV_ACTIVATION_OFFSETS = { home_visit_d02: 1, home_visit_d03: 2 };
+
+function openHomeVisitModal(ev) {
+  _hvEventId         = ev.id;
+  _hvProtocolEventId = ev.protocol_event_id;
+  document.getElementById('hv-title').textContent = ev.event_name;
+  document.getElementById('hv-notes').value       = '';
+  _resetAttachment('hv');
+  setError('hv-error', '');
+
+  // Pre-fill session start for d02/d03
+  const offset = _HV_ACTIVATION_OFFSETS[ev.protocol_event_id];
+  if (offset !== undefined && patientData?.activationDate) {
+    const d = new Date(patientData.activationDate);
+    d.setDate(d.getDate() + offset);
+    document.getElementById('hv-session-start').value = d.toISOString().slice(0, 10) + 'T09:00';
+  } else {
+    document.getElementById('hv-session-start').value = '';
+  }
+  document.getElementById('hv-session-end').value = '';
+  _attachDateGuard('hv-session-start', 'hv-error');
+  _attachSessionEndGuard('hv-session-start', 'hv-session-end', 'hv-error');
+
+  // Reset triggered section
+  ['adverse', 'robot', 'watch'].forEach(type => {
+    const cb = document.getElementById(`hv-trigger-${type}`);
+    if (cb) { cb.checked = false; _hvToggleSubform(type); }
+  });
+  document.getElementById('hv-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
+  document.getElementById('hv-trigger-watch-wrap').classList.toggle('hidden',
+    !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
+
+  showModal('home-visit-modal');
+}
+
+async function saveHomeVisit() {
+  const sessionStart = document.getElementById('hv-session-start').value;
+  const sessionEnd   = document.getElementById('hv-session-end').value;
+  const notes        = document.getElementById('hv-notes').value.trim();
+  const saveBtn      = document.getElementById('hv-save');
+
+  if (!sessionStart || !sessionEnd) { setError('hv-error', 'Session start and end are required.'); return; }
+  if (sessionStart.split('T')[0] !== sessionEnd.split('T')[0]) { setError('hv-error', 'Session start and end must be on the same date.'); return; }
+  if (sessionStart >= sessionEnd) { setError('hv-error', 'Session end must be after session start.'); return; }
+  if (!_validateAttachment('hv', 'hv-error')) return;
+
+  // Collect triggered events
+  const triggered = [];
+  if (document.getElementById('hv-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (!document.getElementById('hv-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue' });
+  if (!document.getElementById('hv-trigger-watch-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-trigger-watch').checked)
+    triggered.push({ type: 'watch_record' });
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/home-visit`, {
+    event_id:          _hvEventId,
+    protocol_event_id: _hvProtocolEventId,
+    session_start:     sessionStart,
+    session_end:       sessionEnd,
+    notes,
+    triggered,
+  });
+  if (!ok) { setError('hv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('hv');
+  if (file) {
+    const uploaded = await _uploadAttachment(_hvEventId, file, caption, 'hv-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('home-visit-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
 // ── Follow-up Call modal ───────────────────────────────────────────────────────
 
 let _followupCallEventId         = null;
@@ -1784,33 +2100,9 @@ function _followupCallCheckDateChange() {
 
 // Toggle a triggered sub-form on/off and clear its fields when hidden
 function _fcToggleSubform(type) {
-  const subformId = { adverse: 'fc-adverse-form', robot: 'fc-robot-form', watch: 'fc-watch-note' }[type];
-  const checked   = document.getElementById(`fc-trigger-${type}`).checked;
-  document.getElementById(subformId).classList.toggle('hidden', !checked);
-  if (!checked) {
-    if (type === 'adverse') {
-      document.getElementById('fc-adverse-desc').value   = '';
-      document.getElementById('fc-adverse-action').value = '';
-      document.getElementById('fc-adverse-paused').checked = false;
-    } else if (type === 'robot') {
-      document.getElementById('fc-robot-desc').value   = '';
-      document.getElementById('fc-robot-paused').checked = false;
-      ['pluto', 'mars'].forEach(d => _fcClearDevice(d));
-    }
-  }
-}
-
-function _fcToggleDevice(device) {
-  const checked = document.getElementById(`fc-robot-${device}-on`).checked;
-  document.getElementById(`fc-robot-${device}-form`).classList.toggle('hidden', !checked);
-  if (!checked) _fcClearDevice(device);
-}
-
-function _fcClearDevice(device) {
-  document.getElementById(`fc-robot-${device}-on`).checked       = false;
-  document.getElementById(`fc-robot-${device}-form`).classList.add('hidden');
-  document.getElementById(`fc-robot-${device}-desc`).value       = '';
-  document.getElementById(`fc-robot-${device}-resolved`).checked = false;
+  const noteId  = { adverse: 'fc-adverse-note', robot: 'fc-robot-note', watch: 'fc-watch-note' }[type];
+  const checked = document.getElementById(`fc-trigger-${type}`).checked;
+  document.getElementById(noteId).classList.toggle('hidden', !checked);
 }
 
 function openFollowupCallModal(ev) {
@@ -1867,42 +2159,14 @@ async function saveFollowupCall() {
   // Collect triggered items
   const triggered = [];
 
-  if (document.getElementById('fc-trigger-adverse').checked) {
-    const desc   = document.getElementById('fc-adverse-desc').value.trim();
-    const action = document.getElementById('fc-adverse-action').value.trim();
-    if (!desc)   { err.textContent = 'Adverse event description is required.';   err.classList.remove('hidden'); return; }
-    if (!action) { err.textContent = 'Adverse event action taken is required.';  err.classList.remove('hidden'); return; }
-    triggered.push({
-      type:        'adverse_event',
-      description: desc,
-      action_taken: action,
-      paused:      document.getElementById('fc-adverse-paused').checked,
-    });
-  }
-
-  const robotCb = document.getElementById('fc-trigger-robot');
-  if (robotCb && robotCb.checked) {
-    const desc = document.getElementById('fc-robot-desc').value.trim();
-    if (!desc) { err.textContent = 'Robot issue description is required.'; err.classList.remove('hidden'); return; }
-    const faults = [];
-    for (const device of ['pluto', 'mars']) {
-      if (document.getElementById(`fc-robot-${device}-on`).checked) {
-        const fd = document.getElementById(`fc-robot-${device}-desc`).value.trim();
-        if (!fd) { err.textContent = `${device.charAt(0).toUpperCase() + device.slice(1)} fault description is required.`; err.classList.remove('hidden'); return; }
-        faults.push({ device, fault_description: fd, resolved_same_day: document.getElementById(`fc-robot-${device}-resolved`).checked });
-      }
-    }
-    triggered.push({
-      type:        'robot_issue',
-      description: desc,
-      faults,
-      paused:      document.getElementById('fc-robot-paused').checked,
-    });
-  }
-
-  if (document.getElementById('fc-trigger-watch').checked) {
+  if (document.getElementById('fc-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (!document.getElementById('fc-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('fc-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue' });
+  if (!document.getElementById('fc-trigger-watch-wrap').classList.contains('hidden') &&
+      document.getElementById('fc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
-  }
 
   const body = {
     event_id:          _followupCallEventId,
@@ -1937,33 +2201,9 @@ async function saveFollowupCall() {
 // ── Patient Call modal ────────────────────────────────────────────────────────
 
 function _pcToggleSubform(type) {
+  const noteId  = { adverse: 'pc-adverse-note', robot: 'pc-robot-note', watch: 'pc-watch-note' }[type];
   const checked = document.getElementById(`pc-trigger-${type}`).checked;
-  const formEl  = document.getElementById(`pc-${type}-form`) || document.getElementById(`pc-${type}-note`);
-  if (formEl) formEl.classList.toggle('hidden', !checked);
-  if (!checked) {
-    if (type === 'adverse') {
-      document.getElementById('pc-adverse-desc').value   = '';
-      document.getElementById('pc-adverse-action').value = '';
-      document.getElementById('pc-adverse-paused').checked = false;
-    } else if (type === 'robot') {
-      document.getElementById('pc-robot-desc').value   = '';
-      document.getElementById('pc-robot-paused').checked = false;
-      ['pluto', 'mars'].forEach(d => _pcClearDevice(d));
-    }
-  }
-}
-
-function _pcToggleDevice(device) {
-  const checked = document.getElementById(`pc-robot-${device}-on`).checked;
-  document.getElementById(`pc-robot-${device}-form`).classList.toggle('hidden', !checked);
-  if (!checked) _pcClearDevice(device);
-}
-
-function _pcClearDevice(device) {
-  document.getElementById(`pc-robot-${device}-on`).checked       = false;
-  document.getElementById(`pc-robot-${device}-form`).classList.add('hidden');
-  document.getElementById(`pc-robot-${device}-desc`).value       = '';
-  document.getElementById(`pc-robot-${device}-resolved`).checked = false;
+  document.getElementById(noteId).classList.toggle('hidden', !checked);
 }
 
 function openPatientCallModal() {
@@ -1998,37 +2238,14 @@ async function savePatientCall() {
 
   const triggered = [];
 
-  if (document.getElementById('pc-trigger-adverse').checked) {
-    const desc   = document.getElementById('pc-adverse-desc').value.trim();
-    const action = document.getElementById('pc-adverse-action').value.trim();
-    if (!desc)   { setError('pc-error', 'Adverse event description is required.'); return; }
-    if (!action) { setError('pc-error', 'Adverse event action taken is required.'); return; }
-    triggered.push({
-      type: 'adverse_event', description: desc, action_taken: action,
-      paused: document.getElementById('pc-adverse-paused').checked,
-    });
-  }
-
-  const robotCb = document.getElementById('pc-trigger-robot');
-  if (robotCb && robotCb.checked) {
-    const desc = document.getElementById('pc-robot-desc').value.trim();
-    if (!desc) { setError('pc-error', 'Robot issue description is required.'); return; }
-    const faults = [];
-    for (const device of ['pluto', 'mars']) {
-      if (document.getElementById(`pc-robot-${device}-on`).checked) {
-        const fd = document.getElementById(`pc-robot-${device}-desc`).value.trim();
-        if (!fd) { setError('pc-error', `${device.charAt(0).toUpperCase() + device.slice(1)} fault description is required.`); return; }
-        faults.push({ device, fault_description: fd,
-          resolved_same_day: document.getElementById(`pc-robot-${device}-resolved`).checked });
-      }
-    }
-    triggered.push({ type: 'robot_issue', description: desc, faults,
-      paused: document.getElementById('pc-robot-paused').checked });
-  }
-
-  if (document.getElementById('pc-trigger-watch').checked) {
+  if (document.getElementById('pc-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (!document.getElementById('pc-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('pc-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue' });
+  if (!document.getElementById('pc-trigger-watch-wrap').classList.contains('hidden') &&
+      document.getElementById('pc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
-  }
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
@@ -2052,6 +2269,9 @@ async function savePatientCall() {
 
 const _WR_TRIGGER_NAMES = {
   activation:        'Patient Activation',
+  home_visit_d02:    'Home Visit Day 02',
+  home_visit_d03:    'Home Visit Day 03',
+  home_visit_d15:    'Home Visit Day 15',
   followup_call_d07: 'Follow-up Call Day 07',
   followup_call_d21: 'Follow-up Call Day 21',
   patient_call:      'Patient Call',
@@ -2465,6 +2685,13 @@ async function loadPatient() {
         (userPrivilege === 'admin' || userPrivilege === 'therapist')) {
       logCallBtn.classList.remove('hidden');
       logCallBtn.classList.add('flex');
+    }
+
+    // Show "Discontinue" button for admin when patient is not yet discontinued/completed
+    const discBtn = document.getElementById('discontinue-btn');
+    if (discBtn && isAdmin && !patientData.discontinuationDate && !patientData.a2CompletionDate) {
+      discBtn.classList.remove('hidden');
+      discBtn.classList.add('flex');
     }
   } catch (e) {
     console.error('Error loading patient:', e);
