@@ -886,6 +886,27 @@ def api_complete_simple_event(homer_id):
 
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
+
+    # training_completion_d29: set trainingCompletionDate; handle paused state
+    if protocol_event_id == 'training_completion_d29':
+        patient = read_patient_meta(folder, homer_id)
+        if patient:
+            patient['trainingCompletionDate'] = completion_date
+            # If patient was paused, clear the pause and discard resolve_robot_issue stubs
+            # (robot is returned on d29; adverse event resolve stubs persist)
+            if patient.get('trainingPausedDate'):
+                patient['trainingPausedDate'] = None
+                ev_data = read_protocol_events(folder, homer_id)
+                if ev_data:
+                    ev_data['incomplete'] = [
+                        e for e in ev_data.get('incomplete', [])
+                        if e.get('protocol_event_id') != 'resolve_robot_issue'
+                    ]
+                    write_protocol_events(folder, homer_id, ev_data)
+                write_patient_log(folder, homer_id, loginid, session_id,
+                                  'Training pause cleared — training completed')
+            write_patient_meta(folder, homer_id, patient)
+
     write_patient_log(folder, homer_id, loginid, session_id,
                       _SIMPLE_EVENT_LOG_MESSAGES[protocol_event_id])
 
@@ -1070,6 +1091,8 @@ def api_complete_adverse_event(homer_id):
         return jsonify({'error': 'Adverse event stub not found.'}), 404
 
     filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    now_hhmm = datetime.now().strftime('%Y-%m-%dT%H:%M')
+
     complete_entry = {
         **entry,
         'completion_date': completion_date,
@@ -1077,18 +1100,35 @@ def api_complete_adverse_event(homer_id):
         'description':     description,
         'action_taken':    action_taken,
         'paused':          paused,
-        'pause_date':      None,
-        'allocated_pause_days': None,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
     events_data.setdefault('free', {}).setdefault('adverse_event', []).append(complete_entry)
 
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    if paused:
+        # Set trainingPausedDate on the patient record
+        patient_meta = read_patient_meta(folder, homer_id)
+        if patient_meta:
+            patient_meta['trainingPausedDate'] = completion_date
+            write_patient_meta(folder, homer_id, patient_meta)
+
+        # Create resolve_adverse_event stub in incomplete
+        resolve_id = str(uuid.uuid4())
+        events_data.setdefault('incomplete', []).append({
+            'id':               resolve_id,
+            'protocol_event_id': 'resolve_adverse_event',
+            'triggered_by':     {'type': 'adverse_event', 'id': event_id},
+            'scheduled_date':   [now_hhmm, now_hhmm],
+            'filed_at':         filed_at,
+        })
+        write_patient_log(folder, homer_id, loginid, session_id, 'Training paused — adverse event')
+
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
 
-    loginid    = flask_session.get('loginid', 'unknown')
-    session_id = flask_session.get('session_id', -1)
-    write_patient_log(folder, homer_id, loginid, session_id, 'Completed adverse event record.')
+    write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event recorded.')
 
     return jsonify({'ok': True})
 
@@ -1098,7 +1138,7 @@ def api_complete_robot_issue(homer_id):
     """Complete a robot issue stub: moves it from incomplete to free.robot_issue."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
-    if flask_session.get('privilege') not in ('admin', 'therapist'):
+    if flask_session.get('privilege') not in ('admin', 'engineer'):
         return jsonify({'error': 'Forbidden'}), 403
 
     folder = find_patient_folder(flask_session['login_place'], homer_id)
@@ -1108,7 +1148,6 @@ def api_complete_robot_issue(homer_id):
     body            = request.get_json() or {}
     event_id        = body.get('event_id')
     completion_date = (body.get('completion_date') or '').strip()
-    description     = (body.get('description') or '').strip()
     faults          = body.get('faults', [])
     paused          = bool(body.get('paused', False))
 
@@ -1124,12 +1163,16 @@ def api_complete_robot_issue(homer_id):
             return jsonify({'error': 'Event date cannot be in the future.'}), 400
     except ValueError:
         return jsonify({'error': 'Invalid date format.'}), 400
-    if not description:
-        return jsonify({'error': 'Description is required.'}), 400
+    if not faults:
+        return jsonify({'error': 'At least one affected device is required.'}), 400
+
+    valid_outcomes = {'resolved_same_day', 'device_swap', 'swap_not_possible'}
     for fault in faults:
-        if not (fault.get('fault_description') or '').strip():
+        if not (fault.get('notes') or '').strip():
             device = (fault.get('device') or 'device').capitalize()
-            return jsonify({'error': f'{device} fault description is required.'}), 400
+            return jsonify({'error': f'{device} notes are required.'}), 400
+        if fault.get('outcome') not in valid_outcomes:
+            return jsonify({'error': f'Invalid outcome for {fault.get("device", "device")}.'}), 400
 
     # Verify patient is experimental (robot_issue is experimental-only)
     patient_meta = read_patient_meta(folder, homer_id)
@@ -1150,19 +1193,18 @@ def api_complete_robot_issue(homer_id):
         return jsonify({'error': 'Robot issue stub not found.'}), 404
 
     filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    now_hhmm = datetime.now().strftime('%Y-%m-%dT%H:%M')
+
     complete_entry = {
         **entry,
         'completion_date': completion_date,
         'filed_at':        filed_at,
-        'description':     description,
         'paused':          paused,
-        'pause_date':      None,
-        'allocated_pause_days': None,
         'faults': [
             {
-                'device':            f['device'],
-                'fault_description': f['fault_description'].strip(),
-                'resolved_same_day': bool(f.get('resolved_same_day', False)),
+                'device':  f['device'],
+                'notes':   f['notes'].strip(),
+                'outcome': f['outcome'],
             }
             for f in faults
         ],
@@ -1170,12 +1212,29 @@ def api_complete_robot_issue(homer_id):
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
     events_data.setdefault('free', {}).setdefault('robot_issue', []).append(complete_entry)
 
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    if paused:
+        # Set trainingPausedDate on the patient record
+        patient_meta['trainingPausedDate'] = completion_date
+        write_patient_meta(folder, homer_id, patient_meta)
+
+        # Create resolve_robot_issue stub in incomplete
+        resolve_id = str(uuid.uuid4())
+        events_data.setdefault('incomplete', []).append({
+            'id':               resolve_id,
+            'protocol_event_id': 'resolve_robot_issue',
+            'triggered_by':     {'type': 'robot_issue', 'id': event_id},
+            'scheduled_date':   [now_hhmm, now_hhmm],
+            'filed_at':         filed_at,
+        })
+        write_patient_log(folder, homer_id, loginid, session_id, 'Training paused — robot issue')
+
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
 
-    loginid    = flask_session.get('loginid', 'unknown')
-    session_id = flask_session.get('session_id', -1)
-    write_patient_log(folder, homer_id, loginid, session_id, 'Completed robot issue record.')
+    write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue recorded.')
 
     return jsonify({'ok': True})
 
@@ -1755,6 +1814,8 @@ def api_log_patient_call(homer_id):
     completion_date  = (body.get('completion_date') or '').strip()
     duration_str     = str(body.get('duration_minutes', '')).strip()
     notes            = (body.get('notes') or '').strip()
+    call_type        = (body.get('call_type') or 'patient_initiated').strip()
+    reason           = (body.get('reason') or '').strip()
     triggered_items  = body.get('triggered', [])
     if not isinstance(triggered_items, list):
         triggered_items = []
@@ -1776,6 +1837,10 @@ def api_log_patient_call(homer_id):
         return jsonify({'error': 'Duration must be a positive integer.'}), 400
     if not notes:
         return jsonify({'error': 'Notes are required.'}), 400
+    if call_type not in ('patient_initiated', 'therapist_initiated'):
+        return jsonify({'error': 'Invalid call_type.'}), 400
+    if call_type == 'therapist_initiated' and not reason:
+        return jsonify({'error': 'Reason is required for therapist-initiated calls.'}), 400
 
     patient_meta    = read_patient_meta(folder, homer_id)
     is_experimental = patient_meta and patient_meta.get('group') == 'experimental'
@@ -1843,6 +1908,8 @@ def api_log_patient_call(homer_id):
         'completion_date':  completion_date,
         'filed_at':         filed_at,
         'duration_minutes': duration_minutes,
+        'call_type':        call_type,
+        'reason':           reason if call_type == 'therapist_initiated' else None,
         'notes':            notes,
         'triggered':        triggered_refs,
     })

@@ -130,8 +130,8 @@ All fields are factual — status is never stored but always derived.
 - Date fields cannot exceed the current local time — no future datetimes are allowed.
 
 **Pause fields (both groups):**
-- `trainingPausedDate` — set when training is paused (adverse event or robot issue with `paused: true`); `null` when not paused. Cleared when all outstanding `resolve_adverse_event` and `resolve_robot_issue` stubs in `incomplete` are completed.
-- `cumulativePauseDays` — total pause days accumulated across all episodes. Incremented by each resolve event (days between `trainingPausedDate` and resolve date). Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`. A patient can have multiple simultaneous pauses (e.g. adverse event + robot issue both unresolved); `trainingPausedDate` is only cleared when all resolve stubs are gone.
+- `trainingPausedDate` — set when training is paused; `null` when not paused. Set when a robot issue has any device not swapped, or when an adverse event is filed with `training_blocked: true`. Cleared when all pausing causes are resolved: no `resolve_robot_issue` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain in `incomplete` (meaning all adverse events have been marked resolved).
+- `cumulativePauseDays` — total pause days accumulated across all episodes. Incremented when the last outstanding pause cause is resolved, using `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (exclusive end; minimum 0 — same-day resolution contributes 0 pause days). Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`. A patient can have multiple simultaneous pause causes (e.g. two adverse events + robot issue); `trainingPausedDate` is only cleared when all are resolved.
 
 **Broken protocol detection field:**
 - `brokenProtocolDate` — date when `broken_protocol` was first detected; set automatically on login. `null` until first detected. Never cleared once set.
@@ -469,7 +469,7 @@ Extra fields on `complete`:
 ```json
 {
   "adverse_event":          [],
-  "resolve_adverse_event":  [],
+  "adverse_event_followup": [],
   "robot_issue":            [],
   "resolve_robot_issue":    [],
   "patient_call":           [],
@@ -478,7 +478,7 @@ Extra fields on `complete`:
 }
 ```
 
-`robot_issue` and `resolve_robot_issue` are only present for experimental patients.
+`robot_issue`, `resolve_robot_issue` are only present for experimental patients. `adverse_event_followup` is present for all patients.
 
 **`adverse_event`**
 
@@ -505,13 +505,13 @@ Uses a **two-phase model**. Never created standalone — always triggered by a h
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "description": "",
   "action_taken": "",
-  "paused": false,
-  "pause_date": null,
-  "allocated_pause_days": null,
+  "training_blocked": false,
   "attachment": null,
   "attachment_caption": null
 }
 ```
+
+- `training_blocked`: `true` if training was blocked as a result of this adverse event. When `true`, this AE's ID is included in follow-up stubs and `trainingPausedDate` is set on the patient. When `false`, the follow-up chain still runs (for monitoring) but no pause mechanics apply for this AE.
 
 **`robot_issue`** *(experimental only)*
 
@@ -535,12 +535,12 @@ Uses the same **two-phase model** as `adverse_event`. Never created standalone.
   "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
-  "paused": false,
   "faults": [
     {
       "device": "pluto | mars",
       "notes": "",
-      "outcome": "resolved_same_day | device_swap | swap_not_possible"
+      "old_device_id": "",
+      "new_device_id": ""
     }
   ],
   "attachment": null,
@@ -551,8 +551,9 @@ Uses the same **two-phase model** as `adverse_event`. Never created standalone.
 - `faults`: list of affected devices; at least one entry required. Each entry:
   - `device`: `"pluto"` or `"mars"`
   - `notes`: free-text description of the fault and what happened (required)
-  - `outcome`: one of `"resolved_same_day"`, `"device_swap"`, `"swap_not_possible"`
-- `paused`: event-level flag; `true` if the session was lost regardless of which device caused it. When `true`, a `resolve_robot_issue` stub is created in `incomplete`.
+  - `old_device_id`: the device ID assigned to the patient before this event
+  - `new_device_id`: the device ID after this event. If equal to `old_device_id`, no swap occurred (device sent for repair). If different, a swap was performed and a new device is now assigned.
+- **Implicit pause rule:** if any fault has `new_device_id == old_device_id`, a single `resolve_robot_issue` stub is created in `incomplete` and `trainingPausedDate` is set on the patient. No explicit `paused` field is stored — it is derived from the faults.
 
 **`patient_call`**
 
@@ -578,29 +579,53 @@ Stores both the call details and forward references to any downstream events it 
 - `triggered`: list of downstream events created as a result of this call; empty list `[]` if none.
 - `type` in triggered entries: `"adverse_event"`, `"robot_issue"`, or `"watch_record"` (referring to a `watch_record` entry in `incomplete`/`complete`).
 
-**`resolve_adverse_event`**
+**`adverse_event_followup`**
 
-Created as a stub in `incomplete` when an adverse event is completed with `paused: true`. Completed by therapist/admin.
+Daily follow-up call chain seeded whenever any adverse event is filed. One stub exists at a time in `incomplete`, covering all currently unresolved adverse events. Completed by therapist/admin.
 
+**Stub** (lives in `incomplete`):
 ```json
 {
   "id": "<uuid>",
-  "protocol_event_id": "resolve_adverse_event",
-  "triggered_by": { "type": "adverse_event", "id": "<uuid of adverse_event entry in free>" },
-  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "protocol_event_id": "adverse_event_followup",
+  "adverse_event_ids": ["<AE1_id>", "<AE2_id>"],
+  "scheduled_date": ["YYYY-MM-DD", "YYYY-MM-DD+1day"],
   "filed_at": "YYYY-MM-DDTHH:MM:SS"
 }
 ```
 
-Extra fields on completed record (moves to `free.resolve_adverse_event`):
+- `adverse_event_ids`: list of `adverse_event` entry IDs this follow-up covers. New AE IDs are appended to the active stub's list when a new adverse event is filed while the stub exists.
+- `scheduled_date`: always `[today, today + 1 day]` — gives a 1-day active window before becoming overdue.
+
+**Completed record** (moves from `incomplete` → `free.adverse_event_followup`):
 ```json
 {
+  "id": "<uuid>",
+  "adverse_event_ids": ["<AE1_id>", "<AE2_id>"],
   "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "duration_minutes": 15,
   "notes": "",
+  "resolutions": [
+    {
+      "adverse_event_id": "<AE1_id>",
+      "resolved": true,
+      "can_resume_from": "YYYY-MM-DD"
+    },
+    {
+      "adverse_event_id": "<AE2_id>",
+      "resolved": false,
+      "can_resume_from": null
+    }
+  ],
   "attachment": null,
   "attachment_caption": null
 }
 ```
+
+- `resolutions`: one entry per AE in `adverse_event_ids`. `can_resume_from` is required when `resolved: true` AND the AE had `training_blocked: true`; `null` otherwise. Date only (`YYYY-MM-DD`).
+- **Chain continuation:** after save, a new stub is seeded with `adverse_event_ids` = IDs of unresolved AEs and `scheduled_date: [today, today + 1 day]`. If all AEs are resolved, no new stub is seeded.
+- **Pause resolution:** when all AEs are resolved and no `resolve_robot_issue` stubs remain, `cumulativePauseDays` is incremented by `(max(can_resume_from) − trainingPausedDate.date()).days` (minimum 0) and `trainingPausedDate` is cleared.
 
 **`resolve_robot_issue`** *(experimental only)*
 
@@ -620,11 +645,15 @@ Extra fields on completed record (moves to `free.resolve_robot_issue`):
 ```json
 {
   "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "can_resume_from": "YYYY-MM-DD",
   "notes": "",
   "attachment": null,
   "attachment_caption": null
 }
 ```
+
+- `can_resume_from`: the earliest date training is possible again from this issue's perspective (date only, no time). If the repair was completed and training happened the same day as `trainingPausedDate`, enter that date — pause days will be 0. Pause days contributed = `(can_resume_from − trainingPausedDate.date()).days` (minimum 0).
 
 **`pre_discontinuation`** / **`discontinuation`**
 ```json

@@ -227,9 +227,7 @@ const ACTION_DEFS = {
   inactive: [
     { label: 'Activate',          color: 'bg-blue-600 hover:bg-blue-700 text-white',   action: () => openActivationModal(null) },
   ],
-  active: [
-    { label: 'Complete Training', color: 'bg-teal-600 hover:bg-teal-700 text-white',   action: () => openCompleteTrainingModal() },
-  ],
+  active: [],
   paused: [],
   broken_protocol: [],
   training_completed: [
@@ -262,13 +260,6 @@ function renderActions(p) {
 
 // ── Modal openers ─────────────────────────────────────────────────────────────
 
-function openCompleteTrainingModal() {
-  document.getElementById('complete-training-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('complete-training-date').value = '';
-  setError('complete-training-error', '');
-  _attachDateGuard('complete-training-date', 'complete-training-error');
-  showModal('complete-training-modal');
-}
 
 function openA1Modal() {
   document.getElementById('a1-homer-id').textContent = PATIENT_HOMER_ID;
@@ -295,14 +286,6 @@ function openDiscontinueModal() {
 
 // ── Modal submitters ──────────────────────────────────────────────────────────
 
-async function submitCompleteTraining() {
-  const date = document.getElementById('complete-training-date').value;
-  if (!date) { setError('complete-training-error', 'Please select a completion date.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-training`, { trainingCompletionDate: date });
-  if (!ok) { setError('complete-training-error', data.error || 'Failed to complete training.'); return; }
-  hideModal('complete-training-modal');
-  loadPatient();
-}
 
 async function submitA1() {
   const date = document.getElementById('a1-date').value;
@@ -907,10 +890,21 @@ function _robotIssueCard(ev) {
     ? `<div class="inline-flex items-center gap-1 text-xs bg-red-50 text-red-700 border border-red-200 rounded-full px-2 py-0.5"><i class="fas fa-pause text-[10px]"></i>Training paused</div>`
     : '';
 
+  const _OUTCOME_LABELS = {
+    resolved_same_day: 'Resolved same day',
+    device_swap:       'Device swap',
+    swap_not_possible: 'Swap not possible',
+  };
   const faultsStr = (ev.faults || []).map(f => {
-    const resolved = f.resolved_same_day
-      ? `<span class="text-green-600 ml-1">(resolved same day)</span>` : '';
-    return `<div class="text-xs text-slate-500"><span class="text-slate-400 capitalize">${f.device}:</span> ${f.fault_description}${resolved}</div>`;
+    const outcomeLabel = _OUTCOME_LABELS[f.outcome] || f.outcome || '';
+    const outcomeColor = f.outcome === 'resolved_same_day' ? 'text-green-600'
+                       : f.outcome === 'device_swap'       ? 'text-blue-600'
+                       : 'text-red-600';
+    return `<div class="text-xs text-slate-600 bg-orange-50 rounded-lg px-3 py-2 border border-orange-100">
+      <span class="font-medium capitalize">${f.device}:</span>
+      <span class="ml-1 ${outcomeColor} font-medium">${outcomeLabel}</span>
+      ${f.notes ? `<p class="mt-0.5 text-slate-500">${f.notes}</p>` : ''}
+    </div>`;
   }).join('');
 
   const attachmentStr = (ev.attachment && ev.id)
@@ -928,7 +922,6 @@ function _robotIssueCard(ev) {
         </div>
       </div>
       <div class="px-4 py-3 space-y-1.5">
-        ${ev.description ? `<p class="text-sm text-slate-700">${ev.description}</p>` : ''}
         ${faultsStr}
         ${pausedStr}
         ${triggerStr}
@@ -1005,8 +998,8 @@ function _riToggleDevice(device) {
   const checked = document.getElementById(`ri-${device}-on`).checked;
   document.getElementById(`ri-${device}-form`).classList.toggle('hidden', !checked);
   if (!checked) {
-    document.getElementById(`ri-${device}-desc`).value       = '';
-    document.getElementById(`ri-${device}-resolved`).checked = false;
+    document.getElementById(`ri-${device}-notes`).value = '';
+    document.querySelectorAll(`input[name="ri-${device}-outcome"]`).forEach(r => r.checked = false);
   }
 }
 
@@ -1016,14 +1009,13 @@ function openRobotIssueModal(ev) {
     ? (_AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type)
     : 'Unknown';
   document.getElementById('ri-context-banner').textContent = `Triggered by: ${triggerLabel}`;
-  document.getElementById('ri-date').value        = '';
-  document.getElementById('ri-description').value = '';
-  document.getElementById('ri-paused').checked    = false;
+  document.getElementById('ri-date').value  = '';
+  document.getElementById('ri-paused').checked = false;
   ['pluto', 'mars'].forEach(d => {
     document.getElementById(`ri-${d}-on`).checked = false;
     document.getElementById(`ri-${d}-form`).classList.add('hidden');
-    document.getElementById(`ri-${d}-desc`).value       = '';
-    document.getElementById(`ri-${d}-resolved`).checked = false;
+    document.getElementById(`ri-${d}-notes`).value = '';
+    document.querySelectorAll(`input[name="ri-${d}-outcome"]`).forEach(r => r.checked = false);
   });
   _resetAttachment('ri');
   setError('ri-error', '');
@@ -1032,29 +1024,29 @@ function openRobotIssueModal(ev) {
 }
 
 async function saveRobotIssue() {
-  const date        = document.getElementById('ri-date').value;
-  const description = document.getElementById('ri-description').value.trim();
-  const paused      = document.getElementById('ri-paused').checked;
-  const saveBtn     = document.getElementById('ri-save');
+  const date    = document.getElementById('ri-date').value;
+  const paused  = document.getElementById('ri-paused').checked;
+  const saveBtn = document.getElementById('ri-save');
 
-  if (!date)        { setError('ri-error', 'Event date is required.'); return; }
-  if (!description) { setError('ri-error', 'Description is required.'); return; }
+  if (!date) { setError('ri-error', 'Event date is required.'); return; }
 
   const faults = [];
   for (const device of ['pluto', 'mars']) {
     if (document.getElementById(`ri-${device}-on`).checked) {
-      const fd = document.getElementById(`ri-${device}-desc`).value.trim();
-      if (!fd) { setError('ri-error', `${device.charAt(0).toUpperCase() + device.slice(1)} fault description is required.`); return; }
-      faults.push({ device, fault_description: fd,
-        resolved_same_day: document.getElementById(`ri-${device}-resolved`).checked });
+      const notes   = document.getElementById(`ri-${device}-notes`).value.trim();
+      const outcome = document.querySelector(`input[name="ri-${device}-outcome"]:checked`)?.value;
+      if (!notes)   { setError('ri-error', `${device.charAt(0).toUpperCase() + device.slice(1)} notes are required.`); return; }
+      if (!outcome) { setError('ri-error', `${device.charAt(0).toUpperCase() + device.slice(1)} outcome is required.`); return; }
+      faults.push({ device, notes, outcome });
     }
   }
+  if (!faults.length) { setError('ri-error', 'At least one affected device must be selected.'); return; }
   if (!_validateAttachment('ri', 'ri-error')) return;
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue`,
-    { event_id: _riEventId, completion_date: date, description, faults, paused }
+    { event_id: _riEventId, completion_date: date, faults, paused }
   );
   if (!ok) { setError('ri-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1067,6 +1059,18 @@ async function saveRobotIssue() {
   hideModal('robot-issue-modal');
   saveBtn.disabled = false;
   await loadPatientEvents();
+}
+
+// ── Resolve Adverse Event modal (placeholder) ─────────────────────────────────
+
+function openResolveAdverseEventModal(_ev) {
+  showModal('resolve-adverse-event-modal');
+}
+
+// ── Resolve Robot Issue modal (placeholder) ───────────────────────────────────
+
+function openResolveRobotIssueModal(_ev) {
+  showModal('resolve-robot-issue-modal');
 }
 
 function completedTimeline(events) {
@@ -1110,6 +1114,8 @@ const EVENT_OPENERS = {
   watch_record:              (ev) => openWatchRecordModal(ev),
   adverse_event:             (ev) => openAdverseEventModal(ev),
   robot_issue:               (ev) => openRobotIssueModal(ev),
+  resolve_adverse_event:     (ev) => openResolveAdverseEventModal(ev),
+  resolve_robot_issue:       (ev) => openResolveRobotIssueModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -2206,10 +2212,18 @@ function _pcToggleSubform(type) {
   document.getElementById(noteId).classList.toggle('hidden', !checked);
 }
 
+function _pcToggleTherapistInitiated() {
+  const checked = document.getElementById('pc-therapist-initiated').checked;
+  document.getElementById('pc-reason-wrap').classList.toggle('hidden', !checked);
+}
+
 function openPatientCallModal() {
   document.getElementById('pc-date').value     = '';
   document.getElementById('pc-duration').value = '';
   document.getElementById('pc-notes').value    = '';
+  document.getElementById('pc-therapist-initiated').checked = false;
+  document.getElementById('pc-reason-wrap').classList.add('hidden');
+  document.getElementById('pc-reason').value = '';
   _resetAttachment('pc');
 
   ['adverse', 'robot', 'watch'].forEach(type => {
@@ -2247,10 +2261,17 @@ async function savePatientCall() {
       document.getElementById('pc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
 
+  const therapistInitiated = document.getElementById('pc-therapist-initiated').checked;
+  const reason = document.getElementById('pc-reason').value.trim();
+  if (therapistInitiated && !reason) { setError('pc-error', 'Reason is required for therapist-initiated calls.'); return; }
+
+  const call_type = therapistInitiated ? 'therapist_initiated' : 'patient_initiated';
+
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/log-patient-call`,
-    { completion_date: dateVal, duration_minutes: parseInt(duration), notes, triggered }
+    { completion_date: dateVal, duration_minutes: parseInt(duration), notes, triggered,
+      call_type, reason: therapistInitiated ? reason : undefined }
   );
   if (!ok) { setError('pc-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -2714,7 +2735,7 @@ async function loadPrivilege() {
 document.addEventListener('DOMContentLoaded', async () => {
   // Store submit button labels for loading state
   [
-    'complete-training-submit', 'a1-submit', 'a2-submit', 'discontinue-submit',
+    'a1-submit', 'a2-submit', 'discontinue-submit',
     'device-setup-submit', 'activation-submit',
     'adl-prescription-submit', 'vcg-prescription-submit',
     'prescription-printout-save', 'prescription-printout-print',

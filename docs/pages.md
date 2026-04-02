@@ -97,10 +97,10 @@ Patient list for the user's visible site(s).
 | broken_protocol    | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
 | active             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
 | active             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
-| active             | Adverse event / robot issue — training paused  | `trainingPausedDate` set                                        | paused             |
-| paused             | Resume training                                | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active             |
-| paused             | Extend pause (cumulative ≤ 10 days)            | `cumulativePauseDays` incremented                               | paused             |
-| paused             | Extend pause (cumulative > 10 days)            | `cumulativePauseDays` incremented                               | broken_protocol    |
+| active             | Robot issue — any device not swapped           | `trainingPausedDate` set                                        | paused             |
+| active             | Adverse event — `training_blocked` checked     | `trainingPausedDate` set                                        | paused             |
+| paused             | All pause causes resolved (`can_resume_from` set on all; no `resolve_robot_issue` stubs remain) | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active |
+| paused             | All pause causes resolved (`cumulativePauseDays` > 10)   | `cumulativePauseDays` incremented                          | broken_protocol    |
 | paused             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
 | paused             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
 | training_completed | Record A1                                      | `a1CompletionDate`                                              | a1_completed       |
@@ -530,13 +530,14 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Event Date (datetime, required; cannot be in the future)
   - Description (textarea, required)
   - Action taken (textarea, required)
-  - Training paused as a result (checkbox) — when checked, a `resolve_adverse_event` stub is created in `incomplete` (triggered by this event) and the patient transitions to `paused`
+  - Training blocked as a result (checkbox) — when checked, `trainingPausedDate` is set and the patient transitions to `paused`
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.adverse_event` with `completion_date`, `filed_at`, `description`, `action_taken`, `paused`, `triggered_by` (carried from stub), `attachment` (if uploaded)
-  - If `paused` is checked: set `trainingPausedDate` on `<homer_id>.json`; append a `resolve_adverse_event` stub to `incomplete` with `triggered_by: {type: "adverse_event", id: <event_id>}`, `scheduled_date: [now, now]`
-- Log message: `Adverse event recorded`; if paused: also `Training paused — adverse event`
+  - Append completed entry to `free.adverse_event` with `completion_date`, `filed_at`, `description`, `action_taken`, `training_blocked`, `triggered_by` (carried from stub), `attachment` (if uploaded)
+  - If `training_blocked` is checked: set `trainingPausedDate` on `<homer_id>.json`
+  - **Always** (regardless of `training_blocked`): if an `adverse_event_followup` stub already exists in `incomplete`, add this event's ID to its `adverse_event_ids` list. If no stub exists, seed a new one with `adverse_event_ids: [<this_event_id>]`, `scheduled_date: [today, today + 1 day]`
+- Log message: `Adverse event recorded`; if training blocked: also `Training paused — adverse event`
 
 ---
 
@@ -550,41 +551,58 @@ Each action is defined once here. Pages above reference which actions apply to t
   - **Affected devices** section — at least one device must be checked:
     - **Pluto** (checkbox): if checked, reveals:
       - Notes (textarea, required) — describe the fault and what happened
-      - Outcome (radio, required): `Resolved same day` | `Device swap` | `Swap not possible`
+      - New device ID (dropdown, required) — select replacement device; selecting the **same device ID** means no swap (device sent for repair). Options: available unassigned Pluto devices + current Pluto device (labelled "current — no swap")
     - **Mars** (checkbox): same fields as Pluto
-  - Training paused as a result (checkbox) — event-level; checked when the session was lost regardless of which device caused it. When checked, a `resolve_robot_issue` stub is created in `incomplete` (triggered by this event) and the patient transitions to `paused`.
+  - No explicit "paused" checkbox — pause is **implicit**: if any checked device keeps the same ID (no swap), a `resolve_robot_issue` stub is automatically created and the patient transitions to `paused`. If all checked devices receive a new ID (swap done), no stub is created.
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.robot_issue` with `completion_date`, `filed_at`, `faults`, `paused`, `triggered_by` (carried from stub), `attachment` (if uploaded)
-  - If `paused` is checked: set `trainingPausedDate` on `<homer_id>.json`; append a `resolve_robot_issue` stub to `incomplete` with `triggered_by: {type: "robot_issue", id: <event_id>}`, `scheduled_date: [now, now]`
+  - Append completed entry to `free.robot_issue` with `completion_date`, `filed_at`, `faults` (per device: `device`, `notes`, `old_device_id`, `new_device_id`), `triggered_by` (carried from stub), `attachment` (if uploaded)
+  - Update device assignments: for each affected device where `new_device_id ≠ old_device_id`, close the old assignment and open a new one; where `new_device_id == old_device_id`, assignment is unchanged (device is being repaired)
+  - If any device has `new_device_id == old_device_id` (no swap): set `trainingPausedDate` on `<homer_id>.json`; append a single `resolve_robot_issue` stub to `incomplete` with `triggered_by: {type: "robot_issue", id: <event_id>}`, `scheduled_date: [now, now]`
 - Log message: `Robot issue recorded`; if paused: also `Training paused — robot issue`
 
 ---
 
-### Resolve Adverse Event (`resolve_adverse_event`)
-- Trigger: `resolve_adverse_event` event row on patient detail — only appears when a stub exists in `incomplete` (created when an adverse event is completed with "Training paused" checked)
+### Adverse Event Follow-up Call (`adverse_event_followup`)
+- Trigger: `adverse_event_followup` event row on patient detail — only appears when a stub exists in `incomplete`
 - Allowed users: `admin`, `therapist`
-- Modal: `resolve-adverse-event-modal` *(details TBD)*
+- Modal: `adverse-event-followup-modal`
+  - **Context banner** (read-only): lists all adverse events covered by this follow-up (names + dates), derived from `adverse_event_ids`
+  - Call Date/Time (datetime, required; cannot be in the future)
+  - Duration (integer minutes, required; must be > 0)
+  - Notes (textarea, required)
+  - **Per adverse event** — one row per AE in `adverse_event_ids`:
+    - AE name/date (read-only label)
+    - **Resolved** (checkbox)
+    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise) — the earliest date training is possible again from this AE's perspective. If resolved today and training can happen today, enter today (0 pause days counted).
+  - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.resolve_adverse_event`
-  - Increment `cumulativePauseDays` on `<homer_id>.json` by the number of days between `trainingPausedDate` and the resolve date
-  - If no other `resolve_adverse_event` or `resolve_robot_issue` stubs remain in `incomplete`: clear `trainingPausedDate` on `<homer_id>.json` (patient returns to `active`); if `cumulativePauseDays` > 10, patient transitions to `broken_protocol` instead
-- Log message: `Adverse event resolved`
+  - Append completed entry to `free.adverse_event_followup` with `completion_date`, `filed_at`, `duration_minutes`, `notes`, `resolutions` (per-AE resolved + `can_resume_from`), `attachment` (if uploaded)
+  - For each AE marked resolved with `training_blocked: true`: note its `can_resume_from`
+  - If any AEs remain unresolved: seed next stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
+  - If all AEs resolved and no `resolve_robot_issue` stubs remain in `incomplete`: increment `cumulativePauseDays` by `(max(can_resume_from across all pausing AEs) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
+  - If all AEs resolved but `resolve_robot_issue` stubs still remain: no change to pause fields (robot issue still blocking)
+- Log message: `Adverse event follow-up call recorded`; if all resolved: also `Adverse event(s) resolved`
 
 ---
 
 ### Resolve Robot Issue (`resolve_robot_issue`)
-- Trigger: `resolve_robot_issue` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue is completed with "Training paused" checked)
+- Trigger: `resolve_robot_issue` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue is filed with at least one device not swapped)
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
-- Modal: `resolve-robot-issue-modal` *(details TBD)*
+- Modal: `resolve-robot-issue-modal`
+  - **Context banner** (read-only): "Triggered by: Robot Issue on \<date\>"
+  - **Can resume from** (date, required; cannot be in the future) — the earliest date training is possible again from this issue's perspective. If the repair was completed and training happened the same day, enter that day; pause days will be zero.
+  - Notes (textarea, optional)
+  - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.resolve_robot_issue`
-  - Increment `cumulativePauseDays` on `<homer_id>.json` by the number of days between `trainingPausedDate` and the resolve date
-  - If no other `resolve_adverse_event` or `resolve_robot_issue` stubs remain in `incomplete`: clear `trainingPausedDate` on `<homer_id>.json` (patient returns to `active`); if `cumulativePauseDays` > 10, patient transitions to `broken_protocol` instead
+  - Append completed entry to `free.resolve_robot_issue` with `completion_date` (filed_at datetime), `can_resume_from`, `filed_at`, `notes`, `attachment` (if uploaded)
+  - Increment `cumulativePauseDays` on `<homer_id>.json` by `(can_resume_from.date() − trainingPausedDate.date()).days` (exclusive end; minimum 0)
+  - If no `resolve_robot_issue` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain in `incomplete` (i.e. all adverse events also resolved): increment `cumulativePauseDays` by `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol` instead
+  - If `adverse_event_followup` stubs remain in `incomplete`: no change to pause fields (adverse events still blocking)
 - Log message: `Robot issue resolved`
 
 ---
