@@ -961,11 +961,11 @@ function openAdverseEventModal(ev) {
 }
 
 async function saveAdverseEvent() {
-  const date        = document.getElementById('ae-date').value;
-  const description = document.getElementById('ae-description').value.trim();
-  const actionTaken = document.getElementById('ae-action-taken').value.trim();
-  const paused      = document.getElementById('ae-paused').checked;
-  const saveBtn     = document.getElementById('ae-save');
+  const date             = document.getElementById('ae-date').value;
+  const description      = document.getElementById('ae-description').value.trim();
+  const actionTaken      = document.getElementById('ae-action-taken').value.trim();
+  const training_blocked = document.getElementById('ae-paused').checked;
+  const saveBtn          = document.getElementById('ae-save');
 
   if (!date)        { setError('ae-error', 'Event date is required.'); return; }
   if (!description) { setError('ae-error', 'Description is required.'); return; }
@@ -975,7 +975,7 @@ async function saveAdverseEvent() {
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event`,
-    { event_id: _aeEventId, completion_date: date, description, action_taken: actionTaken, paused }
+    { event_id: _aeEventId, completion_date: date, description, action_taken: actionTaken, training_blocked }
   );
   if (!ok) { setError('ae-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -999,33 +999,44 @@ function _riToggleDevice(device) {
   document.getElementById(`ri-${device}-form`).classList.toggle('hidden', !checked);
   if (!checked) {
     document.getElementById(`ri-${device}-notes`).value = '';
-    document.querySelectorAll(`input[name="ri-${device}-outcome"]`).forEach(r => r.checked = false);
+    document.getElementById(`ri-${device}-repair`).checked = false;
   }
 }
 
-function openRobotIssueModal(ev) {
+async function openRobotIssueModal(ev) {
   _riEventId = ev.id;
   const triggerLabel = ev.triggered_by
     ? (_AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type)
     : 'Unknown';
   document.getElementById('ri-context-banner').textContent = `Triggered by: ${triggerLabel}`;
-  document.getElementById('ri-date').value  = '';
-  document.getElementById('ri-paused').checked = false;
+  document.getElementById('ri-date').value = '';
   ['pluto', 'mars'].forEach(d => {
-    document.getElementById(`ri-${d}-on`).checked = false;
+    document.getElementById(`ri-${d}-on`).checked     = false;
     document.getElementById(`ri-${d}-form`).classList.add('hidden');
-    document.getElementById(`ri-${d}-notes`).value = '';
-    document.querySelectorAll(`input[name="ri-${d}-outcome"]`).forEach(r => r.checked = false);
+    document.getElementById(`ri-${d}-notes`).value   = '';
+    document.getElementById(`ri-${d}-repair`).checked = false;
+    document.getElementById(`ri-${d}-current-label`).textContent = '';
   });
   _resetAttachment('ri');
   setError('ri-error', '');
   _attachDateGuard('ri-date', 'ri-error');
   showModal('robot-issue-modal');
+
+  // Fetch current device assignments to show next to each device label
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
+    const { current_pluto, current_mars } = await res.json();
+    for (const [d, cur] of [['pluto', current_pluto], ['mars', current_mars]]) {
+      document.getElementById(`ri-${d}-current-label`).textContent =
+        cur ? `(current: ${cur})` : '(no device assigned)';
+    }
+  } catch (e) {
+    // Non-critical — labels just stay blank
+  }
 }
 
 async function saveRobotIssue() {
   const date    = document.getElementById('ri-date').value;
-  const paused  = document.getElementById('ri-paused').checked;
   const saveBtn = document.getElementById('ri-save');
 
   if (!date) { setError('ri-error', 'Event date is required.'); return; }
@@ -1033,11 +1044,11 @@ async function saveRobotIssue() {
   const faults = [];
   for (const device of ['pluto', 'mars']) {
     if (document.getElementById(`ri-${device}-on`).checked) {
-      const notes   = document.getElementById(`ri-${device}-notes`).value.trim();
-      const outcome = document.querySelector(`input[name="ri-${device}-outcome"]:checked`)?.value;
-      if (!notes)   { setError('ri-error', `${device.charAt(0).toUpperCase() + device.slice(1)} notes are required.`); return; }
-      if (!outcome) { setError('ri-error', `${device.charAt(0).toUpperCase() + device.slice(1)} outcome is required.`); return; }
-      faults.push({ device, notes, outcome });
+      const notes          = document.getElementById(`ri-${device}-notes`).value.trim();
+      const requires_repair = document.getElementById(`ri-${device}-repair`).checked;
+      const capDevice       = device.charAt(0).toUpperCase() + device.slice(1);
+      if (!notes) { setError('ri-error', `${capDevice} notes are required.`); return; }
+      faults.push({ device, notes, requires_repair });
     }
   }
   if (!faults.length) { setError('ri-error', 'At least one affected device must be selected.'); return; }
@@ -1046,7 +1057,7 @@ async function saveRobotIssue() {
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue`,
-    { event_id: _riEventId, completion_date: date, faults, paused }
+    { event_id: _riEventId, completion_date: date, faults }
   );
   if (!ok) { setError('ri-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1061,16 +1072,317 @@ async function saveRobotIssue() {
   await loadPatientEvents();
 }
 
-// ── Resolve Adverse Event modal (placeholder) ─────────────────────────────────
+// ── Adverse Event Follow-up modal ─────────────────────────────────────────────
 
-function openResolveAdverseEventModal(_ev) {
-  showModal('resolve-adverse-event-modal');
+let _aefEventId    = null;
+let _aefAeDetails  = [];   // [{id, date, training_blocked}] for each AE in stub
+
+function openAdverseEventFollowupModal(ev) {
+  _aefEventId   = ev.id;
+  const aeIds   = ev.adverse_event_ids || [];
+
+  // Look up each AE from the complete cache
+  _aefAeDetails = aeIds.map(id => {
+    const ae = (_completeEventsCache || []).find(e => e.id === id);
+    return {
+      id:               id,
+      date:             ae?.completion_date || '',
+      training_blocked: ae?.training_blocked || false,
+    };
+  });
+
+  // Build context banner
+  const banner = document.getElementById('aef-context-banner');
+  banner.innerHTML = _aefAeDetails.length
+    ? _aefAeDetails.map(ae => {
+        const dateStr = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
+        const pauseTag = ae.training_blocked
+          ? ' <span class="text-red-600 font-medium">(training blocked)</span>' : '';
+        return `<div>Adverse Event${dateStr}${pauseTag}</div>`;
+      }).join('')
+    : '<div class="text-slate-400">No adverse events found.</div>';
+
+  // Build per-AE resolution rows
+  const rowsEl = document.getElementById('aef-ae-rows');
+  rowsEl.innerHTML = _aefAeDetails.map((ae, i) => {
+    const dateStr = ae.date ? _fmtDateTime(ae.date) : 'Unknown date';
+    const resumeField = ae.training_blocked
+      ? `<div id="aef-resume-wrap-${i}" class="hidden mt-2">
+           <label class="block text-xs font-medium text-slate-600 mb-1">Can resume from <span class="text-red-400">*</span></label>
+           <input type="date" id="aef-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+         </div>` : '';
+    return `<div class="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+      <div class="text-sm font-medium text-slate-700">Adverse Event — ${dateStr}</div>
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" id="aef-resolved-${i}" onchange="_aefToggleResume(${i})" class="w-4 h-4 rounded border-slate-300">
+        <span class="text-sm text-slate-700">Resolved</span>
+      </label>
+      ${resumeField}
+    </div>`;
+  }).join('');
+
+  document.getElementById('aef-date').value     = '';
+  document.getElementById('aef-duration').value  = '';
+  document.getElementById('aef-notes').value     = '';
+  _resetAttachment('aef');
+  setError('aef-error', '');
+  _attachDateGuard('aef-date', 'aef-error');
+  showModal('adverse-event-followup-modal');
 }
 
-// ── Resolve Robot Issue modal (placeholder) ───────────────────────────────────
+function _aefToggleResume(i) {
+  const wrap = document.getElementById(`aef-resume-wrap-${i}`);
+  if (!wrap) return;
+  const resolved = document.getElementById(`aef-resolved-${i}`).checked;
+  wrap.classList.toggle('hidden', !resolved);
+  if (!resolved) document.getElementById(`aef-resume-${i}`).value = '';
+}
 
-function openResolveRobotIssueModal(_ev) {
+async function saveAdverseEventFollowup() {
+  const date     = document.getElementById('aef-date').value;
+  const durStr   = document.getElementById('aef-duration').value.trim();
+  const notes    = document.getElementById('aef-notes').value.trim();
+  const saveBtn  = document.getElementById('aef-save');
+
+  if (!date)   { setError('aef-error', 'Call date is required.'); return; }
+  if (!durStr) { setError('aef-error', 'Duration is required.'); return; }
+  const duration = parseInt(durStr, 10);
+  if (!duration || duration <= 0) { setError('aef-error', 'Duration must be a positive number.'); return; }
+  if (!notes)  { setError('aef-error', 'Notes are required.'); return; }
+
+  const resolutions = [];
+  for (let i = 0; i < _aefAeDetails.length; i++) {
+    const ae       = _aefAeDetails[i];
+    const resolved = document.getElementById(`aef-resolved-${i}`).checked;
+    let can_resume_from = null;
+    if (resolved && ae.training_blocked) {
+      can_resume_from = document.getElementById(`aef-resume-${i}`)?.value || '';
+      if (!can_resume_from) {
+        setError('aef-error', 'Can resume from date is required for resolved training-blocked events.');
+        return;
+      }
+    }
+    resolutions.push({ adverse_event_id: ae.id, resolved, can_resume_from });
+  }
+
+  if (!_validateAttachment('aef', 'aef-error')) return;
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event-followup`,
+    { event_id: _aefEventId, completion_date: date, duration_minutes: duration, notes, resolutions }
+  );
+  if (!ok) { setError('aef-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('aef');
+  if (file) {
+    const uploaded = await _uploadAttachment(_aefEventId, file, caption, 'aef-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('adverse-event-followup-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
+// ── Resolve Robot Issue modal ─────────────────────────────────────────────────
+
+let _rriEventId = null;
+let _rriDevices = []; // [{device_type, old_device_id, is_faulty, current_device_id, available}]
+
+async function openResolveRobotIssueModal(ev) {
+  _rriEventId = ev.id;
+  _rriDevices = [];
+
+  // Find the triggering robot issue in the completed events cache
+  const triggeredBy = ev.triggered_by;
+  let riEvent = null;
+  if (triggeredBy) {
+    riEvent = (_completeEventsCache || []).find(e => e.id === triggeredBy.id);
+  }
+
+  let bannerText = 'Triggered by: Robot Issue';
+  if (riEvent?.completion_date) bannerText += ` — ${_fmtDateTime(riEvent.completion_date)}`;
+  document.getElementById('rri-context-banner').textContent = bannerText;
+  document.getElementById('rri-resume-date').value = '';
+  document.getElementById('rri-notes').value = '';
+  document.getElementById('rri-device-rows').innerHTML =
+    '<p class="text-sm text-slate-400 italic">Loading device info…</p>';
+  _resetAttachment('rri');
+  setError('rri-error', '');
+
+  document.getElementById('rri-resume-date').onchange = function () {
+    const val = this.value;
+    if (val && val > new Date().toISOString().slice(0, 10)) {
+      setError('rri-error', 'Can resume from date cannot be in the future.');
+      this.value = '';
+    } else {
+      setError('rri-error', '');
+    }
+  };
+
   showModal('resolve-robot-issue-modal');
+
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
+    const devData = await res.json();
+
+    const faults = riEvent?.faults || [];
+    for (const deviceType of ['pluto', 'mars']) {
+      const fault = faults.find(f => f.device === deviceType);
+      const isFaulty = fault?.requires_repair === true;
+      const oldDeviceId = isFaulty
+        ? (fault?.old_device_id || null)
+        : (deviceType === 'pluto' ? devData.current_pluto : devData.current_mars);
+      const currentDeviceId = deviceType === 'pluto' ? devData.current_pluto : devData.current_mars;
+      _rriDevices.push({
+        device_type:       deviceType,
+        old_device_id:     oldDeviceId,
+        is_faulty:         isFaulty,
+        current_device_id: currentDeviceId,
+        available:         devData[deviceType] || [],
+      });
+    }
+    _buildRriDeviceRows();
+  } catch (e) {
+    document.getElementById('rri-device-rows').innerHTML =
+      '<p class="text-sm text-red-500">Failed to load device info.</p>';
+  }
+}
+
+function _buildRriDeviceRows() {
+  const container = document.getElementById('rri-device-rows');
+  container.innerHTML = '';
+
+  for (const dev of _rriDevices) {
+    const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+    const badge = dev.is_faulty
+      ? '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-medium">Faulty — requires repair</span>'
+      : '<span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium">No fault reported</span>';
+
+    const oldLabel = dev.old_device_id
+      ? `<span class="font-mono">${dev.old_device_id}</span>`
+      : '<span class="text-slate-400 italic">None</span>';
+
+    // Build dropdown options
+    let optionsHtml = '';
+    if (dev.is_faulty) {
+      optionsHtml += '<option value="">Select replacement…</option>';
+      for (const d of dev.available) {
+        optionsHtml += `<option value="${d.id}">${d.id}</option>`;
+      }
+      if (dev.old_device_id) {
+        optionsHtml += `<option value="${dev.old_device_id}">${dev.old_device_id} — declare repaired (keep same)</option>`;
+      }
+    } else {
+      if (dev.current_device_id) {
+        optionsHtml += `<option value="${dev.current_device_id}" selected>${dev.current_device_id} — keep current</option>`;
+      }
+      for (const d of dev.available) {
+        optionsHtml += `<option value="${d.id}">${d.id}</option>`;
+      }
+    }
+
+    const swapNotesHtml = (!dev.is_faulty && dev.current_device_id) ? `
+      <div id="rri-${dev.device_type}-swap-row" class="hidden">
+        <label class="block text-xs font-medium text-slate-500 mb-1">Reason for preventive swap <span class="text-red-400">*</span></label>
+        <textarea id="rri-${dev.device_type}-swap-notes" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
+          placeholder="Explain why the non-faulty device is being swapped…"></textarea>
+      </div>` : '';
+
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+    rowDiv.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-semibold text-slate-800">${label}</span>
+        ${badge}
+      </div>
+      <div class="grid grid-cols-2 gap-3 items-end">
+        <div>
+          <p class="text-xs font-medium text-slate-500 mb-1">Current device</p>
+          <p class="text-sm text-slate-700">${oldLabel}</p>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 mb-1">New assignment${dev.is_faulty ? ' <span class="text-red-400">*</span>' : ''}</label>
+          <select id="rri-${dev.device_type}-select"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+            ${optionsHtml}
+          </select>
+        </div>
+      </div>
+      ${swapNotesHtml}
+    `;
+    container.appendChild(rowDiv);
+
+    // Toggle swap notes for non-faulty devices
+    if (!dev.is_faulty && dev.current_device_id) {
+      const sel = document.getElementById(`rri-${dev.device_type}-select`);
+      const swapRow = document.getElementById(`rri-${dev.device_type}-swap-row`);
+      sel.onchange = function () {
+        const isSwap = this.value && this.value !== dev.current_device_id;
+        swapRow.classList.toggle('hidden', !isSwap);
+        if (!isSwap) document.getElementById(`rri-${dev.device_type}-swap-notes`).value = '';
+      };
+    }
+  }
+}
+
+async function saveResolveRobotIssue() {
+  const resumeDate = document.getElementById('rri-resume-date').value;
+  const notes      = document.getElementById('rri-notes').value.trim();
+  const saveBtn    = document.getElementById('rri-save');
+
+  if (!resumeDate) { setError('rri-error', 'Can resume from date is required.'); return; }
+
+  const deviceAssignments = [];
+  for (const dev of _rriDevices) {
+    const sel = document.getElementById(`rri-${dev.device_type}-select`);
+    if (!sel) continue;
+    const newDeviceId = sel.value || null;
+    const capLabel = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+
+    if (dev.is_faulty && !newDeviceId) {
+      setError('rri-error', `New device assignment is required for ${capLabel} (faulty).`);
+      return;
+    }
+
+    let swapNotes = null;
+    if (!dev.is_faulty && dev.current_device_id && newDeviceId !== dev.current_device_id) {
+      swapNotes = (document.getElementById(`rri-${dev.device_type}-swap-notes`)?.value || '').trim();
+      if (!swapNotes) {
+        setError('rri-error', `Reason for preventive ${capLabel} swap is required.`);
+        return;
+      }
+    }
+
+    deviceAssignments.push({
+      device_type:   dev.device_type,
+      old_device_id: dev.old_device_id,
+      new_device_id: newDeviceId,
+      is_faulty:     dev.is_faulty,
+      swap_notes:    swapNotes,
+    });
+  }
+
+  if (!_validateAttachment('rri', 'rri-error')) return;
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/resolve-robot-issue`,
+    { event_id: _rriEventId, can_resume_from: resumeDate, notes, device_assignments: deviceAssignments }
+  );
+  if (!ok) { setError('rri-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('rri');
+  if (file) {
+    const uploaded = await _uploadAttachment(_rriEventId, file, caption, 'rri-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('resolve-robot-issue-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
 }
 
 function completedTimeline(events) {
@@ -1114,7 +1426,7 @@ const EVENT_OPENERS = {
   watch_record:              (ev) => openWatchRecordModal(ev),
   adverse_event:             (ev) => openAdverseEventModal(ev),
   robot_issue:               (ev) => openRobotIssueModal(ev),
-  resolve_adverse_event:     (ev) => openResolveAdverseEventModal(ev),
+  adverse_event_followup:    (ev) => openAdverseEventFollowupModal(ev),
   resolve_robot_issue:       (ev) => openResolveRobotIssueModal(ev),
 };
 

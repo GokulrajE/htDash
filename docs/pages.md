@@ -97,9 +97,9 @@ Patient list for the user's visible site(s).
 | broken_protocol    | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
 | active             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
 | active             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
-| active             | Robot issue — any device not swapped           | `trainingPausedDate` set                                        | paused             |
+| active             | Robot issue visit — device swapped with no replacement available | `trainingPausedDate` set                                   | paused             |
 | active             | Adverse event — `training_blocked` checked     | `trainingPausedDate` set                                        | paused             |
-| paused             | All pause causes resolved (`can_resume_from` set on all; no `resolve_robot_issue` stubs remain) | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active |
+| paused             | All pause causes resolved (`can_resume_from` set on all; no `resolve_robot_issue_visit` stubs remain) | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active |
 | paused             | All pause causes resolved (`cumulativePauseDays` > 10)   | `cumulativePauseDays` incremented                          | broken_protocol    |
 | paused             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
 | paused             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
@@ -549,18 +549,64 @@ Each action is defined once here. Pages above reference which actions apply to t
   - **Context banner** (read-only): "Triggered by: \<triggering event name\>"
   - Event Date (datetime, required; cannot be in the future)
   - **Affected devices** section — at least one device must be checked:
-    - **Pluto** (checkbox): if checked, reveals:
-      - Notes (textarea, required) — describe the fault and what happened
-      - New device ID (dropdown, required) — select replacement device; selecting the **same device ID** means no swap (device sent for repair). Options: available unassigned Pluto devices + current Pluto device (labelled "current — no swap")
-    - **Mars** (checkbox): same fields as Pluto
-  - No explicit "paused" checkbox — pause is **implicit**: if any checked device keeps the same ID (no swap), a `resolve_robot_issue` stub is automatically created and the patient transitions to `paused`. If all checked devices receive a new ID (swap done), no stub is created.
+    - **Pluto** (checkbox): if checked, reveals Notes (textarea, required) — describe the observed fault
+    - **Mars** (checkbox): same as Pluto
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.robot_issue` with `completion_date`, `filed_at`, `faults` (per device: `device`, `notes`, `old_device_id`, `new_device_id`), `triggered_by` (carried from stub), `attachment` (if uploaded)
-  - Update device assignments: for each affected device where `new_device_id ≠ old_device_id`, close the old assignment and open a new one; where `new_device_id == old_device_id`, assignment is unchanged (device is being repaired)
-  - If any device has `new_device_id == old_device_id` (no swap): set `trainingPausedDate` on `<homer_id>.json`; append a single `resolve_robot_issue` stub to `incomplete` with `triggered_by: {type: "robot_issue", id: <event_id>}`, `scheduled_date: [now, now]`
-- Log message: `Robot issue recorded`; if paused: also `Training paused — robot issue`
+  - Append completed entry to `free.robot_issue` with `completion_date`, `filed_at`, `faults` (per device: `device`, `notes`), `triggered_by` (carried from stub), `attachment` (if uploaded)
+  - Auto-create a `robot_issue_call` stub in `incomplete` with `triggered_by: {type: "robot_issue", id: <event_id>}`, `scheduled_date: [now, now]`
+- Log message: `Robot issue recorded`
+
+---
+
+### Robot Issue — Engineer Call (`robot_issue_call`)
+- Trigger: `robot_issue_call` event row on patient detail — only appears when a stub exists in `incomplete` (auto-created when a `robot_issue` is completed)
+- Allowed users: `admin`, `engineer`
+- Experimental patients only
+- Modal: `robot-issue-call-modal`
+  - **Context banner** (read-only): "Robot issue filed on \<date\> — \<devices affected\>"
+  - Call Date/Time (datetime, required; cannot be in the future)
+  - Notes (textarea, required) — what was discussed and what was decided
+  - **Outcome** (radio, required): Resolved by call / Visit required
+  - Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - Append completed entry to `free.robot_issue_call` with `completion_date`, `filed_at`, `notes`, `outcome`, `triggered_by`, `attachment`
+  - If `outcome = "visit_required"`: create a `robot_issue_visit` stub in `incomplete` with `triggered_by: {type: "robot_issue_call", id: <event_id>}`, `scheduled_date: [now, now]`
+- Log message: `Robot issue call recorded`; if visit required: also `Robot issue visit required`
+
+---
+
+### Robot Issue — Engineer Visit (`robot_issue_visit`)
+- Trigger: `robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue call outcome is "visit required")
+- Allowed users: `admin`, `engineer`
+- Experimental patients only
+- Modal: `robot-issue-visit-modal`
+  - **Context banner** (read-only): "Robot issue call on \<date\> — \<devices affected\>"
+  - Visit Date/Time (datetime, required; cannot be in the future)
+  - **Per affected device** (one section per device reported in the original robot issue):
+    - Device name and current device ID (read-only labels)
+    - **Outcome** (radio, required):
+      - **Repaired on site** — device fixed during the visit; stays assigned; no inventory change:
+        - Fault description (textarea, required) — what was wrong
+        - Repair description (textarea, required) — what was done to fix it
+      - **Swapped** — device replaced on site:
+        - New device (dropdown): available working devices + null ("No device available")
+        - Notes (textarea, required) — reason for swap; compulsory even when a replacement is available
+      - **Neither** — usage issue, no device fault:
+        - Notes (textarea, required) — explain the usage issue and what was done
+  - Additional notes (textarea, optional)
+  - Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - For each device:
+    - If **Repaired on site**: no assignment change, device not marked faulty; create a completed `robot_fault_report` entry in `devices/fault_reports/<type>.json` with `resolution` filled in immediately
+    - If **Swapped + new device selected**: close current assignment; mark old device faulty in inventory; open new assignment for new device; create an open `robot_fault_report` entry (`resolution: null`)
+    - If **Swapped + null** (no replacement available): close current assignment; mark old device faulty; no new assignment; set `trainingPausedDate`; create `resolve_robot_issue_visit` stub in `incomplete`; create an open `robot_fault_report` entry (`resolution: null`)
+    - If **Neither**: no device change, no pause, no fault report
+  - Append completed entry to `free.robot_issue_visit` with `completion_date`, `filed_at`, `device_outcomes` (per device: `device`, `outcome`, `old_device_id`, `new_device_id`, `notes`), `notes`, `triggered_by`, `attachment`
+- Log message: `Robot issue visit recorded`; if any device taken back with no replacement: also `Training paused — robot issue`
 
 ---
 
@@ -582,28 +628,32 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Append completed entry to `free.adverse_event_followup` with `completion_date`, `filed_at`, `duration_minutes`, `notes`, `resolutions` (per-AE resolved + `can_resume_from`), `attachment` (if uploaded)
   - For each AE marked resolved with `training_blocked: true`: note its `can_resume_from`
   - If any AEs remain unresolved: seed next stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
-  - If all AEs resolved and no `resolve_robot_issue` stubs remain in `incomplete`: increment `cumulativePauseDays` by `(max(can_resume_from across all pausing AEs) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
-  - If all AEs resolved but `resolve_robot_issue` stubs still remain: no change to pause fields (robot issue still blocking)
+  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: increment `cumulativePauseDays` by `(max(can_resume_from across all pausing AEs) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
+  - If all AEs resolved but `resolve_robot_issue_visit` stubs still remain: no change to pause fields (robot issue still blocking)
 - Log message: `Adverse event follow-up call recorded`; if all resolved: also `Adverse event(s) resolved`
 
 ---
 
-### Resolve Robot Issue (`resolve_robot_issue`)
-- Trigger: `resolve_robot_issue` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue is filed with at least one device not swapped)
+### Resolve Robot Issue — Replacement Visit (`resolve_robot_issue_visit`)
+- Trigger: `resolve_robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue visit has any device swapped with no replacement available)
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
-- Modal: `resolve-robot-issue-modal`
-  - **Context banner** (read-only): "Triggered by: Robot Issue on \<date\>"
-  - **Can resume from** (date, required; cannot be in the future) — the earliest date training is possible again from this issue's perspective. If the repair was completed and training happened the same day, enter that day; pause days will be zero.
+- Modal: `resolve-robot-issue-visit-modal`
+  - **Context banner** (read-only): "Robot issue visit on \<date\> — device(s) taken back without replacement"
+  - Visit Date/Time (datetime, required; cannot be in the future)
+  - **Per device taken back** (one row per device that was taken back without replacement in `robot_issue_visit`):
+    - Old device ID (read-only): the faulty device taken back
+    - New device (dropdown): available working devices + null ("No device available"); compulsory notes if null selected
+  - **Can resume from** (date, required; cannot be in the future) — the earliest date training is possible again
   - Notes (textarea, optional)
   - Attachment (optional PDF)
 - Server actions:
-  - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.resolve_robot_issue` with `completion_date` (filed_at datetime), `can_resume_from`, `filed_at`, `notes`, `attachment` (if uploaded)
-  - Increment `cumulativePauseDays` on `<homer_id>.json` by `(can_resume_from.date() − trainingPausedDate.date()).days` (exclusive end; minimum 0)
-  - If no `resolve_robot_issue` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain in `incomplete` (i.e. all adverse events also resolved): increment `cumulativePauseDays` by `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol` instead
+  - Remove the stub from `incomplete`
+  - For each taken-back device: open new assignment if a device was selected; if null again, create another `resolve_robot_issue_visit` stub
+  - Append completed entry to `free.resolve_robot_issue_visit` with `completion_date`, `filed_at`, `can_resume_from`, `device_assignments` (per device: `device`, `old_device_id`, `new_device_id`, `notes`), `notes`, `attachment`
+  - If no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain in `incomplete`: compute `cumulativePauseDays` as `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (minimum 0); add to existing `cumulativePauseDays`; clear `trainingPausedDate`; if total > 10, patient transitions to `broken_protocol`
   - If `adverse_event_followup` stubs remain in `incomplete`: no change to pause fields (adverse events still blocking)
-- Log message: `Robot issue resolved`
+- Log message: `Robot issue resolved — replacement device assigned`
 
 ---
 
@@ -645,7 +695,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ### Device Repair (Devices page — not yet implemented)
 
-**Context:** When a robot issue causes a training pause but the patient completes training (day 29) before the `resolve_robot_issue` stub is filled, the stub is auto-discarded (robot is returned on day 29). However, the device may still be physically faulty — it has not been repaired and cannot be safely assigned to a new patient.
+**Context:** When a robot issue causes a training pause but the patient completes training (day 29) before the `resolve_robot_issue_visit` stub is filled, the stub is auto-discarded (robot is returned on day 29). However, the device may still be physically faulty — it has not been repaired and cannot be safely assigned to a new patient.
 
 **Required feature:** A **"Repair Device"** action in the Devices page, available to `engineer` and `admin`, that:
 - Lists Pluto/Mars devices flagged as faulty (i.e. their last robot issue was not formally resolved before training completion)

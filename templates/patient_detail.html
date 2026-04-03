@@ -1018,69 +1018,38 @@
           <div>
             <label class="flex items-center gap-2 cursor-pointer select-none">
               <input type="checkbox" id="ri-pluto-on" onchange="_riToggleDevice('pluto')" class="w-4 h-4 rounded border-slate-300">
-              <span class="text-sm font-medium text-slate-700">Pluto</span>
+              <span class="text-sm font-medium text-slate-700">Pluto <span id="ri-pluto-current-label" class="font-normal text-slate-400 text-xs"></span></span>
             </label>
             <div id="ri-pluto-form" class="hidden mt-2 ml-6 space-y-2 p-3 bg-orange-50 rounded-xl border border-orange-100">
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
                 <textarea id="ri-pluto-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none" placeholder="Describe the fault and what happened…"></textarea>
               </div>
-              <div>
-                <p class="text-xs font-medium text-slate-600 mb-1">Outcome <span class="text-red-400">*</span></p>
-                <div class="space-y-1">
-                  <label class="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="radio" name="ri-pluto-outcome" value="resolved_same_day" class="w-4 h-4 border-slate-300 text-orange-500">
-                    <span class="text-sm text-slate-700">Resolved same day</span>
-                  </label>
-                  <label class="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="radio" name="ri-pluto-outcome" value="device_swap" class="w-4 h-4 border-slate-300 text-orange-500">
-                    <span class="text-sm text-slate-700">Device swap</span>
-                  </label>
-                  <label class="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="radio" name="ri-pluto-outcome" value="swap_not_possible" class="w-4 h-4 border-slate-300 text-orange-500">
-                    <span class="text-sm text-slate-700">Swap not possible</span>
-                  </label>
-                </div>
-              </div>
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" id="ri-pluto-repair" class="w-4 h-4 rounded border-slate-300">
+                <span class="text-sm text-slate-700">Requires repair <span class="text-slate-400 font-normal">(device will be taken away — training paused)</span></span>
+              </label>
             </div>
           </div>
           <!-- Mars -->
           <div>
             <label class="flex items-center gap-2 cursor-pointer select-none">
               <input type="checkbox" id="ri-mars-on" onchange="_riToggleDevice('mars')" class="w-4 h-4 rounded border-slate-300">
-              <span class="text-sm font-medium text-slate-700">Mars</span>
+              <span class="text-sm font-medium text-slate-700">Mars <span id="ri-mars-current-label" class="font-normal text-slate-400 text-xs"></span></span>
             </label>
             <div id="ri-mars-form" class="hidden mt-2 ml-6 space-y-2 p-3 bg-orange-50 rounded-xl border border-orange-100">
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
                 <textarea id="ri-mars-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none" placeholder="Describe the fault and what happened…"></textarea>
               </div>
-              <div>
-                <p class="text-xs font-medium text-slate-600 mb-1">Outcome <span class="text-red-400">*</span></p>
-                <div class="space-y-1">
-                  <label class="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="radio" name="ri-mars-outcome" value="resolved_same_day" class="w-4 h-4 border-slate-300 text-orange-500">
-                    <span class="text-sm text-slate-700">Resolved same day</span>
-                  </label>
-                  <label class="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="radio" name="ri-mars-outcome" value="device_swap" class="w-4 h-4 border-slate-300 text-orange-500">
-                    <span class="text-sm text-slate-700">Device swap</span>
-                  </label>
-                  <label class="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="radio" name="ri-mars-outcome" value="swap_not_possible" class="w-4 h-4 border-slate-300 text-orange-500">
-                    <span class="text-sm text-slate-700">Swap not possible</span>
-                  </label>
-                </div>
-              </div>
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" id="ri-mars-repair" class="w-4 h-4 rounded border-slate-300">
+                <span class="text-sm text-slate-700">Requires repair <span class="text-slate-400 font-normal">(device will be taken away — training paused)</span></span>
+              </label>
             </div>
           </div>
         </div>
       </div>
-
-      <label class="flex items-center gap-2 cursor-pointer select-none">
-        <input type="checkbox" id="ri-paused" class="w-4 h-4 rounded border-slate-300">
-        <span class="text-sm text-slate-700">Training paused as a result</span>
-      </label>
       {{ attachment_section('ri') }}
     </div>
     <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
@@ -1093,19 +1062,40 @@
   </div>
 </div>
 
-<!-- ── Resolve Adverse Event modal ─────────────────────────────────────────── -->
-<div id="resolve-adverse-event-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
-  <div class="bg-white rounded-2xl shadow-xl max-w-md w-full flex flex-col" style="max-height:90vh">
+<!-- ── Adverse Event Follow-up modal ────────────────────────────────────────── -->
+<div id="adverse-event-followup-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Resolve Adverse Event</h3>
-      <button onclick="hideModal('resolve-adverse-event-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+      <h3 class="text-xl font-bold text-slate-800">Adverse Event Follow-up</h3>
+      <button onclick="hideModal('adverse-event-followup-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
-      <p class="text-sm text-slate-500">This modal is not yet implemented.</p>
+      <!-- Context banner: lists AEs covered -->
+      <div id="aef-context-banner" class="px-4 py-2 rounded-xl text-sm bg-slate-50 text-slate-600 border border-slate-200 space-y-1"></div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Call Date/Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="aef-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Duration (minutes) <span class="text-red-500">*</span></label>
+        <input type="number" id="aef-duration" min="1" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" placeholder="e.g. 15">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-red-500">*</span></label>
+        <textarea id="aef-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Notes from the follow-up call…"></textarea>
+      </div>
+      <!-- Per-AE resolution rows (populated dynamically) -->
+      <div>
+        <p class="text-sm font-medium text-slate-700 mb-2">Adverse event resolutions <span class="text-red-500">*</span></p>
+        <div id="aef-ae-rows" class="space-y-3"></div>
+      </div>
+      {{ attachment_section('aef') }}
     </div>
-    <div class="px-6 py-4 shrink-0">
+    <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
+      <p id="aef-error" class="text-sm text-red-500 hidden mb-3"></p>
       <div class="flex gap-3">
-        <button type="button" onclick="hideModal('resolve-adverse-event-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button type="button" onclick="hideModal('adverse-event-followup-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button id="aef-save" type="button" onclick="saveAdverseEventFollowup()" class="flex-1 px-4 py-3 bg-red-600 text-white rounded-xl font-medium hover:bg-red-700">Save</button>
       </div>
     </div>
   </div>
@@ -1113,17 +1103,31 @@
 
 <!-- ── Resolve Robot Issue modal ────────────────────────────────────────────── -->
 <div id="resolve-robot-issue-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
-  <div class="bg-white rounded-2xl shadow-xl max-w-md w-full flex flex-col" style="max-height:90vh">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
       <h3 class="text-xl font-bold text-slate-800">Resolve Robot Issue</h3>
       <button onclick="hideModal('resolve-robot-issue-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
-      <p class="text-sm text-slate-500">This modal is not yet implemented.</p>
+      <div id="rri-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
+      <!-- Per-device rows populated by JS -->
+      <div id="rri-device-rows" class="space-y-3"></div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Can resume from <span class="text-red-500">*</span></label>
+        <p class="text-xs text-slate-500 mb-1">Earliest date training can resume after repair.</p>
+        <input type="date" id="rri-resume-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <textarea id="rri-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Notes about how the issue was resolved…"></textarea>
+      </div>
+      {{ attachment_section('rri') }}
     </div>
-    <div class="px-6 py-4 shrink-0">
+    <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
+      <p id="rri-error" class="text-sm text-red-500 hidden mb-3"></p>
       <div class="flex gap-3">
         <button type="button" onclick="hideModal('resolve-robot-issue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button id="rri-save" type="button" onclick="saveResolveRobotIssue()" class="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700">Save</button>
       </div>
     </div>
   </div>

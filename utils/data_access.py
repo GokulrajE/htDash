@@ -339,7 +339,7 @@ def write_device_assignments(hospital_folder: str, device_type: str, assignments
 
 
 def get_available_devices(hospital_folder: str, device_type: str) -> list:
-    """Return active, non-clinic, non-lost, unassigned devices for a given type."""
+    """Return active, non-clinic, non-lost, non-faulty, unassigned devices for a given type."""
     inventory = read_device_inventory(hospital_folder, device_type)
     assignments = read_device_assignments(hospital_folder, device_type)
     assigned_ids = {a['device_id'] for a in assignments if a.get('returned_date') is None}
@@ -348,8 +348,45 @@ def get_available_devices(hospital_folder: str, device_type: str) -> list:
         if d.get('removal_date') is None
         and d.get('lost_date') is None
         and not d.get('clinic_only', False)
+        and not d.get('faulty', False)
         and d['id'] not in assigned_ids
     ]
+
+
+def mark_device_faulty(hospital_folder: str, device_type: str, device_id: str) -> None:
+    """Set faulty: true on a device inventory entry."""
+    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        for d in data.get('devices', []):
+            if d['id'] == device_id:
+                d['faulty'] = True
+                break
+        tmp = path.with_suffix('.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f'Warning: could not mark device faulty: {e}')
+
+
+def mark_device_not_faulty(hospital_folder: str, device_type: str, device_id: str) -> None:
+    """Clear faulty flag on a device inventory entry (device declared repaired)."""
+    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        for d in data.get('devices', []):
+            if d['id'] == device_id:
+                d.pop('faulty', None)
+                break
+        tmp = path.with_suffix('.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f'Warning: could not clear device faulty flag: {e}')
 
 
 def mark_device_lost(hospital_folder: str, device_type: str,

@@ -23,6 +23,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import json
+
 from utils.data_access import (
     get_patients_path,
     write_patient_meta,
@@ -68,6 +70,34 @@ def clear_all_device_assignments() -> None:
 
 def _devices_log_dir() -> Path:
     return PROJECT_ROOT / 'data' / HOSPITAL / 'devices' / 'logs'
+
+
+def _inventory_dir() -> Path:
+    return PROJECT_ROOT / 'data' / HOSPITAL / 'devices' / 'inventory'
+
+
+def clean_device_inventory() -> None:
+    """Remove faulty flags and lost_date from all devices in all inventory files."""
+    inv_dir = _inventory_dir()
+    if not inv_dir.exists():
+        return
+    for inv_path in sorted(inv_dir.glob('*.json')):
+        with open(inv_path, encoding='utf-8') as f:
+            data = json.load(f)
+        changed = 0
+        for d in data.get('devices', []):
+            if d.get('faulty', False):
+                d['faulty'] = False
+                changed += 1
+            if 'lost_date' in d:
+                del d['lost_date']
+                changed += 1
+        if changed:
+            tmp = inv_path.with_suffix('.tmp')
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            tmp.replace(inv_path)
+            print(f"  Cleaned {changed} field(s) from {inv_path.name}")
 
 
 def clear_all_device_logs() -> None:
@@ -130,9 +160,10 @@ if __name__ == '__main__':
 
     dates = [parse_date(a) for a in args]
 
-    print("Clearing device assignments and logs…")
+    print("Clearing device assignments, logs, and inventory flags…")
     clear_all_device_assignments()
     clear_all_device_logs()
+    clean_device_inventory()
 
     print("\nCreating patients…")
     for defn, date in zip(PATIENTS, dates):
