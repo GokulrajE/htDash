@@ -7,6 +7,7 @@ from utils.data_access import (
     get_available_devices, read_device_inventory, read_device_assignments,
     write_device_assignments, write_device_log, mark_device_lost,
     mark_device_faulty, mark_device_not_faulty,
+    read_fault_reports, write_fault_reports,
 )
 from utils.protocol_events import (
     create_protocol_events, populate_activation_dates,
@@ -211,9 +212,11 @@ def api_patient_events(homer_id):
     # Free events are already "complete" — include them so they appear in the
     # timeline and completed-events count.
     _FREE_EVENT_NAMES = {
-        'patient_call':  'Patient Call',
-        'adverse_event': 'Adverse Event',
-        'robot_issue':   'Robot Issue',
+        'patient_call':             'Patient Call',
+        'adverse_event':            'Adverse Event',
+        'robot_issue_call':         'Robot Issue — Engineer Call',
+        'robot_issue_visit':        'Robot Issue — Engineer Visit',
+        'resolve_robot_issue_visit': 'Robot Issue — Replacement Visit',
     }
     for free_type, free_name in _FREE_EVENT_NAMES.items():
         for entry in events_data.get('free', {}).get(free_type, []):
@@ -574,9 +577,9 @@ def api_activate_patient(homer_id):
         t = item.get('type')
         if t == 'adverse_event':
             pass
-        elif t == 'robot_issue':
+        elif t == 'robot_issue_call':
             if not is_experimental:
-                return jsonify({'error': 'Robot issue is only valid for experimental patients.'}), 400
+                return jsonify({'error': 'Robot issue call is only valid for experimental patients.'}), 400
         elif t == 'watch_record':
             pass
         else:
@@ -657,16 +660,16 @@ def api_activate_patient(homer_id):
                         'filed_at':         filed_at,
                     })
                     triggered_refs.append({'type': 'adverse_event', 'id': new_id})
-                elif t == 'robot_issue':
+                elif t == 'robot_issue_call':
                     new_id = str(uuid.uuid4())
                     ev_data.setdefault('incomplete', []).append({
                         'id':               new_id,
-                        'protocol_event_id': 'robot_issue',
+                        'protocol_event_id': 'robot_issue_call',
                         'triggered_by':     {'type': 'activation', 'id': activation_entry_id},
                         'scheduled_date':   [now_hhmm, now_hhmm],
                         'filed_at':         filed_at,
                     })
-                    triggered_refs.append({'type': 'robot_issue', 'id': new_id})
+                    triggered_refs.append({'type': 'robot_issue_call', 'id': new_id})
                 elif t == 'watch_record':
                     # Stamp triggered_by and scheduled_date onto the existing open chain entry
                     if wr:
@@ -903,7 +906,7 @@ def api_complete_simple_event(homer_id):
         patient = read_patient_meta(folder, homer_id)
         if patient:
             patient['trainingCompletionDate'] = completion_date
-            # If patient was paused, clear the pause and discard resolve_robot_issue stubs
+            # If patient was paused, clear the pause and discard resolve_robot_issue_visit stubs
             # (robot is returned on d29; adverse event resolve stubs persist)
             if patient.get('trainingPausedDate'):
                 patient['trainingPausedDate'] = None
@@ -911,7 +914,7 @@ def api_complete_simple_event(homer_id):
                 if ev_data:
                     ev_data['incomplete'] = [
                         e for e in ev_data.get('incomplete', [])
-                        if e.get('protocol_event_id') != 'resolve_robot_issue'
+                        if e.get('protocol_event_id') != 'resolve_robot_issue_visit'
                     ]
                     write_protocol_events(folder, homer_id, ev_data)
                 write_patient_log(folder, homer_id, loginid, session_id,
@@ -970,9 +973,9 @@ def api_complete_home_visit(homer_id):
         t = item.get('type')
         if t == 'adverse_event':
             pass
-        elif t == 'robot_issue':
+        elif t == 'robot_issue_call':
             if not is_experimental:
-                return jsonify({'error': 'Robot issue is only valid for experimental patients.'}), 400
+                return jsonify({'error': 'Robot issue call is only valid for experimental patients.'}), 400
         elif t == 'watch_record':
             pass
         else:
@@ -1010,16 +1013,16 @@ def api_complete_home_visit(homer_id):
                 'filed_at':         filed_at,
             })
             triggered_refs.append({'type': 'adverse_event', 'id': new_id})
-        elif t == 'robot_issue':
+        elif t == 'robot_issue_call':
             new_id = str(uuid.uuid4())
             events_data.setdefault('incomplete', []).append({
                 'id':               new_id,
-                'protocol_event_id': 'robot_issue',
+                'protocol_event_id': 'robot_issue_call',
                 'triggered_by':     {'type': protocol_event_id, 'id': entry_id},
                 'scheduled_date':   [now_hhmm, now_hhmm],
                 'filed_at':         filed_at,
             })
-            triggered_refs.append({'type': 'robot_issue', 'id': new_id})
+            triggered_refs.append({'type': 'robot_issue_call', 'id': new_id})
         elif t == 'watch_record':
             wr = next(
                 (e for e in events_data.get('incomplete', [])
@@ -1257,7 +1260,7 @@ def api_complete_adverse_event_followup(homer_id):
         patient_meta = read_patient_meta(folder, homer_id)
         resolve_ri_stubs = [
             e for e in events_data.get('incomplete', [])
-            if e.get('protocol_event_id') == 'resolve_robot_issue'
+            if e.get('protocol_event_id') == 'resolve_robot_issue_visit'
         ]
         if patient_meta and patient_meta.get('trainingPausedDate') and not resolve_ri_stubs:
             # Compute cumulativePauseDays from max can_resume_from across all pausing AEs
@@ -1289,9 +1292,11 @@ def api_complete_adverse_event_followup(homer_id):
     return jsonify({'ok': True})
 
 
-@bp.route('/api/patients/<homer_id>/complete-event/robot-issue', methods=['POST'])
-def api_complete_robot_issue(homer_id):
-    """Complete a robot issue stub: moves it from incomplete to free.robot_issue."""
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/robot-issue-call', methods=['POST'])
+def api_complete_robot_issue_call(homer_id):
+    """Complete a robot_issue_call stub; if any device needs a visit, create robot_issue_visit stub."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     if flask_session.get('privilege') not in ('admin', 'engineer'):
@@ -1304,36 +1309,32 @@ def api_complete_robot_issue(homer_id):
     body            = request.get_json() or {}
     event_id        = body.get('event_id')
     completion_date = (body.get('completion_date') or '').strip()
-    faults          = body.get('faults', [])
-
-    if not isinstance(faults, list):
-        faults = []
+    notes           = (body.get('notes') or '').strip() or None
+    devices         = body.get('devices', [])  # [{device, outcome, notes}]
 
     if not event_id:
         return jsonify({'error': 'event_id is required.'}), 400
     if not completion_date:
-        return jsonify({'error': 'Event date is required.'}), 400
+        return jsonify({'error': 'Call date is required.'}), 400
     try:
         if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
-            return jsonify({'error': 'Event date cannot be in the future.'}), 400
+            return jsonify({'error': 'Call date cannot be in the future.'}), 400
     except ValueError:
         return jsonify({'error': 'Invalid date format.'}), 400
-    if not faults:
-        return jsonify({'error': 'At least one affected device is required.'}), 400
+    if not isinstance(devices, list):
+        return jsonify({'error': 'devices must be a list.'}), 400
+    valid_outcomes = ('resolved', 'visit_required')
+    for d in devices:
+        if d.get('device') not in ('pluto', 'mars'):
+            return jsonify({'error': 'device must be pluto or mars.'}), 400
+        if d.get('outcome') not in valid_outcomes:
+            return jsonify({'error': 'device outcome must be resolved or visit_required.'}), 400
+    if not devices and not notes:
+        return jsonify({'error': 'Notes are required when no device is selected.'}), 400
 
-    valid_devices = {'pluto', 'mars'}
-    for fault in faults:
-        if fault.get('device') not in valid_devices:
-            return jsonify({'error': f'Invalid device: {fault.get("device")}.'}), 400
-        if not (fault.get('notes') or '').strip():
-            return jsonify({'error': f'{fault.get("device", "device").capitalize()} notes are required.'}), 400
-        if 'requires_repair' not in fault:
-            return jsonify({'error': f'requires_repair is required for {fault.get("device")}.'}), 400
-
-    # Verify patient is experimental
     patient_meta = read_patient_meta(folder, homer_id)
     if not patient_meta or patient_meta.get('group') != 'experimental':
-        return jsonify({'error': 'Robot issue is only valid for experimental patients.'}), 400
+        return jsonify({'error': 'Robot issue call is only valid for experimental patients.'}), 400
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
@@ -1342,80 +1343,49 @@ def api_complete_robot_issue(homer_id):
     incomplete = events_data.get('incomplete', [])
     entry = next(
         (e for e in incomplete
-         if e.get('protocol_event_id') == 'robot_issue' and e.get('id') == event_id),
+         if e.get('protocol_event_id') == 'robot_issue_call' and e.get('id') == event_id),
         None
     )
     if not entry:
-        return jsonify({'error': 'Robot issue stub not found.'}), 404
+        return jsonify({'error': 'Robot issue call stub not found.'}), 404
+
+    visit_required = any(d.get('outcome') == 'visit_required' for d in devices)
 
     filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    processed_faults = []
-    any_repair = False
-
-    for fault in faults:
-        device_type    = fault['device']
-        requires_repair = bool(fault['requires_repair'])
-
-        # Derive old_device_id from current open assignment
-        assignments = read_device_assignments(folder, device_type)
-        current = next((a for a in assignments if a.get('returned_date') is None), None)
-        old_device_id = current['device_id'] if current else None
-
-        if requires_repair and old_device_id:
-            # Mark device faulty and close assignment
-            mark_device_faulty(folder, device_type, old_device_id)
-            for a in assignments:
-                if a.get('returned_date') is None:
-                    a['returned_date'] = now_hhmm
-            write_device_assignments(folder, device_type, assignments)
-            write_device_log(folder, old_device_id, loginid, session_id,
-                             f'Returned (requires repair) from {homer_id}')
-            any_repair = True
-
-        processed_faults.append({
-            'device':          device_type,
-            'notes':           fault['notes'].strip(),
-            'requires_repair': requires_repair,
-            'old_device_id':   old_device_id,
-        })
-
     complete_entry = {
         **entry,
         'completion_date': completion_date,
         'filed_at':        filed_at,
-        'faults':          processed_faults,
+        'notes':           notes,
+        'devices':         devices,
+        'visit_required':  visit_required,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
-    events_data.setdefault('free', {}).setdefault('robot_issue', []).append(complete_entry)
+    events_data.setdefault('free', {}).setdefault('robot_issue_call', []).append(complete_entry)
 
-    if any_repair:
-        if not patient_meta.get('trainingPausedDate'):
-            patient_meta['trainingPausedDate'] = completion_date
-            write_patient_meta(folder, homer_id, patient_meta)
+    if visit_required:
         events_data.setdefault('incomplete', []).append({
             'id':                str(uuid.uuid4()),
-            'protocol_event_id': 'resolve_robot_issue',
-            'triggered_by':      {'type': 'robot_issue', 'id': event_id},
+            'protocol_event_id': 'robot_issue_visit',
+            'triggered_by':      {'type': 'robot_issue_call', 'id': event_id},
             'scheduled_date':    [now_hhmm, now_hhmm],
             'filed_at':          filed_at,
         })
-        write_patient_log(folder, homer_id, loginid, session_id, 'Training paused — robot issue')
+        write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue visit required.')
 
-    from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
-
-    write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue recorded.')
+    write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue call recorded.')
 
     return jsonify({'ok': True})
 
 
-@bp.route('/api/patients/<homer_id>/complete-event/resolve-robot-issue', methods=['POST'])
-def api_complete_resolve_robot_issue(homer_id):
-    """Complete a resolve_robot_issue stub: assigns replacement devices, clears faulty flags, and resumes training."""
+@bp.route('/api/patients/<homer_id>/complete-event/robot-issue-visit', methods=['POST'])
+def api_complete_robot_issue_visit(homer_id):
+    """Complete a robot_issue_visit stub: per-device outcomes, fault reports, optional pause."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     if flask_session.get('privilege') not in ('admin', 'engineer'):
@@ -1425,36 +1395,48 @@ def api_complete_resolve_robot_issue(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    body             = request.get_json() or {}
-    event_id         = body.get('event_id')
-    can_resume_from  = (body.get('can_resume_from') or '').strip()
-    notes            = (body.get('notes') or '').strip()
-    device_assignments = body.get('device_assignments', [])
+    body            = request.get_json() or {}
+    event_id        = body.get('event_id')
+    completion_date = (body.get('completion_date') or '').strip()
+    notes           = (body.get('notes') or '').strip()
+    device_outcomes = body.get('device_outcomes', [])
 
     if not event_id:
         return jsonify({'error': 'event_id is required.'}), 400
-    if not can_resume_from:
-        return jsonify({'error': 'Can resume from date is required.'}), 400
+    if not completion_date:
+        return jsonify({'error': 'Visit date is required.'}), 400
     try:
-        resume_date = date.fromisoformat(can_resume_from)
-        if resume_date > date.today():
-            return jsonify({'error': 'Can resume from date cannot be in the future.'}), 400
+        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Visit date cannot be in the future.'}), 400
     except ValueError:
         return jsonify({'error': 'Invalid date format.'}), 400
+    if not isinstance(device_outcomes, list) or not device_outcomes:
+        return jsonify({'error': 'At least one device outcome is required.'}), 400
 
-    # Validate device assignments
-    valid_devices = {'pluto', 'mars'}
-    for da in device_assignments:
-        if da.get('device_type') not in valid_devices:
-            return jsonify({'error': f'Invalid device type: {da.get("device_type")}.'}), 400
-        if da.get('is_faulty') and not da.get('new_device_id'):
-            dtype = da.get('device_type', 'device').capitalize()
-            return jsonify({'error': f'New device assignment is required for {dtype} (faulty).'}), 400
-        # Preventive swap requires swap_notes
-        if not da.get('is_faulty') and da.get('new_device_id') and da.get('new_device_id') != da.get('old_device_id'):
-            if not (da.get('swap_notes') or '').strip():
-                dtype = da.get('device_type', 'device').capitalize()
-                return jsonify({'error': f'Reason for preventive {dtype} swap is required.'}), 400
+    valid_devices  = {'pluto', 'mars'}
+    valid_outcomes = {'repaired_on_site', 'swapped', 'neither'}
+    for do in device_outcomes:
+        dev = do.get('device')
+        out = do.get('outcome')
+        if dev not in valid_devices:
+            return jsonify({'error': f'Invalid device: {dev}.'}), 400
+        if out not in valid_outcomes:
+            return jsonify({'error': f'Invalid outcome for {dev}: {out}.'}), 400
+        if out == 'repaired_on_site':
+            if not (do.get('fault_description') or '').strip():
+                return jsonify({'error': f'{dev.capitalize()} fault description is required.'}), 400
+            if not (do.get('repair_description') or '').strip():
+                return jsonify({'error': f'{dev.capitalize()} repair description is required.'}), 400
+        elif out == 'swapped':
+            if not (do.get('notes') or '').strip():
+                return jsonify({'error': f'{dev.capitalize()} swap notes are required.'}), 400
+        elif out == 'neither':
+            if not (do.get('notes') or '').strip():
+                return jsonify({'error': f'{dev.capitalize()} notes are required.'}), 400
+
+    patient_meta = read_patient_meta(folder, homer_id)
+    if not patient_meta or patient_meta.get('group') != 'experimental':
+        return jsonify({'error': 'Robot issue visit is only valid for experimental patients.'}), 400
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
@@ -1463,56 +1445,85 @@ def api_complete_resolve_robot_issue(homer_id):
     incomplete = events_data.get('incomplete', [])
     entry = next(
         (e for e in incomplete
-         if e.get('protocol_event_id') == 'resolve_robot_issue' and e.get('id') == event_id),
+         if e.get('protocol_event_id') == 'robot_issue_visit' and e.get('id') == event_id),
         None
     )
     if not entry:
-        return jsonify({'error': 'Resolve robot issue stub not found.'}), 404
+        return jsonify({'error': 'Robot issue visit stub not found.'}), 404
 
     filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    saved_assignments = []
-    for da in device_assignments:
-        device_type    = da['device_type']
-        old_device_id  = da.get('old_device_id')
-        new_device_id  = da.get('new_device_id')
-        is_faulty      = bool(da.get('is_faulty'))
-        swap_notes     = (da.get('swap_notes') or '').strip() or None
+    saved_outcomes  = []
+    any_taken_back  = False
+
+    for do in device_outcomes:
+        device_type = do['device']
+        outcome     = do['outcome']
 
         assignments = read_device_assignments(folder, device_type)
+        current = next((a for a in assignments if a.get('returned_date') is None), None)
+        old_device_id = current['device_id'] if current else None
 
-        if is_faulty:
-            # Faulty device: its assignment was already closed at robot_issue time.
-            # Assign the new (or declared-repaired) device.
-            if new_device_id == old_device_id:
-                # Engineer declares the same device repaired
-                mark_device_not_faulty(folder, device_type, old_device_id)
-                write_device_log(folder, old_device_id, loginid, session_id, 'Declared repaired')
-            assignments.append({
-                'id':            str(uuid.uuid4()),
-                'device_id':     new_device_id,
-                'homer_id':      homer_id,
-                'assigned_date': now_hhmm,
-                'returned_date': None,
-                'assigned_by':   loginid,
-                'notes':         f'Assigned after robot issue resolution',
+        new_device_id     = None
+        fault_description = None
+        repair_description = None
+        out_notes         = None
+
+        if outcome == 'repaired_on_site':
+            fault_description  = do.get('fault_description', '').strip()
+            repair_description = do.get('repair_description', '').strip()
+            # Create a completed fault report (no inventory change, not faulty)
+            reports = read_fault_reports(folder, device_type)
+            reports.append({
+                'id':               str(uuid.uuid4()),
+                'device_id':        old_device_id,
+                'homer_id':         homer_id,
+                'visit_date':       completion_date,
+                'outcome':          'repaired_on_site',
+                'fault_description': fault_description,
+                'repair_description': repair_description,
+                'swap_notes':       None,
+                'filed_by':         loginid,
+                'filed_at':         filed_at,
+                'resolution':       {'repair_description': repair_description, 'resolved_date': completion_date},
             })
-            write_device_assignments(folder, device_type, assignments)
-            write_device_log(folder, new_device_id, loginid, session_id,
-                             f'Assigned to {homer_id} after robot issue resolution')
-        else:
-            # Non-faulty device: current assignment is still open.
-            current = next((a for a in assignments if a.get('returned_date') is None), None)
-            current_id = current['device_id'] if current else None
-            if new_device_id and new_device_id != current_id:
-                # Preventive swap: close current, open new
-                if current:
-                    current['returned_date'] = now_hhmm
-                    write_device_log(folder, current_id, loginid, session_id,
-                                     f'Returned (preventive swap) from {homer_id}')
+            write_fault_reports(folder, device_type, reports)
+
+        elif outcome == 'swapped':
+            out_notes     = do.get('notes', '').strip()
+            new_device_id = do.get('new_device_id') or None
+
+            # Close current assignment and mark device faulty
+            if old_device_id and current:
+                current['returned_date'] = now_hhmm
+                write_device_assignments(folder, device_type, assignments)
+                write_device_log(folder, old_device_id, loginid, session_id,
+                                 f'Returned (faulty — robot issue visit) from {homer_id}')
+                mark_device_faulty(folder, device_type, old_device_id)
+
+            # Create open fault report (resolution: null)
+            reports = read_fault_reports(folder, device_type)
+            reports.append({
+                'id':                str(uuid.uuid4()),
+                'device_id':        old_device_id,
+                'homer_id':         homer_id,
+                'visit_date':       completion_date,
+                'outcome':          'swapped',
+                'fault_description': None,
+                'repair_description': None,
+                'swap_notes':       out_notes,
+                'filed_by':         loginid,
+                'filed_at':         filed_at,
+                'resolution':       None,
+            })
+            write_fault_reports(folder, device_type, reports)
+
+            if new_device_id:
+                # Assign replacement device
+                assignments = read_device_assignments(folder, device_type)
                 assignments.append({
                     'id':            str(uuid.uuid4()),
                     'device_id':     new_device_id,
@@ -1520,45 +1531,192 @@ def api_complete_resolve_robot_issue(homer_id):
                     'assigned_date': now_hhmm,
                     'returned_date': None,
                     'assigned_by':   loginid,
-                    'notes':         f'Preventive swap: {swap_notes}',
+                    'notes':         'Assigned after robot issue visit (swap)',
                 })
                 write_device_assignments(folder, device_type, assignments)
                 write_device_log(folder, new_device_id, loginid, session_id,
-                                 f'Assigned to {homer_id} (preventive swap)')
+                                 f'Assigned to {homer_id} after robot issue visit (swap)')
+            else:
+                # No replacement — training pause required
+                any_taken_back = True
 
-        saved_assignments.append({
-            'device_type':   device_type,
+        else:  # neither
+            out_notes = do.get('notes', '').strip()
+
+        saved_outcomes.append({
+            'device':      device_type,
+            'outcome':     outcome,
             'old_device_id': old_device_id,
             'new_device_id': new_device_id,
-            'is_faulty':     is_faulty,
-            'swap_notes':    swap_notes,
+            'notes':       out_notes,
+            'fault_description':  fault_description,
+            'repair_description': repair_description,
         })
 
     complete_entry = {
         **entry,
-        'completion_date':   now_hhmm,
-        'filed_at':          filed_at,
-        'can_resume_from':   can_resume_from,
-        'notes':             notes,
-        'device_assignments': saved_assignments,
+        'completion_date': completion_date,
+        'filed_at':        filed_at,
+        'device_outcomes': saved_outcomes,
+        'notes':           notes,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
-    events_data.setdefault('free', {}).setdefault('resolve_robot_issue', []).append(complete_entry)
+    events_data.setdefault('free', {}).setdefault('robot_issue_visit', []).append(complete_entry)
+
+    if any_taken_back:
+        if not patient_meta.get('trainingPausedDate'):
+            patient_meta['trainingPausedDate'] = completion_date
+            write_patient_meta(folder, homer_id, patient_meta)
+        events_data.setdefault('incomplete', []).append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'resolve_robot_issue_visit',
+            'triggered_by':      {'type': 'robot_issue_visit', 'id': event_id},
+            'scheduled_date':    [now_hhmm, now_hhmm],
+            'filed_at':          filed_at,
+        })
+        write_patient_log(folder, homer_id, loginid, session_id,
+                          'Training paused — robot issue (device taken back without replacement).')
+
+    write_protocol_events(folder, homer_id, events_data)
+    write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue visit recorded.')
+
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/resolve-robot-issue-visit', methods=['POST'])
+def api_complete_resolve_robot_issue_visit(homer_id):
+    """Complete a resolve_robot_issue_visit stub: assign replacement devices, clear pause when all resolved."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'engineer'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body               = request.get_json() or {}
+    event_id           = body.get('event_id')
+    completion_date    = (body.get('completion_date') or '').strip()
+    can_resume_from    = (body.get('can_resume_from') or '').strip()
+    notes              = (body.get('notes') or '').strip()
+    device_assignments = body.get('device_assignments', [])
+
+    if not event_id:
+        return jsonify({'error': 'event_id is required.'}), 400
+    if not completion_date:
+        return jsonify({'error': 'Visit date is required.'}), 400
+    try:
+        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Visit date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+    if not can_resume_from:
+        return jsonify({'error': 'Can resume from date is required.'}), 400
+    try:
+        resume_date = date.fromisoformat(can_resume_from)
+        if resume_date > date.today():
+            return jsonify({'error': 'Can resume from date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid can_resume_from date format.'}), 400
+
+    valid_devices = {'pluto', 'mars'}
+    for da in device_assignments:
+        if da.get('device') not in valid_devices:
+            return jsonify({'error': f'Invalid device: {da.get("device")}.'}), 400
+        if not da.get('new_device_id') and not (da.get('notes') or '').strip():
+            dev = da.get('device', 'device').capitalize()
+            return jsonify({'error': f'Notes are required when no replacement {dev} is available.'}), 400
+
+    patient_meta = read_patient_meta(folder, homer_id)
+    if not patient_meta or patient_meta.get('group') != 'experimental':
+        return jsonify({'error': 'Resolve robot issue visit is only valid for experimental patients.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == 'resolve_robot_issue_visit' and e.get('id') == event_id),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Resolve robot issue visit stub not found.'}), 404
+
+    filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    saved_assignments = []
+    any_still_missing = False
+
+    for da in device_assignments:
+        device_type   = da['device']
+        old_device_id = da.get('old_device_id')
+        new_device_id = da.get('new_device_id') or None
+        da_notes      = (da.get('notes') or '').strip() or None
+
+        if new_device_id:
+            assignments = read_device_assignments(folder, device_type)
+            assignments.append({
+                'id':            str(uuid.uuid4()),
+                'device_id':     new_device_id,
+                'homer_id':      homer_id,
+                'assigned_date': now_hhmm,
+                'returned_date': None,
+                'assigned_by':   loginid,
+                'notes':         'Assigned after resolve robot issue visit',
+            })
+            write_device_assignments(folder, device_type, assignments)
+            write_device_log(folder, new_device_id, loginid, session_id,
+                             f'Assigned to {homer_id} after resolve robot issue visit')
+        else:
+            any_still_missing = True
+
+        saved_assignments.append({
+            'device':        device_type,
+            'old_device_id': old_device_id,
+            'new_device_id': new_device_id,
+            'notes':         da_notes,
+        })
+
+    complete_entry = {
+        **entry,
+        'completion_date':    completion_date,
+        'filed_at':           filed_at,
+        'can_resume_from':    can_resume_from,
+        'device_assignments': saved_assignments,
+        'notes':              notes,
+    }
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
+    events_data.setdefault('free', {}).setdefault('resolve_robot_issue_visit', []).append(complete_entry)
+
+    if any_still_missing:
+        # Some devices still have no replacement — create another stub
+        events_data.setdefault('incomplete', []).append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'resolve_robot_issue_visit',
+            'triggered_by':      {'type': 'resolve_robot_issue_visit', 'id': event_id},
+            'scheduled_date':    [now_hhmm, now_hhmm],
+            'filed_at':          filed_at,
+        })
 
     # Check if all pause causes are now resolved
-    remaining_ri  = [e for e in events_data.get('incomplete', [])
-                     if e.get('protocol_event_id') == 'resolve_robot_issue']
-    remaining_aef = [e for e in events_data.get('incomplete', [])
-                     if e.get('protocol_event_id') == 'adverse_event_followup']
-    patient_meta = read_patient_meta(folder, homer_id)
+    remaining_rriv = [e for e in events_data.get('incomplete', [])
+                      if e.get('protocol_event_id') == 'resolve_robot_issue_visit']
+    remaining_aef  = [e for e in events_data.get('incomplete', [])
+                      if e.get('protocol_event_id') == 'adverse_event_followup']
 
-    if patient_meta and patient_meta.get('trainingPausedDate') and not remaining_ri and not remaining_aef:
+    if patient_meta.get('trainingPausedDate') and not remaining_rriv and not remaining_aef:
         training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
 
         resume_dates = [resume_date]
-        for rri in events_data.get('free', {}).get('resolve_robot_issue', []):
+        for rriv in events_data.get('free', {}).get('resolve_robot_issue_visit', []):
             try:
-                resume_dates.append(date.fromisoformat(rri['can_resume_from']))
+                resume_dates.append(date.fromisoformat(rriv['can_resume_from']))
             except (ValueError, KeyError):
                 pass
         free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
@@ -1579,12 +1737,11 @@ def api_complete_resolve_robot_issue(homer_id):
             if not patient_meta.get('brokenProtocolDate'):
                 patient_meta['brokenProtocolDate'] = filed_at[:10]
         write_patient_meta(folder, homer_id, patient_meta)
-        write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue resolved — training resumed')
+        write_patient_log(folder, homer_id, loginid, session_id,
+                          'Robot issue resolved — replacement device assigned.')
 
-    from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
-
-    write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue resolved.')
+    write_patient_log(folder, homer_id, loginid, session_id, 'Robot issue resolved — replacement visit recorded.')
 
     return jsonify({'ok': True})
 
@@ -1637,9 +1794,9 @@ def api_complete_followup_call(homer_id):
         t = item.get('type')
         if t == 'adverse_event':
             pass
-        elif t == 'robot_issue':
+        elif t == 'robot_issue_call':
             if not is_experimental:
-                return jsonify({'error': 'Robot issue is only valid for experimental patients.'}), 400
+                return jsonify({'error': 'Robot issue call is only valid for experimental patients.'}), 400
         elif t == 'watch_record':
             pass
         else:
@@ -1678,16 +1835,16 @@ def api_complete_followup_call(homer_id):
             })
             triggered_refs.append({'type': 'adverse_event', 'id': new_id})
 
-        elif t == 'robot_issue':
+        elif t == 'robot_issue_call':
             new_id = str(uuid.uuid4())
             events_data.setdefault('incomplete', []).append({
                 'id':               new_id,
-                'protocol_event_id': 'robot_issue',
+                'protocol_event_id': 'robot_issue_call',
                 'triggered_by':     {'type': protocol_event_id, 'id': call_id},
                 'scheduled_date':   [now_hhmm, now_hhmm],
                 'filed_at':         filed_at,
             })
-            triggered_refs.append({'type': 'robot_issue', 'id': new_id})
+            triggered_refs.append({'type': 'robot_issue_call', 'id': new_id})
 
         elif t == 'watch_record':
             # Stamp triggered_by and scheduled_date onto the existing open chain entry
@@ -1724,7 +1881,7 @@ def api_complete_followup_call(homer_id):
                       f'Follow-up call recorded — Day {day}')
     for ref in triggered_refs:
         msg = {'adverse_event': 'Adverse event recorded',
-               'robot_issue':   'Robot issue recorded',
+               'robot_issue_call': 'Robot issue call logged',
                'watch_record':  'Watch record triggered'}.get(ref['type'])
         if msg:
             write_patient_log(folder, homer_id, loginid, session_id, msg)
@@ -2200,9 +2357,9 @@ def api_log_patient_call(homer_id):
         t = item.get('type')
         if t == 'adverse_event':
             pass
-        elif t == 'robot_issue':
+        elif t == 'robot_issue_call':
             if not is_experimental:
-                return jsonify({'error': 'Robot issue is only valid for experimental patients.'}), 400
+                return jsonify({'error': 'Robot issue call is only valid for experimental patients.'}), 400
         elif t == 'watch_record':
             pass
         else:
@@ -2231,16 +2388,16 @@ def api_log_patient_call(homer_id):
             })
             triggered_refs.append({'type': 'adverse_event', 'id': new_id})
 
-        elif t == 'robot_issue':
+        elif t == 'robot_issue_call':
             new_id = str(uuid.uuid4())
             events_data.setdefault('incomplete', []).append({
                 'id':               new_id,
-                'protocol_event_id': 'robot_issue',
+                'protocol_event_id': 'robot_issue_call',
                 'triggered_by':     {'type': 'patient_call', 'id': call_id},
                 'scheduled_date':   [now_hhmm, now_hhmm],
                 'filed_at':         filed_at,
             })
-            triggered_refs.append({'type': 'robot_issue', 'id': new_id})
+            triggered_refs.append({'type': 'robot_issue_call', 'id': new_id})
 
         elif t == 'watch_record':
             wr = next(
@@ -2272,7 +2429,7 @@ def api_log_patient_call(homer_id):
     write_patient_log(folder, homer_id, loginid, session_id, 'Patient call recorded')
     for ref in triggered_refs:
         msg = {'adverse_event': 'Adverse event recorded',
-               'robot_issue':   'Robot issue recorded',
+               'robot_issue_call': 'Robot issue call logged',
                'watch_record':  'Watch record triggered'}.get(ref['type'])
         if msg:
             write_patient_log(folder, homer_id, loginid, session_id, msg)

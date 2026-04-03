@@ -414,6 +414,9 @@ const _FIELD_LABELS = {
   triggered_by:        'Triggered By',
   triggered:           'Triggered',
   faults:              'Faults',
+  devices:             'Devices',
+  device_outcomes:     'Device Outcomes',
+  visit_required:      'Visit Required',
   paused:              'Paused',
   notes:               'Notes',
 };
@@ -447,6 +450,32 @@ function _timelineExtraFields(ev) {
     } else if (key === 'faults' && Array.isArray(val)) {
       if (!val.length) continue;
       display = val.map(f => `${f.device}: ${f.fault_description}`).join('; ');
+    } else if (key === 'devices' && Array.isArray(val)) {
+      if (!val.length) continue;
+      display = val.map(d => {
+        const dev     = (d.device || '').charAt(0).toUpperCase() + (d.device || '').slice(1);
+        const outcome = d.outcome === 'visit_required' ? 'Visit required' : 'Resolved';
+        return d.notes ? `${dev}: ${outcome} (${d.notes})` : `${dev}: ${outcome}`;
+      }).join('; ');
+    } else if (key === 'device_outcomes' && Array.isArray(val)) {
+      if (!val.length) continue;
+      display = val.map(d => {
+        const dev = (d.device || '').charAt(0).toUpperCase() + (d.device || '').slice(1);
+        if (d.outcome === 'repaired_on_site') {
+          const parts = [];
+          if (d.fault_description)  parts.push(`fault: ${d.fault_description}`);
+          if (d.repair_description) parts.push(`repair: ${d.repair_description}`);
+          return parts.length ? `${dev}: Repaired (${parts.join('; ')})` : `${dev}: Repaired`;
+        } else if (d.outcome === 'swapped') {
+          const from = d.old_device_id || '—';
+          const to   = d.new_device_id || 'none';
+          const note = d.notes ? ` — ${d.notes}` : '';
+          return `${dev}: Swapped ${from} → ${to}${note}`;
+        } else if (d.outcome === 'neither') {
+          return d.notes ? `${dev}: No action (${d.notes})` : `${dev}: No action`;
+        }
+        return `${dev}: ${d.outcome || '—'}`;
+      }).join('; ');
     } else if (key === 'duration_minutes') {
       display = `${val} min`;
     } else if (Array.isArray(val)) {
@@ -645,7 +674,7 @@ function _renderCallLogs(container, data) {
 
 const _TRIGGERED_LABELS = {
   adverse_event: 'Adverse event logged',
-  robot_issue:   'Robot issue logged',
+  robot_issue_call: 'Robot issue call logged',
   watch_record:  'Watch record triggered',
 };
 
@@ -859,7 +888,7 @@ function renderRobotIssuesTab() {
   if (!container) return;
 
   const issues = (_completeEventsCache || [])
-    .filter(e => e.protocol_event_id === 'robot_issue')
+    .filter(e => e.protocol_event_id === 'robot_issue_call')
     .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
 
   if (!issues.length) {
@@ -990,84 +1019,306 @@ async function saveAdverseEvent() {
   await loadPatientEvents();
 }
 
-// ── Robot Issue modal ──────────────────────────────────────────────────────────
+// ── Robot Issue Call modal ─────────────────────────────────────────────────────
 
-let _riEventId = null;
+let _ricEventId = null;
 
-function _riToggleDevice(device) {
-  const checked = document.getElementById(`ri-${device}-on`).checked;
-  document.getElementById(`ri-${device}-form`).classList.toggle('hidden', !checked);
-  if (!checked) {
-    document.getElementById(`ri-${device}-notes`).value = '';
-    document.getElementById(`ri-${device}-repair`).checked = false;
-  }
-}
+function openRobotIssueCallModal(ev) {
+  _ricEventId = ev.id;
+  const triggerType  = ev.triggered_by?.type || '';
+  const triggerName  = _AE_TRIGGER_NAMES[triggerType] || triggerType;
+  const triggerEvent = (_completeEventsCache || []).find(e => e.id === ev.triggered_by?.id);
+  const dateStr = triggerEvent?.completion_date ? ` on ${_fmtDateTime(triggerEvent.completion_date)}` : '';
+  document.getElementById('ric-context-banner').textContent =
+    `Robot issue reported during ${triggerName}${dateStr}`;
+  document.getElementById('ric-date').value  = '';
+  document.getElementById('ric-notes').value = '';
+  _resetAttachment('ric');
+  setError('ric-error', '');
+  _attachDateGuard('ric-date', 'ric-error');
 
-async function openRobotIssueModal(ev) {
-  _riEventId = ev.id;
-  const triggerLabel = ev.triggered_by
-    ? (_AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type)
-    : 'Unknown';
-  document.getElementById('ri-context-banner').textContent = `Triggered by: ${triggerLabel}`;
-  document.getElementById('ri-date').value = '';
-  ['pluto', 'mars'].forEach(d => {
-    document.getElementById(`ri-${d}-on`).checked     = false;
-    document.getElementById(`ri-${d}-form`).classList.add('hidden');
-    document.getElementById(`ri-${d}-notes`).value   = '';
-    document.getElementById(`ri-${d}-repair`).checked = false;
-    document.getElementById(`ri-${d}-current-label`).textContent = '';
-  });
-  _resetAttachment('ri');
-  setError('ri-error', '');
-  _attachDateGuard('ri-date', 'ri-error');
-  showModal('robot-issue-modal');
-
-  // Fetch current device assignments to show next to each device label
-  try {
-    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
-    const { current_pluto, current_mars } = await res.json();
-    for (const [d, cur] of [['pluto', current_pluto], ['mars', current_mars]]) {
-      document.getElementById(`ri-${d}-current-label`).textContent =
-        cur ? `(current: ${cur})` : '(no device assigned)';
-    }
-  } catch (e) {
-    // Non-critical — labels just stay blank
-  }
-}
-
-async function saveRobotIssue() {
-  const date    = document.getElementById('ri-date').value;
-  const saveBtn = document.getElementById('ri-save');
-
-  if (!date) { setError('ri-error', 'Event date is required.'); return; }
-
-  const faults = [];
+  // Build per-device inline sections
+  const container = document.getElementById('ric-device-sections');
+  container.innerHTML = '';
   for (const device of ['pluto', 'mars']) {
-    if (document.getElementById(`ri-${device}-on`).checked) {
-      const notes          = document.getElementById(`ri-${device}-notes`).value.trim();
-      const requires_repair = document.getElementById(`ri-${device}-repair`).checked;
-      const capDevice       = device.charAt(0).toUpperCase() + device.slice(1);
-      if (!notes) { setError('ri-error', `${capDevice} notes are required.`); return; }
-      faults.push({ device, notes, requires_repair });
-    }
+    const label = device.charAt(0).toUpperCase() + device.slice(1);
+    const sec = document.createElement('div');
+    sec.className = 'border border-slate-200 rounded-xl p-4';
+    sec.innerHTML = `
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" id="ric-${device}-on" class="w-4 h-4 rounded border-slate-300 accent-orange-600">
+        <span class="text-sm font-semibold text-slate-800">${label}</span>
+      </label>
+      <div id="ric-${device}-form" class="hidden mt-3 space-y-3 pl-6">
+        <div>
+          <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+          <div class="space-y-1">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="ric-${device}-outcome" value="resolved" class="w-4 h-4 accent-orange-600">
+              <span class="text-sm text-slate-700">Resolved by call — no visit needed</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="ric-${device}-outcome" value="visit_required" class="w-4 h-4 accent-orange-600">
+              <span class="text-sm text-slate-700">Visit required</span>
+            </label>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+          <textarea id="ric-${device}-notes" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+            placeholder="What was discussed for ${label}…"></textarea>
+        </div>
+      </div>
+    `;
+    container.appendChild(sec);
+
+    document.getElementById(`ric-${device}-on`).onchange = function () {
+      document.getElementById(`ric-${device}-form`).classList.toggle('hidden', !this.checked);
+      if (!this.checked) {
+        document.querySelectorAll(`input[name="ric-${device}-outcome"]`).forEach(r => r.checked = false);
+        document.getElementById(`ric-${device}-notes`).value = '';
+      }
+      _ricUpdateNotesLabel();
+    };
   }
-  if (!faults.length) { setError('ri-error', 'At least one affected device must be selected.'); return; }
-  if (!_validateAttachment('ri', 'ri-error')) return;
+
+  _ricUpdateNotesLabel();
+  showModal('robot-issue-call-modal');
+}
+
+function _ricUpdateNotesLabel() {
+  const anyChecked = ['pluto', 'mars'].some(d => document.getElementById(`ric-${d}-on`)?.checked);
+  document.getElementById('ric-notes-required-badge').classList.toggle('hidden', anyChecked);
+  document.getElementById('ric-notes-optional-badge').classList.toggle('hidden', !anyChecked);
+}
+
+async function saveRobotIssueCall() {
+  const date    = document.getElementById('ric-date').value;
+  const notes   = document.getElementById('ric-notes').value.trim();
+  const saveBtn = document.getElementById('ric-save');
+
+  if (!date) { setError('ric-error', 'Call date is required.'); return; }
+
+  const devices = [];
+  for (const device of ['pluto', 'mars']) {
+    if (!document.getElementById(`ric-${device}-on`).checked) continue;
+    const outcome  = document.querySelector(`input[name="ric-${device}-outcome"]:checked`)?.value || '';
+    const devNotes = document.getElementById(`ric-${device}-notes`).value.trim();
+    const label    = device.charAt(0).toUpperCase() + device.slice(1);
+    if (!outcome)  { setError('ric-error', `Outcome is required for ${label}.`); return; }
+    if (!devNotes) { setError('ric-error', `Notes are required for ${label}.`); return; }
+    devices.push({ device, outcome, notes: devNotes });
+  }
+
+  if (!devices.length && !notes) {
+    setError('ric-error', 'Overall notes are required when no device is selected.');
+    return;
+  }
+  if (!_validateAttachment('ric', 'ric-error')) return;
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
-    `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue`,
-    { event_id: _riEventId, completion_date: date, faults }
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue-call`,
+    { event_id: _ricEventId, completion_date: date, notes: notes || null, devices }
   );
-  if (!ok) { setError('ri-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+  if (!ok) { setError('ric-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
-  const { file, caption } = _readAttachment('ri');
+  const { file, caption } = _readAttachment('ric');
   if (file) {
-    const uploaded = await _uploadAttachment(_riEventId, file, caption, 'ri-error');
+    const uploaded = await _uploadAttachment(_ricEventId, file, caption, 'ric-error');
     if (!uploaded) { saveBtn.disabled = false; return; }
   }
 
-  hideModal('robot-issue-modal');
+  hideModal('robot-issue-call-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
+// ── Robot Issue Visit modal ────────────────────────────────────────────────────
+
+let _rivEventId = null;
+let _rivDevices = []; // [{device_type, old_device_id, available}]
+
+async function openRobotIssueVisitModal(ev) {
+  _rivEventId = ev.id;
+  _rivDevices = [];
+
+  const callEvent = (_completeEventsCache || []).find(e => e.id === ev.triggered_by?.id);
+  const dateStr   = callEvent?.completion_date ? ` on ${_fmtDateTime(callEvent.completion_date)}` : '';
+  document.getElementById('riv-context-banner').textContent =
+    `Robot issue call${dateStr}`;
+  document.getElementById('riv-date').value  = '';
+  document.getElementById('riv-notes').value = '';
+  document.getElementById('riv-device-rows').innerHTML =
+    '<p class="text-sm text-slate-400 italic">Loading device info…</p>';
+  _resetAttachment('riv');
+  setError('riv-error', '');
+  _attachDateGuard('riv-date', 'riv-error');
+  showModal('robot-issue-visit-modal');
+
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
+    const devData = await res.json();
+    for (const deviceType of ['pluto', 'mars']) {
+      const cur = deviceType === 'pluto' ? devData.current_pluto : devData.current_mars;
+      _rivDevices.push({
+        device_type:   deviceType,
+        old_device_id: cur,
+        available:     devData[deviceType] || [],
+      });
+    }
+    _buildRivDeviceRows();
+  } catch (e) {
+    document.getElementById('riv-device-rows').innerHTML =
+      '<p class="text-sm text-red-500">Failed to load device info.</p>';
+  }
+}
+
+function _buildRivDeviceRows() {
+  const container = document.getElementById('riv-device-rows');
+  container.innerHTML = '';
+
+  for (const dev of _rivDevices) {
+    const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+    const oldLabel = dev.old_device_id
+      ? `<span class="font-mono">${dev.old_device_id}</span>`
+      : '<span class="text-slate-400 italic">None assigned</span>';
+
+    let swapOptions = '<option value="">No device available</option>';
+    for (const d of dev.available) {
+      swapOptions += `<option value="${d.id}">${d.id}</option>`;
+    }
+
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+    rowDiv.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-semibold text-slate-800">${label}</span>
+        <span class="text-xs text-slate-500">Current: ${oldLabel}</span>
+      </div>
+      <div>
+        <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+        <div class="space-y-2">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="riv-${dev.device_type}-outcome" value="repaired_on_site" class="w-4 h-4 accent-orange-600"
+              onchange="_rivOutcomeChange('${dev.device_type}')">
+            <span class="text-sm text-slate-700">Repaired on site</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="riv-${dev.device_type}-outcome" value="swapped" class="w-4 h-4 accent-orange-600"
+              onchange="_rivOutcomeChange('${dev.device_type}')">
+            <span class="text-sm text-slate-700">Swapped</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="riv-${dev.device_type}-outcome" value="neither" class="w-4 h-4 accent-orange-600"
+              onchange="_rivOutcomeChange('${dev.device_type}')">
+            <span class="text-sm text-slate-700">Neither (no action taken)</span>
+          </label>
+        </div>
+      </div>
+      <!-- Repaired on site fields -->
+      <div id="riv-${dev.device_type}-repaired-fields" class="hidden space-y-2 pl-2 border-l-2 border-orange-200">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+          <textarea id="riv-${dev.device_type}-fault-desc" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+            placeholder="What was wrong with the device…"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Repair description <span class="text-red-400">*</span></label>
+          <textarea id="riv-${dev.device_type}-repair-desc" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+            placeholder="What was done to fix it…"></textarea>
+        </div>
+      </div>
+      <!-- Swapped fields -->
+      <div id="riv-${dev.device_type}-swapped-fields" class="hidden space-y-2 pl-2 border-l-2 border-orange-200">
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">New device <span class="text-red-400">*</span></label>
+          <select id="riv-${dev.device_type}-new-device"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white">
+            ${swapOptions}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Swap notes <span class="text-red-400">*</span></label>
+          <textarea id="riv-${dev.device_type}-swap-notes" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+            placeholder="Reason for swap…"></textarea>
+        </div>
+      </div>
+      <!-- Neither fields -->
+      <div id="riv-${dev.device_type}-neither-fields" class="hidden pl-2 border-l-2 border-slate-200">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+        <textarea id="riv-${dev.device_type}-neither-notes" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
+          placeholder="Explain why no action was taken (e.g. only the other device was affected)…"></textarea>
+      </div>
+    `;
+    container.appendChild(rowDiv);
+  }
+}
+
+function _rivOutcomeChange(deviceType) {
+  const outcome = document.querySelector(`input[name="riv-${deviceType}-outcome"]:checked`)?.value;
+  document.getElementById(`riv-${deviceType}-repaired-fields`).classList.toggle('hidden', outcome !== 'repaired_on_site');
+  document.getElementById(`riv-${deviceType}-swapped-fields`).classList.toggle('hidden', outcome !== 'swapped');
+  document.getElementById(`riv-${deviceType}-neither-fields`).classList.toggle('hidden', outcome !== 'neither');
+}
+
+async function saveRobotIssueVisit() {
+  const date    = document.getElementById('riv-date').value;
+  const notes   = document.getElementById('riv-notes').value.trim();
+  const saveBtn = document.getElementById('riv-save');
+
+  if (!date) { setError('riv-error', 'Visit date is required.'); return; }
+
+  const deviceOutcomes = [];
+  for (const dev of _rivDevices) {
+    const outcome = document.querySelector(`input[name="riv-${dev.device_type}-outcome"]:checked`)?.value || '';
+    const capLabel = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+    if (!outcome) { setError('riv-error', `Outcome is required for ${capLabel}.`); return; }
+
+    let payload = { device: dev.device_type, outcome, old_device_id: dev.old_device_id };
+
+    if (outcome === 'repaired_on_site') {
+      const faultDesc  = document.getElementById(`riv-${dev.device_type}-fault-desc`).value.trim();
+      const repairDesc = document.getElementById(`riv-${dev.device_type}-repair-desc`).value.trim();
+      if (!faultDesc)  { setError('riv-error', `${capLabel} fault description is required.`); return; }
+      if (!repairDesc) { setError('riv-error', `${capLabel} repair description is required.`); return; }
+      payload.fault_description  = faultDesc;
+      payload.repair_description = repairDesc;
+    } else if (outcome === 'swapped') {
+      const newDevice  = document.getElementById(`riv-${dev.device_type}-new-device`).value || null;
+      const swapNotes  = document.getElementById(`riv-${dev.device_type}-swap-notes`).value.trim();
+      if (!swapNotes) { setError('riv-error', `${capLabel} swap notes are required.`); return; }
+      payload.new_device_id = newDevice;
+      payload.notes         = swapNotes;
+    } else {
+      const neitherNotes = document.getElementById(`riv-${dev.device_type}-neither-notes`).value.trim();
+      if (!neitherNotes) { setError('riv-error', `${capLabel} notes are required.`); return; }
+      payload.notes = neitherNotes;
+    }
+    deviceOutcomes.push(payload);
+  }
+
+  if (!_validateAttachment('riv', 'riv-error')) return;
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue-visit`,
+    { event_id: _rivEventId, completion_date: date, notes, device_outcomes: deviceOutcomes }
+  );
+  if (!ok) { setError('riv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('riv');
+  if (file) {
+    const uploaded = await _uploadAttachment(_rivEventId, file, caption, 'riv-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('robot-issue-visit-modal');
   saveBtn.disabled = false;
   await loadPatientEvents();
 }
@@ -1185,205 +1436,196 @@ async function saveAdverseEventFollowup() {
   await loadPatientEvents();
 }
 
-// ── Resolve Robot Issue modal ─────────────────────────────────────────────────
+// ── Resolve Robot Issue Visit modal ───────────────────────────────────────────
 
-let _rriEventId = null;
-let _rriDevices = []; // [{device_type, old_device_id, is_faulty, current_device_id, available}]
+let _rrivEventId = null;
+let _rrivDevices = []; // [{device_type, old_device_id, available}]
 
-async function openResolveRobotIssueModal(ev) {
-  _rriEventId = ev.id;
-  _rriDevices = [];
+async function openResolveRobotIssueVisitModal(ev) {
+  _rrivEventId = ev.id;
+  _rrivDevices = [];
 
-  // Find the triggering robot issue in the completed events cache
+  // Find the triggering robot_issue_visit in the completed events cache
   const triggeredBy = ev.triggered_by;
-  let riEvent = null;
+  let rivEvent = null;
   if (triggeredBy) {
-    riEvent = (_completeEventsCache || []).find(e => e.id === triggeredBy.id);
+    rivEvent = (_completeEventsCache || []).find(e => e.id === triggeredBy.id);
   }
 
-  let bannerText = 'Triggered by: Robot Issue';
-  if (riEvent?.completion_date) bannerText += ` — ${_fmtDateTime(riEvent.completion_date)}`;
-  document.getElementById('rri-context-banner').textContent = bannerText;
-  document.getElementById('rri-resume-date').value = '';
-  document.getElementById('rri-notes').value = '';
-  document.getElementById('rri-device-rows').innerHTML =
+  let bannerText = 'Robot issue visit';
+  if (rivEvent?.completion_date) bannerText += ` on ${_fmtDateTime(rivEvent.completion_date)}`;
+  bannerText += ' — device(s) taken back without replacement';
+  document.getElementById('rriv-context-banner').textContent = bannerText;
+  document.getElementById('rriv-date').value = '';
+  document.getElementById('rriv-resume-date').value = '';
+  document.getElementById('rriv-notes').value = '';
+  document.getElementById('rriv-device-rows').innerHTML =
     '<p class="text-sm text-slate-400 italic">Loading device info…</p>';
-  _resetAttachment('rri');
-  setError('rri-error', '');
+  _resetAttachment('rriv');
+  setError('rriv-error', '');
 
-  document.getElementById('rri-resume-date').onchange = function () {
+  document.getElementById('rriv-date').onchange = function () {
     const val = this.value;
-    if (val && val > new Date().toISOString().slice(0, 10)) {
-      setError('rri-error', 'Can resume from date cannot be in the future.');
+    if (val && val > new Date().toISOString().slice(0, 16)) {
+      setError('rriv-error', 'Visit date cannot be in the future.');
       this.value = '';
     } else {
-      setError('rri-error', '');
+      setError('rriv-error', '');
     }
   };
 
-  showModal('resolve-robot-issue-modal');
+  document.getElementById('rriv-resume-date').onchange = function () {
+    const val = this.value;
+    if (val && val > new Date().toISOString().slice(0, 10)) {
+      setError('rriv-error', 'Can resume from date cannot be in the future.');
+      this.value = '';
+    } else {
+      setError('rriv-error', '');
+    }
+  };
+
+  showModal('resolve-robot-issue-visit-modal');
 
   try {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
     const devData = await res.json();
 
-    const faults = riEvent?.faults || [];
-    for (const deviceType of ['pluto', 'mars']) {
-      const fault = faults.find(f => f.device === deviceType);
-      const isFaulty = fault?.requires_repair === true;
-      const oldDeviceId = isFaulty
-        ? (fault?.old_device_id || null)
-        : (deviceType === 'pluto' ? devData.current_pluto : devData.current_mars);
-      const currentDeviceId = deviceType === 'pluto' ? devData.current_pluto : devData.current_mars;
-      _rriDevices.push({
-        device_type:       deviceType,
-        old_device_id:     oldDeviceId,
-        is_faulty:         isFaulty,
-        current_device_id: currentDeviceId,
-        available:         devData[deviceType] || [],
+    // Only show devices that were taken back (swapped + null new_device_id)
+    const takenBack = (rivEvent?.device_outcomes || []).filter(
+      o => o.outcome === 'swapped' && o.new_device_id == null
+    );
+
+    for (const outcome of takenBack) {
+      _rrivDevices.push({
+        device_type:   outcome.device,
+        old_device_id: outcome.old_device_id,
+        available:     devData[outcome.device] || [],
       });
     }
-    _buildRriDeviceRows();
+
+    if (_rrivDevices.length === 0) {
+      document.getElementById('rriv-device-rows').innerHTML =
+        '<p class="text-sm text-slate-400 italic">No taken-back devices found.</p>';
+    } else {
+      _buildRrivDeviceRows();
+    }
   } catch (e) {
-    document.getElementById('rri-device-rows').innerHTML =
+    document.getElementById('rriv-device-rows').innerHTML =
       '<p class="text-sm text-red-500">Failed to load device info.</p>';
   }
 }
 
-function _buildRriDeviceRows() {
-  const container = document.getElementById('rri-device-rows');
+function _buildRrivDeviceRows() {
+  const container = document.getElementById('rriv-device-rows');
   container.innerHTML = '';
 
-  for (const dev of _rriDevices) {
+  for (const dev of _rrivDevices) {
     const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
-    const badge = dev.is_faulty
-      ? '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-medium">Faulty — requires repair</span>'
-      : '<span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium">No fault reported</span>';
 
     const oldLabel = dev.old_device_id
       ? `<span class="font-mono">${dev.old_device_id}</span>`
       : '<span class="text-slate-400 italic">None</span>';
 
-    // Build dropdown options
-    let optionsHtml = '';
-    if (dev.is_faulty) {
-      optionsHtml += '<option value="">Select replacement…</option>';
-      for (const d of dev.available) {
-        optionsHtml += `<option value="${d.id}">${d.id}</option>`;
-      }
-      if (dev.old_device_id) {
-        optionsHtml += `<option value="${dev.old_device_id}">${dev.old_device_id} — declare repaired (keep same)</option>`;
-      }
-    } else {
-      if (dev.current_device_id) {
-        optionsHtml += `<option value="${dev.current_device_id}" selected>${dev.current_device_id} — keep current</option>`;
-      }
-      for (const d of dev.available) {
-        optionsHtml += `<option value="${d.id}">${d.id}</option>`;
-      }
+    let optionsHtml = '<option value="">No device available</option>';
+    for (const d of dev.available) {
+      optionsHtml += `<option value="${d.id}">${d.id}</option>`;
     }
-
-    const swapNotesHtml = (!dev.is_faulty && dev.current_device_id) ? `
-      <div id="rri-${dev.device_type}-swap-row" class="hidden">
-        <label class="block text-xs font-medium text-slate-500 mb-1">Reason for preventive swap <span class="text-red-400">*</span></label>
-        <textarea id="rri-${dev.device_type}-swap-notes" rows="2"
-          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
-          placeholder="Explain why the non-faulty device is being swapped…"></textarea>
-      </div>` : '';
 
     const rowDiv = document.createElement('div');
     rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
     rowDiv.innerHTML = `
       <div class="flex items-center gap-2">
         <span class="text-sm font-semibold text-slate-800">${label}</span>
-        ${badge}
+        <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-medium">Taken back</span>
       </div>
       <div class="grid grid-cols-2 gap-3 items-end">
         <div>
-          <p class="text-xs font-medium text-slate-500 mb-1">Current device</p>
+          <p class="text-xs font-medium text-slate-500 mb-1">Device taken back</p>
           <p class="text-sm text-slate-700">${oldLabel}</p>
         </div>
         <div>
-          <label class="block text-xs font-medium text-slate-500 mb-1">New assignment${dev.is_faulty ? ' <span class="text-red-400">*</span>' : ''}</label>
-          <select id="rri-${dev.device_type}-select"
+          <label class="block text-xs font-medium text-slate-500 mb-1">Replacement <span class="text-red-400">*</span></label>
+          <select id="rriv-${dev.device_type}-select"
             class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
             ${optionsHtml}
           </select>
         </div>
       </div>
-      ${swapNotesHtml}
+      <div id="rriv-${dev.device_type}-notes-row" class="hidden">
+        <label class="block text-xs font-medium text-slate-500 mb-1">Reason no device available <span class="text-red-400">*</span></label>
+        <textarea id="rriv-${dev.device_type}-notes" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
+          placeholder="Explain why no replacement device is available…"></textarea>
+      </div>
     `;
     container.appendChild(rowDiv);
 
-    // Toggle swap notes for non-faulty devices
-    if (!dev.is_faulty && dev.current_device_id) {
-      const sel = document.getElementById(`rri-${dev.device_type}-select`);
-      const swapRow = document.getElementById(`rri-${dev.device_type}-swap-row`);
-      sel.onchange = function () {
-        const isSwap = this.value && this.value !== dev.current_device_id;
-        swapRow.classList.toggle('hidden', !isSwap);
-        if (!isSwap) document.getElementById(`rri-${dev.device_type}-swap-notes`).value = '';
-      };
-    }
+    // Show/hide notes when "No device available" selected
+    const sel = document.getElementById(`rriv-${dev.device_type}-select`);
+    const notesRow = document.getElementById(`rriv-${dev.device_type}-notes-row`);
+    // Show notes immediately if initial selection is "no device"
+    notesRow.classList.toggle('hidden', sel.value !== '');
+    sel.onchange = function () {
+      const isNull = this.value === '';
+      notesRow.classList.toggle('hidden', !isNull);
+      if (!isNull) document.getElementById(`rriv-${dev.device_type}-notes`).value = '';
+    };
   }
 }
 
-async function saveResolveRobotIssue() {
-  const resumeDate = document.getElementById('rri-resume-date').value;
-  const notes      = document.getElementById('rri-notes').value.trim();
-  const saveBtn    = document.getElementById('rri-save');
+async function saveResolveRobotIssueVisit() {
+  const date       = document.getElementById('rriv-date').value;
+  const resumeDate = document.getElementById('rriv-resume-date').value;
+  const notes      = document.getElementById('rriv-notes').value.trim();
+  const saveBtn    = document.getElementById('rriv-save');
 
-  if (!resumeDate) { setError('rri-error', 'Can resume from date is required.'); return; }
+  if (!date)       { setError('rriv-error', 'Visit date is required.'); return; }
+  if (!resumeDate) { setError('rriv-error', 'Can resume from date is required.'); return; }
 
   const deviceAssignments = [];
-  for (const dev of _rriDevices) {
-    const sel = document.getElementById(`rri-${dev.device_type}-select`);
+  for (const dev of _rrivDevices) {
+    const sel = document.getElementById(`rriv-${dev.device_type}-select`);
     if (!sel) continue;
     const newDeviceId = sel.value || null;
     const capLabel = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
 
-    if (dev.is_faulty && !newDeviceId) {
-      setError('rri-error', `New device assignment is required for ${capLabel} (faulty).`);
-      return;
-    }
-
-    let swapNotes = null;
-    if (!dev.is_faulty && dev.current_device_id && newDeviceId !== dev.current_device_id) {
-      swapNotes = (document.getElementById(`rri-${dev.device_type}-swap-notes`)?.value || '').trim();
-      if (!swapNotes) {
-        setError('rri-error', `Reason for preventive ${capLabel} swap is required.`);
+    let devNotes = null;
+    if (newDeviceId === null) {
+      devNotes = (document.getElementById(`rriv-${dev.device_type}-notes`)?.value || '').trim();
+      if (!devNotes) {
+        setError('rriv-error', `Reason for no replacement ${capLabel} is required.`);
         return;
       }
     }
 
     deviceAssignments.push({
-      device_type:   dev.device_type,
+      device:        dev.device_type,
       old_device_id: dev.old_device_id,
       new_device_id: newDeviceId,
-      is_faulty:     dev.is_faulty,
-      swap_notes:    swapNotes,
+      notes:         devNotes,
     });
   }
 
-  if (!_validateAttachment('rri', 'rri-error')) return;
+  if (!_validateAttachment('rriv', 'rriv-error')) return;
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
-    `/api/patients/${PATIENT_HOMER_ID}/complete-event/resolve-robot-issue`,
-    { event_id: _rriEventId, can_resume_from: resumeDate, notes, device_assignments: deviceAssignments }
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/resolve-robot-issue-visit`,
+    { event_id: _rrivEventId, completion_date: date, can_resume_from: resumeDate, notes, device_assignments: deviceAssignments }
   );
-  if (!ok) { setError('rri-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+  if (!ok) { setError('rriv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
-  const { file, caption } = _readAttachment('rri');
+  const { file, caption } = _readAttachment('rriv');
   if (file) {
-    const uploaded = await _uploadAttachment(_rriEventId, file, caption, 'rri-error');
+    const uploaded = await _uploadAttachment(_rrivEventId, file, caption, 'rriv-error');
     if (!uploaded) { saveBtn.disabled = false; return; }
   }
 
-  hideModal('resolve-robot-issue-modal');
+  hideModal('resolve-robot-issue-visit-modal');
   saveBtn.disabled = false;
   await loadPatientEvents();
 }
+
 
 function completedTimeline(events) {
   const items = events.map((ev, i) => {
@@ -1424,10 +1666,11 @@ const EVENT_OPENERS = {
   vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
   watch_record:              (ev) => openWatchRecordModal(ev),
-  adverse_event:             (ev) => openAdverseEventModal(ev),
-  robot_issue:               (ev) => openRobotIssueModal(ev),
-  adverse_event_followup:    (ev) => openAdverseEventFollowupModal(ev),
-  resolve_robot_issue:       (ev) => openResolveRobotIssueModal(ev),
+  adverse_event:                (ev) => openAdverseEventModal(ev),
+  robot_issue_call:             (ev) => openRobotIssueCallModal(ev),
+  robot_issue_visit:            (ev) => openRobotIssueVisitModal(ev),
+  adverse_event_followup:       (ev) => openAdverseEventFollowupModal(ev),
+  resolve_robot_issue_visit:    (ev) => openResolveRobotIssueVisitModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -1624,7 +1867,7 @@ async function submitActivation() {
     triggered.push({ type: 'adverse_event' });
   if (!document.getElementById('act-trigger-robot-wrap').classList.contains('hidden') &&
       document.getElementById('act-trigger-robot').checked)
-    triggered.push({ type: 'robot_issue' });
+    triggered.push({ type: 'robot_issue_call' });
   if (!document.getElementById('act-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('act-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
@@ -2370,7 +2613,7 @@ async function saveHomeVisit() {
     triggered.push({ type: 'adverse_event' });
   if (!document.getElementById('hv-trigger-robot-wrap').classList.contains('hidden') &&
       document.getElementById('hv-trigger-robot').checked)
-    triggered.push({ type: 'robot_issue' });
+    triggered.push({ type: 'robot_issue_call' });
   if (!document.getElementById('hv-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('hv-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
@@ -2481,7 +2724,7 @@ async function saveFollowupCall() {
     triggered.push({ type: 'adverse_event' });
   if (!document.getElementById('fc-trigger-robot-wrap').classList.contains('hidden') &&
       document.getElementById('fc-trigger-robot').checked)
-    triggered.push({ type: 'robot_issue' });
+    triggered.push({ type: 'robot_issue_call' });
   if (!document.getElementById('fc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('fc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
@@ -2568,7 +2811,7 @@ async function savePatientCall() {
     triggered.push({ type: 'adverse_event' });
   if (!document.getElementById('pc-trigger-robot-wrap').classList.contains('hidden') &&
       document.getElementById('pc-trigger-robot').checked)
-    triggered.push({ type: 'robot_issue' });
+    triggered.push({ type: 'robot_issue_call' });
   if (!document.getElementById('pc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('pc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });

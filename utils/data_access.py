@@ -427,6 +427,32 @@ def write_device_log(hospital_folder: str, device_id: str, user_id: str,
         print(f'Warning: could not write device log: {e}')
 
 
+def read_fault_reports(hospital_folder: str, device_type: str) -> list:
+    """Read fault reports for a device type from devices/fault_reports/<type>.json."""
+    path = _devices_path(hospital_folder) / 'fault_reports' / f'{device_type}.json'
+    if not path.exists():
+        return []
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('fault_reports', [])
+    except Exception:
+        return []
+
+
+def write_fault_reports(hospital_folder: str, device_type: str, reports: list) -> None:
+    """Write fault reports for a device type to devices/fault_reports/<type>.json."""
+    path = _devices_path(hospital_folder) / 'fault_reports' / f'{device_type}.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'fault_reports': reports}, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f'Warning: could not write fault reports: {e}')
+
+
 def create_patient_folders(hospital_folder: str, patient_id: str, group: str) -> None:
     """Create the standard subfolder structure for a new patient."""
     base = get_patients_path(hospital_folder) / patient_id

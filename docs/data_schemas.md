@@ -358,7 +358,7 @@ No extra fields beyond the base schema — `notes` may be empty.
   "notes": "",
   "date_change_reason": "",
   "triggered": [
-    { "type": "adverse_event | robot_issue | watch_record", "id": "<uuid of triggered entry>" }
+    { "type": "adverse_event | robot_issue_call | watch_record", "id": "<uuid of triggered entry>" }
   ]
 }
 ```
@@ -449,7 +449,7 @@ The `attachment` field is a relative path from the patient folder root. The PDF 
   "id": "<uuid>",
   "protocol_event_id": "training_pause_followup",
   "triggered_by": "<uuid>",
-  "triggered_by_type": "adverse_event | robot_issue",
+  "triggered_by_type": "adverse_event | robot_issue_call",
   "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
   "flagged": false,
   "notes": ""
@@ -470,7 +470,6 @@ Extra fields on `complete`:
 {
   "adverse_event":             [],
   "adverse_event_followup":    [],
-  "robot_issue":               [],
   "robot_issue_call":          [],
   "robot_issue_visit":         [],
   "resolve_robot_issue_visit": [],
@@ -480,7 +479,7 @@ Extra fields on `complete`:
 }
 ```
 
-`robot_issue`, `robot_issue_call`, `robot_issue_visit`, `resolve_robot_issue_visit` are only present for experimental patients. `adverse_event_followup` is present for all patients.
+`robot_issue_call`, `robot_issue_visit`, `resolve_robot_issue_visit` are only present for experimental patients. `adverse_event_followup` is present for all patients.
 
 `robot_fault_report` entries are **not** stored in `protocol_events.json` — they live in `devices/fault_reports/<type>.json` (see device schemas below).
 
@@ -517,49 +516,16 @@ Uses a **two-phase model**. Never created standalone — always triggered by a h
 
 - `training_blocked`: `true` if training was blocked as a result of this adverse event. When `true`, this AE's ID is included in follow-up stubs and `trainingPausedDate` is set on the patient. When `false`, the follow-up chain still runs (for monitoring) but no pause mechanics apply for this AE.
 
-**`robot_issue`** *(experimental only)*
-
-Uses the same **two-phase model** as `adverse_event`. Never created standalone. Filing this event always auto-creates a `robot_issue_call` stub.
-
-**Phase 1 — stub** (lives in `incomplete` until completed):
-```json
-{
-  "id": "<uuid>",
-  "protocol_event_id": "robot_issue",
-  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
-  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
-  "filed_at": "YYYY-MM-DDTHH:MM:SS"
-}
-```
-
-**Phase 2 — completed record** (moves from `incomplete` → `free.robot_issue`):
-```json
-{
-  "id": "<uuid>",
-  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
-  "completion_date": "YYYY-MM-DDTHH:MM",
-  "filed_at": "YYYY-MM-DDTHH:MM:SS",
-  "faults": [
-    { "device": "pluto | mars", "notes": "" }
-  ],
-  "attachment": null,
-  "attachment_caption": null
-}
-```
-
-- `faults`: list of affected devices; at least one entry required. Each entry has `device` (`"pluto"` or `"mars"`) and `notes` (therapist's observation of the fault, required). No repair assessment here — that is the engineer's responsibility.
-- On completion, a `robot_issue_call` stub is auto-created in `incomplete`.
-
 **`robot_issue_call`** *(experimental only)*
 
-Auto-created when `robot_issue` is completed. Completed by engineer/admin.
+Created directly by triggering modals (activation, home visit, patient call, follow-up call) when the "robot issue" toggle is checked. There is no intermediate `robot_issue` event. Completed by engineer/admin.
 
 **Stub** (in `incomplete`):
 ```json
 {
   "id": "<uuid>",
   "protocol_event_id": "robot_issue_call",
-  "triggered_by": { "type": "robot_issue", "id": "<uuid of robot_issue entry in free>" },
+  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid of triggering entry>" },
   "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
   "filed_at": "YYYY-MM-DDTHH:MM:SS"
 }
@@ -569,21 +535,26 @@ Auto-created when `robot_issue` is completed. Completed by engineer/admin.
 ```json
 {
   "id": "<uuid>",
-  "triggered_by": { "type": "robot_issue", "id": "<uuid>" },
+  "triggered_by": { "type": "activation | home_visit_d02 | home_visit_d03 | home_visit_d15 | patient_call | followup_call_d07 | followup_call_d21", "id": "<uuid>" },
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
-  "notes": "",
-  "outcome": "resolved | visit_required",
+  "notes": null,
+  "devices": [
+    { "device": "pluto | mars", "outcome": "resolved | visit_required", "notes": "" }
+  ],
+  "visit_required": false,
   "attachment": null,
   "attachment_caption": null
 }
 ```
 
-- `outcome`: `"resolved"` — issue closed, no further action; `"visit_required"` — auto-creates a `robot_issue_visit` stub.
+- `devices`: one entry per device the engineer explicitly discussed during the call (only checked devices). Empty list `[]` if no specific device was discussed (general call).
+- `notes`: overall call notes; required when `devices` is empty; optional otherwise.
+- `visit_required`: derived boolean — `true` if any device entry has `outcome = "visit_required"`; `false` otherwise. When `true`, a single `robot_issue_visit` stub is auto-created in `incomplete`.
 
 **`robot_issue_visit`** *(experimental only)*
 
-Created when a `robot_issue_call` outcome is `"visit_required"`. Completed by engineer/admin.
+Created when a `robot_issue_call` has `visit_required: true`. Completed by engineer/admin.
 
 **Stub** (in `incomplete`):
 ```json
@@ -620,8 +591,8 @@ Created when a `robot_issue_call` outcome is `"visit_required"`. Completed by en
 }
 ```
 
-- `device_outcomes`: one entry per device reported in the original `robot_issue` faults.
-  - `outcome`: `"repaired_on_site"` — device fixed on site, stays assigned, not marked faulty; `"swapped"` — device replaced, old device marked faulty; `"neither"` — usage issue only, no device change.
+- `device_outcomes`: one entry per device (always both Pluto and Mars) — the engineer records an outcome for every device checked during the visit.
+  - `outcome`: `"repaired_on_site"` — device fixed on site, stays assigned, not marked faulty; `"swapped"` — device replaced, old device marked faulty; `"neither"` — no action taken for this device (not relevant to visit, or usage guidance only); no device change.
   - `old_device_id`: derived server-side from the patient's current assignment at save time.
   - `new_device_id`: the replacement device ID (swapped only); `null` if no replacement available or outcome is not swapped.
   - `fault_description`: required when `outcome = "repaired_on_site"` — what was wrong.
@@ -688,7 +659,7 @@ Stores both the call details and forward references to any downstream events it 
   "reason": null,
   "notes": "",
   "triggered": [
-    { "type": "adverse_event | robot_issue | watch_record", "id": "<uuid of triggered entry>" }
+    { "type": "adverse_event | robot_issue_call | watch_record", "id": "<uuid of triggered entry>" }
   ]
 }
 ```
@@ -696,7 +667,7 @@ Stores both the call details and forward references to any downstream events it 
 - `call_type`: `"patient_initiated"` (default) or `"therapist_initiated"` (unplanned outbound call by therapist).
 - `reason`: required and non-null when `call_type = "therapist_initiated"`; documents why the call was made outside the normal protocol. `null` for patient-initiated calls.
 - `triggered`: list of downstream events created as a result of this call; empty list `[]` if none.
-- `type` in triggered entries: `"adverse_event"`, `"robot_issue"`, or `"watch_record"` (referring to a `watch_record` entry in `incomplete`/`complete`).
+- `type` in triggered entries: `"adverse_event"`, `"robot_issue_call"`, or `"watch_record"` (referring to a `watch_record` entry in `incomplete`/`complete`).
 
 **`adverse_event_followup`**
 
@@ -1046,7 +1017,9 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 |----|------|------|-----------|--------|--------------|--------------|---------|
 | `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
 | `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
-| `robot_issue` | Robot Issue | anytime | — | — | `activation` | `user` | Document any robot (Pluto/Mars) malfunction affecting therapy delivery. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
+| `robot_issue_call` | Robot Issue — Engineer Call | anytime | — | — | `activation` | `user` | Engineer call to assess a robot malfunction reported during a home visit or patient call. Created directly when the "robot issue" toggle is checked in the triggering modal — no intermediate `robot_issue` event. May spawn a `robot_issue_visit` stub. |
+| `robot_issue_visit` | Robot Issue — Engineer Visit | anytime | — | — | `activation` | `user` | Engineer site visit to inspect and repair/swap Pluto and Mars devices. Both devices always shown; engineer records outcome for each ("Neither (no action taken)" for unaffected devices). May spawn a `resolve_robot_issue_visit` stub and a training pause. |
+| `resolve_robot_issue_visit` | Robot Issue — Replacement Visit | anytime | — | — | `activation` | `user` | Engineer follow-up visit to deliver a replacement device that was unavailable during the initial visit. Clears the training pause when all outstanding stubs are resolved. |
 | `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
 | `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
 
@@ -1080,6 +1053,6 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 | `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | `user` | Six-month follow-up clinical outcome assessment. |
 | `watch_record` | Watch Record | chained | — | — | — | `user` | Track actigraph watch assignments and swaps throughout the study. First entry seeded at activation; each completion seeds the next. Can also be triggered by activation, a patient call, or a follow-up call — the existing open chain entry is claimed (stamped with `triggered_by` and `scheduled_date` set to now) rather than a new entry being created. |
 | `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
-| `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue` (exp only), and/or `watch_record` entries. |
+| `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue_call` (exp only), and/or `watch_record` entries. |
 | `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study before group assignment. |
 | `discontinuation` | Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study after group assignment. |

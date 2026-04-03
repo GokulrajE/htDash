@@ -58,7 +58,7 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 7. ✅ Activation modal (`activation`) — watch assignment removed; activation seeds open `watch_record` chain entry
 8. ✅ Prescription modals (ADL + VCG d1 and d15)
 9. ✅ Home visit + training completion modals
-10. ✅ Follow-up call modal — including triggered events (adverse_event, robot_issue, watch_record)
+10. ✅ Follow-up call modal — including triggered events (adverse_event, robot_issue_call, watch_record)
 11. ✅ Agwatch timing modal
 12. ✅ Watch record modal — chain + triggered modes, lost watch handling
 13. ⬜ Patient call modal
@@ -159,16 +159,14 @@ The script shifts the patient's entire timeline by N days (positive or negative)
   - These represent the clock times of the therapy session conducted during that home visit.
 - **AG Watch timing session bounds (hard validation):** the `adl_agwatch_timing_d03` / `vcg_agwatch_timing_d03` modals enforce that every non-null exercise `start`/`end` falls within the `session_start`/`session_end` from `home_visit_d03`. The `adl_agwatch_timing_d15` / `vcg_agwatch_timing_d15` modals apply the same hard constraint using `home_visit_d15`. The form cannot be saved if any timing falls outside the session window.
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
-- Free event types: `patient_call`, `adverse_event`, `adverse_event_followup`, `robot_issue` (experimental only), `robot_issue_call` (experimental only), `robot_issue_visit` (experimental only), `resolve_robot_issue_visit` (experimental only), `watch_record`, `discontinuation`. `technical_fault` was renamed to `robot_issue` — do not use the old name anywhere.
-- **Triggered events:** `adverse_event`, `robot_issue`, and `watch_record` can only be created as triggered events — never standalone. They are triggered by: `activation`, `home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `patient_call`, `followup_call_d07`, or `followup_call_d21`. `robot_issue` is experimental-only and hidden for control patients in all modals.
+- Free event types: `patient_call`, `adverse_event`, `adverse_event_followup`, `robot_issue_call` (experimental only), `robot_issue_visit` (experimental only), `resolve_robot_issue_visit` (experimental only), `watch_record`, `discontinuation`. There is no standalone `robot_issue` event — the chain starts directly at `robot_issue_call`.
+- **Triggered events:** `adverse_event`, `robot_issue_call`, and `watch_record` can only be created as triggered events — never standalone. They are triggered by: `activation`, `home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `patient_call`, `followup_call_d07`, or `followup_call_d21`. `robot_issue_call` is experimental-only and hidden for control patients in all modals.
   - Bidirectional references: the triggering event stores `triggered: [{type, id}, ...]`; the spawned event stores `triggered_by: {type, id}`.
   - **`adverse_event` uses a two-phase model:**
     1. **Trigger phase** (in the triggering modal): checking the toggle shows an info note only — no sub-form fields. On save, a stub entry is appended to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, and `triggered_by`. The stub appears immediately as an overdue event.
     2. **Complete phase** (via standalone modal): the therapist opens the `adverse-event-modal`, fills in description/action, and saves. The stub moves from `incomplete` to `free.adverse_event`.
-  - **`robot_issue` uses a two-phase model and auto-creates a chain:**
-    1. **Trigger phase** (in the triggering modal): checking the toggle shows an info note only — no sub-form fields. On save, a stub is appended to `incomplete` with `protocol_event_id = "robot_issue"`, `scheduled_date = [now, now]`, and `triggered_by`.
-    2. **Complete phase** (via standalone modal): the engineer opens `robot-issue-modal`, selects affected devices and adds therapist-observed notes. On save, the stub moves to `free.robot_issue` and a `robot_issue_call` stub is auto-created in `incomplete`.
-  - **`robot_issue` chain** (engineer-owned, experimental only): `robot_issue` → `robot_issue_call` → (if visit needed) `robot_issue_visit` → (if device taken back with no replacement) `resolve_robot_issue_visit`. Each step auto-creates the next stub. Training pauses only when a device is taken back without a replacement in `robot_issue_visit`; pause clears when all `resolve_robot_issue_visit` stubs are resolved.
+  - **`robot_issue_call` is created directly by the triggering modal** — no intermediate `robot_issue` event. Checking the "robot issue" toggle appends a `robot_issue_call` stub to `incomplete` with `triggered_by` pointing to the triggering event. `scheduled_date = [now, now]`.
+  - **Robot issue chain** (engineer-owned, experimental only): `robot_issue_call` → (if visit needed) `robot_issue_visit` → (if device taken back with no replacement) `resolve_robot_issue_visit`. Each step auto-creates the next stub. Training pauses only when a device is taken back without a replacement in `robot_issue_visit`; pause clears when all `resolve_robot_issue_visit` stubs are resolved.
   - **`robot_fault_report`** (engineering only, not visible to therapist): created by `robot_issue_visit` for `"repaired_on_site"` and `"swapped"` outcomes. Stored in `devices/fault_reports/<type>.json`, not in `protocol_events.json`. `"repaired_on_site"` reports are immediately complete; `"swapped"` reports have `resolution: null` until `robot_fault_resolution` is implemented. The device's `faulty` flag is only cleared when `resolution` is filled.
   - For `watch_record` triggered by any of the above: the existing open `incomplete` chain entry is **claimed** (no new entry created). `triggered_by` is stamped on the `incomplete` entry at save time. `scheduled_date` is also updated to `[now, now]` so it appears immediately as overdue.
   - Watch record trigger toggle is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
@@ -268,7 +266,9 @@ Fill in ✅ / ⬜. Caption is always included when attachment is ✅.
 | `a2_assessment` | ⬜ |
 | `patient_call` | ✅ |
 | `adverse_event` | ✅ |
-| `robot_issue` | ✅ |
+| `robot_issue_call` | ✅ |
+| `robot_issue_visit` | ✅ |
+| `resolve_robot_issue_visit` | ✅ |
 | `discontinuation` | ✅ |
 
 ---
@@ -307,7 +307,7 @@ Both event APIs must compute `blocked_by` using the same logic (depends_on entri
 | `routes/dashboard.py` | `GET /api/dashboard/events` | Cross-patient events |
 
 ### Protocol event openers (patient detail page)
-Every protocol event that has a modal must be listed in `EVENT_OPENERS` in `patient_detail.js`. When a new modal is implemented, add the entry. Currently registered: `exp_device_install`, `activation`, `discontinuation_reminder`, `adl_prescription_d01/d15`, `vcg_prescription_d01/d15`, `prescription_printout_d01/d15`, `home_visit_d02/d03/d15`, `followup_call_d07/d21`, `training_completion_d29`, `adl_agwatch_timing_d03/d15`, `vcg_agwatch_timing_d03/d15`, `watch_record`.
+Every protocol event that has a modal must be listed in `EVENT_OPENERS` in `patient_detail.js`. When a new modal is implemented, add the entry. Currently registered: `exp_device_install`, `activation`, `discontinuation_reminder`, `adl_prescription_d01/d15`, `vcg_prescription_d01/d15`, `prescription_printout_d01/d15`, `home_visit_d02/d03/d15`, `followup_call_d07/d21`, `training_completion_d29`, `adl_agwatch_timing_d03/d15`, `vcg_agwatch_timing_d03/d15`, `watch_record`, `adverse_event`, `robot_issue_call`, `robot_issue_visit`, `adverse_event_followup`, `resolve_robot_issue_visit`.
 
 ### Synthetic events
 Some events are not stored in `protocol_events.json` but injected at query time by both event APIs. These require matching `EVENT_OPENERS` entries in `patient_detail.js`.

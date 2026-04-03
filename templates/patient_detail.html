@@ -996,67 +996,66 @@
   </div>
 </div>
 
-<!-- ── Robot Issue modal ────────────────────────────────────────────────────── -->
-<div id="robot-issue-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+<!-- ── Robot Issue Call modal ─────────────────────────────────────────────── -->
+<div id="robot-issue-call-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Robot Issue</h3>
-      <button onclick="hideModal('robot-issue-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+      <h3 class="text-xl font-bold text-slate-800">Robot Issue — Engineer Call</h3>
+      <button onclick="hideModal('robot-issue-call-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
-      <div id="ri-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
+      <div id="ric-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Event Date <span class="text-red-500">*</span></label>
-        <input type="datetime-local" id="ri-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <label class="block text-sm font-medium text-slate-700 mb-1">Call Date/Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="ric-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
       </div>
-
-      <!-- Affected devices -->
+      <!-- Per-device sections (built by JS) -->
+      <div id="ric-device-sections" class="space-y-3"></div>
       <div>
-        <p class="text-sm font-medium text-slate-700 mb-2">Affected devices <span class="text-red-500">*</span> <span class="font-normal text-slate-400">(select at least one)</span></p>
-        <div class="space-y-3">
-          <!-- Pluto -->
-          <div>
-            <label class="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" id="ri-pluto-on" onchange="_riToggleDevice('pluto')" class="w-4 h-4 rounded border-slate-300">
-              <span class="text-sm font-medium text-slate-700">Pluto <span id="ri-pluto-current-label" class="font-normal text-slate-400 text-xs"></span></span>
-            </label>
-            <div id="ri-pluto-form" class="hidden mt-2 ml-6 space-y-2 p-3 bg-orange-50 rounded-xl border border-orange-100">
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
-                <textarea id="ri-pluto-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none" placeholder="Describe the fault and what happened…"></textarea>
-              </div>
-              <label class="flex items-center gap-2 cursor-pointer select-none">
-                <input type="checkbox" id="ri-pluto-repair" class="w-4 h-4 rounded border-slate-300">
-                <span class="text-sm text-slate-700">Requires repair <span class="text-slate-400 font-normal">(device will be taken away — training paused)</span></span>
-              </label>
-            </div>
-          </div>
-          <!-- Mars -->
-          <div>
-            <label class="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" id="ri-mars-on" onchange="_riToggleDevice('mars')" class="w-4 h-4 rounded border-slate-300">
-              <span class="text-sm font-medium text-slate-700">Mars <span id="ri-mars-current-label" class="font-normal text-slate-400 text-xs"></span></span>
-            </label>
-            <div id="ri-mars-form" class="hidden mt-2 ml-6 space-y-2 p-3 bg-orange-50 rounded-xl border border-orange-100">
-              <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
-                <textarea id="ri-mars-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none" placeholder="Describe the fault and what happened…"></textarea>
-              </div>
-              <label class="flex items-center gap-2 cursor-pointer select-none">
-                <input type="checkbox" id="ri-mars-repair" class="w-4 h-4 rounded border-slate-300">
-                <span class="text-sm text-slate-700">Requires repair <span class="text-slate-400 font-normal">(device will be taken away — training paused)</span></span>
-              </label>
-            </div>
-          </div>
-        </div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">
+          Overall notes <span id="ric-notes-required-badge" class="text-red-500">*</span>
+          <span id="ric-notes-optional-badge" class="text-slate-400 font-normal hidden">(optional)</span>
+        </label>
+        <textarea id="ric-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Overall call notes…"></textarea>
       </div>
-      {{ attachment_section('ri') }}
+      {{ attachment_section('ric') }}
     </div>
     <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
-      <p id="ri-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <p id="ric-error" class="text-sm text-red-500 hidden mb-3"></p>
       <div class="flex gap-3">
-        <button type="button" onclick="hideModal('robot-issue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
-        <button id="ri-save" type="button" onclick="saveRobotIssue()" class="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700">Save</button>
+        <button type="button" onclick="hideModal('robot-issue-call-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button id="ric-save" type="button" onclick="saveRobotIssueCall()" class="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Robot Issue Visit modal ────────────────────────────────────────────── -->
+<div id="robot-issue-visit-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
+    <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+      <h3 class="text-xl font-bold text-slate-800">Robot Issue — Engineer Visit</h3>
+      <button onclick="hideModal('robot-issue-visit-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
+      <div id="riv-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Visit Date/Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="riv-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      </div>
+      <!-- Per-device outcome rows (built by JS) -->
+      <div id="riv-device-rows" class="space-y-4"></div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Additional Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <textarea id="riv-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Overall visit notes…"></textarea>
+      </div>
+      {{ attachment_section('riv') }}
+    </div>
+    <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
+      <p id="riv-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <div class="flex gap-3">
+        <button type="button" onclick="hideModal('robot-issue-visit-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button id="riv-save" type="button" onclick="saveRobotIssueVisit()" class="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700">Save</button>
       </div>
     </div>
   </div>
@@ -1101,33 +1100,37 @@
   </div>
 </div>
 
-<!-- ── Resolve Robot Issue modal ────────────────────────────────────────────── -->
-<div id="resolve-robot-issue-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+<!-- ── Resolve Robot Issue Visit modal ───────────────────────────────────────── -->
+<div id="resolve-robot-issue-visit-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Resolve Robot Issue</h3>
-      <button onclick="hideModal('resolve-robot-issue-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+      <h3 class="text-xl font-bold text-slate-800">Robot Issue — Replacement Visit</h3>
+      <button onclick="hideModal('resolve-robot-issue-visit-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
-      <div id="rri-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
-      <!-- Per-device rows populated by JS -->
-      <div id="rri-device-rows" class="space-y-3"></div>
+      <div id="rriv-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Visit Date/Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="rriv-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      </div>
+      <!-- Per taken-back device rows (built by JS) -->
+      <div id="rriv-device-rows" class="space-y-3"></div>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Can resume from <span class="text-red-500">*</span></label>
-        <p class="text-xs text-slate-500 mb-1">Earliest date training can resume after repair.</p>
-        <input type="date" id="rri-resume-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <p class="text-xs text-slate-500 mb-1">Earliest date training can resume.</p>
+        <input type="date" id="rriv-resume-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
       </div>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
-        <textarea id="rri-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Notes about how the issue was resolved…"></textarea>
+        <textarea id="rriv-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Notes about the replacement visit…"></textarea>
       </div>
-      {{ attachment_section('rri') }}
+      {{ attachment_section('rriv') }}
     </div>
     <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
-      <p id="rri-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <p id="rriv-error" class="text-sm text-red-500 hidden mb-3"></p>
       <div class="flex gap-3">
-        <button type="button" onclick="hideModal('resolve-robot-issue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
-        <button id="rri-save" type="button" onclick="saveResolveRobotIssue()" class="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700">Save</button>
+        <button type="button" onclick="hideModal('resolve-robot-issue-visit-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button id="rriv-save" type="button" onclick="saveResolveRobotIssueVisit()" class="flex-1 px-4 py-3 bg-orange-600 text-white rounded-xl font-medium hover:bg-orange-700">Save</button>
       </div>
     </div>
   </div>

@@ -255,7 +255,8 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Update `<homer_id>.json` with `activationDate` and `vcgGroup` (control patients only)
   - Compute and fill `scheduled_date` for all `reference: "activation"` entries in `protocol_events.json`
   - Seed first `watch_record` entry in `incomplete` with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`
-  - For each triggered `adverse_event` / `robot_issue`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"` / `"robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "activation", id: <activation_entry_id>}` — stub is completed later via the standalone modal
+  - For triggered `adverse_event`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "activation", id: <activation_entry_id>}` — stub is completed later via the standalone modal
+  - For triggered robot issue: append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "activation", id: <activation_entry_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
   - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
 - Log message: `Patient activated`
 - UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` (no `href`) with a muted lock icon next to the event name and an amber badge on the right reading "Needs: \<blocking event name\>" in place of the date/urgency label
@@ -406,7 +407,8 @@ Each action is defined once here. Pages above reference which actions apply to t
   - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only), and/or watch record as a consequence of this visit. Each toggle shows an info note only — no sub-form fields. Watch Record toggle only shown if at least one watch is currently assigned.
 - Server actions:
   - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`, `triggered: [...]`
-  - For each triggered `adverse_event` / `robot_issue`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"` / `"robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}` — stub is completed later via the standalone modal
+  - For triggered `adverse_event`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}` — stub is completed later via the standalone modal
+  - For triggered robot issue: append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
   - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
 - Log message: `Home visit recorded — Day <N>`
 
@@ -426,7 +428,8 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Server actions:
   - Save uploaded PDF to `attachments/followup_call_d07.pdf` (or `d21`) in the patient folder, overwriting if exists
   - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `duration_minutes`, `attachment`, `notes`, `triggered: [...]`; if date differs from scheduled, also adds `date_change_reason`
-  - For each triggered `adverse_event` / `robot_issue`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"` / `"robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "<followup_call_event_id>", id: <entry_id>}` — stub is completed later via the standalone modal
+  - For triggered `adverse_event`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "<followup_call_event_id>", id: <entry_id>}` — stub is completed later via the standalone modal
+  - For triggered robot issue: append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "<followup_call_event_id>", id: <entry_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
   - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
 - Log message: `Follow-up call recorded — Day <N>`
 
@@ -450,7 +453,7 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Append `patient_call` entry to `free.patient_call` in `protocol_events.json`, with `call_type`, `reason` (if therapist initiated), `triggered: [...]`
   - For each enabled toggle:
     - **Adverse event**: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "patient_call", id: <call_id>}` — stub is completed later via the standalone `adverse-event-modal`
-    - **Robot issue** (exp only): append a stub to `incomplete` with `protocol_event_id = "robot_issue"`, `scheduled_date = [now, now]`, `triggered_by: {type: "patient_call", id: <call_id>}` — stub is completed later via the standalone `robot-issue-modal`
+    - **Robot issue** (exp only): append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "patient_call", id: <call_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
     - **Watch record**: stamp `triggered_by: {type: "patient_call", id: <call_id>}` onto the existing open `watch_record` entry in `incomplete`, and update its `scheduled_date` to `[now, now]` — no new entry is created; the entry immediately becomes overdue; the therapist completes it via the Watch Record modal
 - Log message: `Patient call recorded`; additional log entries for each triggered event (e.g. `Adverse event stub created`, `Robot issue stub created`, `Watch record triggered`)
 
@@ -541,39 +544,24 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ---
 
-### Robot Issue (`robot_issue`)
-- Trigger: `robot_issue` event row on patient detail — only appears when a stub exists in `incomplete` (created by a triggering event)
-- Allowed users: `admin`, `engineer`
-- Experimental patients only — hidden for control patients
-- Modal: `robot-issue-modal`
-  - **Context banner** (read-only): "Triggered by: \<triggering event name\>"
-  - Event Date (datetime, required; cannot be in the future)
-  - **Affected devices** section — at least one device must be checked:
-    - **Pluto** (checkbox): if checked, reveals Notes (textarea, required) — describe the observed fault
-    - **Mars** (checkbox): same as Pluto
-  - Attachment (optional PDF)
-- Server actions:
-  - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.robot_issue` with `completion_date`, `filed_at`, `faults` (per device: `device`, `notes`), `triggered_by` (carried from stub), `attachment` (if uploaded)
-  - Auto-create a `robot_issue_call` stub in `incomplete` with `triggered_by: {type: "robot_issue", id: <event_id>}`, `scheduled_date: [now, now]`
-- Log message: `Robot issue recorded`
-
----
-
 ### Robot Issue — Engineer Call (`robot_issue_call`)
-- Trigger: `robot_issue_call` event row on patient detail — only appears when a stub exists in `incomplete` (auto-created when a `robot_issue` is completed)
+- Trigger: `robot_issue_call` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created directly by triggering modals (activation, home visit, patient call, follow-up call) when the "robot issue" toggle is checked. There is no intermediate `robot_issue` event.
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
 - Modal: `robot-issue-call-modal`
-  - **Context banner** (read-only): "Robot issue filed on \<date\> — \<devices affected\>"
+  - **Context banner** (read-only): "Robot issue reported during \<triggering event name\> on \<date\>"
   - Call Date/Time (datetime, required; cannot be in the future)
-  - Notes (textarea, required) — what was discussed and what was decided
-  - **Outcome** (radio, required): Resolved by call / Visit required
+  - **Per device** (Pluto and Mars, each with a checkbox):
+    - If checked, reveals inline sub-form:
+      - **Outcome** (radio, required): Resolved by call / Visit required
+      - **Notes** (textarea, required) — what was discussed for this device
+  - **Overall notes** (textarea) — required if neither device checkbox is checked; optional otherwise
   - Attachment (optional PDF)
+- **Visit required** is derived: if any checked device has outcome = `visit_required`, a `robot_issue_visit` stub is created. If no device is checked (general call), visit is never required.
 - Server actions:
   - Remove the stub from `incomplete`
-  - Append completed entry to `free.robot_issue_call` with `completion_date`, `filed_at`, `notes`, `outcome`, `triggered_by`, `attachment`
-  - If `outcome = "visit_required"`: create a `robot_issue_visit` stub in `incomplete` with `triggered_by: {type: "robot_issue_call", id: <event_id>}`, `scheduled_date: [now, now]`
+  - Append completed entry to `free.robot_issue_call` with `completion_date`, `filed_at`, `notes`, `devices` (per checked device: `device`, `outcome`, `notes`), `visit_required` (derived), `triggered_by`, `attachment`
+  - If `visit_required`: create one `robot_issue_visit` stub in `incomplete` with `triggered_by: {type: "robot_issue_call", id: <event_id>}`, `scheduled_date: [now, now]`
 - Log message: `Robot issue call recorded`; if visit required: also `Robot issue visit required`
 
 ---
@@ -583,9 +571,9 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
 - Modal: `robot-issue-visit-modal`
-  - **Context banner** (read-only): "Robot issue call on \<date\> — \<devices affected\>"
+  - **Context banner** (read-only): "Robot issue call on \<date\>"
   - Visit Date/Time (datetime, required; cannot be in the future)
-  - **Per affected device** (one section per device reported in the original robot issue):
+  - **Per device — both Pluto and Mars always shown.** The engineer must record an outcome for every device. If nothing was done for a device (e.g. only one device was relevant to the visit), select **Neither** and explain in notes.
     - Device name and current device ID (read-only labels)
     - **Outcome** (radio, required):
       - **Repaired on site** — device fixed during the visit; stays assigned; no inventory change:
@@ -594,8 +582,8 @@ Each action is defined once here. Pages above reference which actions apply to t
       - **Swapped** — device replaced on site:
         - New device (dropdown): available working devices + null ("No device available")
         - Notes (textarea, required) — reason for swap; compulsory even when a replacement is available
-      - **Neither** — usage issue, no device fault:
-        - Notes (textarea, required) — explain the usage issue and what was done
+      - **Neither (no action taken)** — nothing done for this device (not relevant to visit, or usage guidance only):
+        - Notes (textarea, required) — explain why no action was taken (e.g. "Only Mars was relevant; Pluto not inspected")
   - Additional notes (textarea, optional)
   - Attachment (optional PDF)
 - Server actions:
