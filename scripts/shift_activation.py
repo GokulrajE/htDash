@@ -152,6 +152,21 @@ def shift_activation(homer_id: str, days: int, hospital: str) -> None:
     patient['enrollDate']        = new_enroll.strftime(FMT)
     patient['a0CompletionDate']  = new_a0.strftime(FMT)
     patient['activationDate']    = new_activation.strftime(FMT)
+
+    # Shift all other date fields in patient meta that are set
+    for field in ('trainingCompletionDate', 'trainingPausedDate', 'brokenProtocolDate',
+                  'a1CompletionDate', 'a2CompletionDate',
+                  'discontinuationDate', 'preDiscontinuationDate'):
+        if patient.get(field):
+            patient[field] = (parse_dt(patient[field]) + n_delta).strftime(FMT)
+
+    # Shift pauseHistory epoch start/end datetimes
+    for epoch in patient.get('pauseHistory', []):
+        if epoch.get('start'):
+            epoch['start'] = shift_dt(epoch['start'], n_delta)
+        if epoch.get('end'):
+            epoch['end'] = shift_dt(epoch['end'], n_delta)
+
     write_patient_meta(hospital, homer_id, patient)
     print(f"enrollDate:       {old_enroll}  →  {patient['enrollDate']}")
     print(f"a0CompletionDate: {old_a0}  →  {patient['a0CompletionDate']}")

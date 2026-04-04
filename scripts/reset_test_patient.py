@@ -143,6 +143,7 @@ def reset_patient(defn: dict, a0_date: str) -> None:
         'a1CompletionDate':       None,
         'a2CompletionDate':       None,
         'cumulativePauseDays':    0,
+        'pauseHistory':           [],
         'vcgGroup':               None,
         'agWatchRightID':         None,
         'agWatchLeftID':          None,

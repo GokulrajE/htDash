@@ -218,7 +218,137 @@ function renderOverview(p) {
   const robotBtn = document.getElementById('tab-btn-robot');
   if (robotBtn) robotBtn.classList.toggle('hidden', p.group !== 'experimental');
 
+  renderPauseBanner(p);
+  renderPauseHistoryTable(p);
   renderActions(p);
+}
+
+// ── Pause banner ──────────────────────────────────────────────────────────────
+
+function renderPauseBanner(p) {
+  const banner = document.getElementById('pause-banner');
+  if (!banner) return;
+
+  if (p.status !== 'paused') {
+    banner.classList.add('hidden');
+    return;
+  }
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  let daysThisPeriod = 0;
+  if (p.trainingPausedDate) {
+    const since = new Date(p.trainingPausedDate); since.setHours(0,0,0,0);
+    daysThisPeriod = Math.max(0, Math.floor((today - since) / 86400000));
+  }
+  const priorDays = p.cumulativePauseDays || 0;
+  const totalDays = priorDays + daysThisPeriod;
+  const critical  = totalDays >= 8;
+
+  document.getElementById('pause-since').textContent      = p.trainingPausedDate ? fmtDate(p.trainingPausedDate) : '—';
+  document.getElementById('pause-days-label').textContent = totalDays;
+  document.getElementById('pause-days-label').className   = `font-semibold ${critical ? 'text-red-700' : 'text-amber-800'}`;
+  document.getElementById('pause-prior-days').textContent   = priorDays;
+  document.getElementById('pause-current-days').textContent = daysThisPeriod;
+
+  // Segmented progress bar — one slice per closed epoch + one for current open epoch
+  const barContainer = document.getElementById('pause-bar-container');
+  if (barContainer) {
+    const history   = p.pauseHistory || [];
+    const maxDays   = 10;
+    // Palette for closed epochs (cycles if > colours available)
+    const palette   = ['bg-amber-500', 'bg-yellow-500', 'bg-amber-600', 'bg-yellow-600'];
+    const segments  = [];
+
+    history.forEach((epoch, i) => {
+      const d = epoch.days ?? 0;
+      if (d <= 0) return;
+      const pct = Math.min(100, Math.round(d / maxDays * 100));
+      segments.push(`<div class="h-2 transition-all ${palette[i % palette.length]}" style="width:${pct}%"></div>`);
+    });
+
+    if (daysThisPeriod > 0) {
+      const pct = Math.min(100, Math.round(daysThisPeriod / maxDays * 100));
+      const cls = critical ? 'bg-red-400' : 'bg-orange-300';
+      segments.push(`<div class="h-2 transition-all ${cls}" style="width:${pct}%"></div>`);
+    }
+
+    barContainer.innerHTML = segments.join('');
+    barContainer.className = `w-full rounded-full h-2 flex overflow-hidden ${critical ? 'bg-red-100' : 'bg-amber-100'}`;
+  }
+
+  if (critical) {
+    banner.className = banner.className.replace('bg-amber-50 border-amber-300', 'bg-red-50 border-red-300');
+  } else {
+    banner.className = banner.className.replace('bg-red-50 border-red-300', 'bg-amber-50 border-amber-300');
+  }
+
+  _renderPauseReasonPills();
+  banner.classList.remove('hidden');
+}
+
+function _renderPauseReasonPills() {
+  const pillsEl = document.getElementById('pause-reason-pills');
+  if (!pillsEl) return;
+
+  const pills = [];
+  const cache = eventsCache || [];
+  const hasRobotIssue = cache.some(e => e.protocol_event_id === 'resolve_robot_issue_visit');
+  const hasAE         = cache.some(e => e.protocol_event_id === 'adverse_event_followup');
+
+  if (hasRobotIssue)
+    pills.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200"><i class="fas fa-robot text-[10px]"></i>Robot issue pending</span>`);
+  if (hasAE)
+    pills.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200"><i class="fas fa-exclamation-circle text-[10px]"></i>Adverse event pending</span>`);
+  if (!pills.length && cache.length)
+    pills.push(`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">Reason unknown</span>`);
+
+  pillsEl.innerHTML = pills.join('');
+}
+
+function renderPauseHistoryTable(p) {
+  const section = document.getElementById('pause-history-section');
+  const content = document.getElementById('pause-history-content');
+  if (!section || !content) return;
+
+  const history = p.pauseHistory || [];
+  if (!history.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+
+  const _TYPE_LABEL = { robot_issue: 'Robot issue', adverse_event: 'Adverse event' };
+
+  const rows = history.map((epoch, i) => {
+    const epochNum  = i + 1;
+    const startStr  = epoch.start ? fmtDate(epoch.start) : '—';
+    const endStr    = epoch.end   ? fmtDate(epoch.end)   : '<span class="text-amber-600 font-medium">Ongoing</span>';
+    const daysStr   = epoch.days != null ? `${epoch.days}d` : '<span class="text-amber-600 font-medium">—</span>';
+    const reasons   = (epoch.reasons || []).map(r => {
+      const label = _TYPE_LABEL[r.type] || r.type;
+      return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200 font-medium">${label}</span>`;
+    }).join(' ');
+
+    return `
+      <tr class="${i % 2 === 0 ? '' : 'bg-slate-50'}">
+        <td class="py-1.5 px-3 text-xs text-slate-500 font-medium">Epoch ${epochNum}</td>
+        <td class="py-1.5 px-3 text-xs text-slate-700">${startStr}</td>
+        <td class="py-1.5 px-3 text-xs text-slate-700">${endStr}</td>
+        <td class="py-1.5 px-3 text-xs text-slate-700">${daysStr}</td>
+        <td class="py-1.5 px-3 text-xs">${reasons || '<span class="text-slate-400">—</span>'}</td>
+      </tr>`;
+  }).join('');
+
+  content.innerHTML = `
+    <table class="w-full text-left">
+      <thead>
+        <tr class="border-b border-slate-100">
+          <th class="pb-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide"></th>
+          <th class="pb-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide">Start</th>
+          <th class="pb-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide">End</th>
+          <th class="pb-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide">Days</th>
+          <th class="pb-2 px-3 text-xs font-semibold text-slate-400 uppercase tracking-wide">Reasons</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 // ── Action buttons ────────────────────────────────────────────────────────────
@@ -324,12 +454,17 @@ async function loadPatientEvents() {
   const overdueEl   = document.getElementById('patient-overdue-events');
   const upcomingEl  = document.getElementById('patient-upcoming-events');
   try {
-    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/events`);
-    if (!res.ok) throw new Error('Failed to load events');
-    const { overdue, upcoming, complete } = await res.json();
+    const [evRes, patRes] = await Promise.all([
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/events`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}`),
+    ]);
+    if (!evRes.ok) throw new Error('Failed to load events');
+    const { overdue, upcoming, complete } = await evRes.json();
+    if (patRes.ok) patientData = await patRes.json();
     eventsCache = [...overdue, ...upcoming];
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
+    _renderPauseReasonPills();
     renderTimelineTab();
     renderAdverseEventsTab();
     renderWatchRecordsTab();
@@ -415,8 +550,10 @@ const _FIELD_LABELS = {
   triggered:           'Triggered',
   faults:              'Faults',
   devices:             'Devices',
-  device_outcomes:     'Device Outcomes',
-  visit_required:      'Visit Required',
+  device_outcomes:      'Device Outcomes',
+  device_replacements:  'Device Replacements',
+  other_device_outcomes: 'Other Device Outcomes',
+  visit_required:       'Visit Required',
   paused:              'Paused',
   notes:               'Notes',
 };
@@ -457,24 +594,32 @@ function _timelineExtraFields(ev) {
         const outcome = d.outcome === 'visit_required' ? 'Visit required' : 'Resolved';
         return d.notes ? `${dev}: ${outcome} (${d.notes})` : `${dev}: ${outcome}`;
       }).join('; ');
-    } else if (key === 'device_outcomes' && Array.isArray(val)) {
+    } else if ((key === 'device_outcomes' || key === 'other_device_outcomes') && Array.isArray(val)) {
       if (!val.length) continue;
       display = val.map(d => {
         const dev = (d.device || '').charAt(0).toUpperCase() + (d.device || '').slice(1);
         if (d.outcome === 'repaired_on_site') {
-          const parts = [];
-          if (d.fault_description)  parts.push(`fault: ${d.fault_description}`);
-          if (d.repair_description) parts.push(`repair: ${d.repair_description}`);
-          return parts.length ? `${dev}: Repaired (${parts.join('; ')})` : `${dev}: Repaired`;
+          return d.notes ? `${dev}: Repaired (${d.notes})` : `${dev}: Repaired`;
         } else if (d.outcome === 'swapped') {
-          const from = d.old_device_id || '—';
-          const to   = d.new_device_id || 'none';
-          const note = d.notes ? ` — ${d.notes}` : '';
-          return `${dev}: Swapped ${from} → ${to}${note}`;
+          const from     = d.old_device_id || '—';
+          const to       = d.new_device_id || 'none';
+          const swapDesc = d.swap_type === 'fault_driven' ? 'fault-driven' : d.swap_type === 'preventive' ? 'preventive' : '';
+          const note     = d.notes ? ` — ${d.notes}` : '';
+          const typeTag  = swapDesc ? ` [${swapDesc}]` : '';
+          return `${dev}: Swapped ${from} → ${to}${typeTag}${note}`;
         } else if (d.outcome === 'neither') {
           return d.notes ? `${dev}: No action (${d.notes})` : `${dev}: No action`;
         }
         return `${dev}: ${d.outcome || '—'}`;
+      }).join('; ');
+    } else if (key === 'device_replacements' && Array.isArray(val)) {
+      if (!val.length) continue;
+      display = val.map(d => {
+        const dev  = (d.device || '').charAt(0).toUpperCase() + (d.device || '').slice(1);
+        const from = d.old_device_id || '—';
+        const to   = d.new_device_id || 'none';
+        const note = d.notes ? ` (${d.notes})` : '';
+        return `${dev}: ${from} → ${to}${note}`;
       }).join('; ');
     } else if (key === 'duration_minutes') {
       display = `${val} min`;
@@ -580,20 +725,65 @@ function _syntheticPatientEvents() {
   return synthetic;
 }
 
+function _deriveTransitions(patient, events) {
+  const map = new Map();
+  const pauseHistory = patient.pauseHistory || [];
+
+  // Events that triggered a pause — id in pauseHistory[*].reasons[*].event_id
+  const pausingIds = new Set();
+  for (const epoch of pauseHistory) {
+    for (const reason of (epoch.reasons || [])) {
+      if (reason.event_id) pausingIds.add(reason.event_id);
+    }
+  }
+
+  // Events that cleared a pause — id matches a closed pauseHistory[*].end_event_id
+  const resumingIds = new Set(
+    pauseHistory.filter(e => e.end_event_id).map(e => e.end_event_id)
+  );
+
+  const brokenDate = (patient.brokenProtocolDate || '').slice(0, 10);
+  const discDate   = (patient.discontinuationDate || '').slice(0, 10);
+
+  for (const ev of events) {
+    if (ev._synthetic || !ev.id) continue;
+    if (pausingIds.has(ev.id)) {
+      map.set(ev.id, 'paused');
+    } else if (resumingIds.has(ev.id)) {
+      map.set(ev.id, 'resumed');
+    } else if (brokenDate && (ev.completion_date || '').slice(0, 10) === brokenDate) {
+      map.set(ev.id, 'broken_protocol');
+    } else if (discDate && (ev.completion_date || '').slice(0, 10) === discDate) {
+      map.set(ev.id, 'discontinued');
+    }
+  }
+  return map;
+}
+
+function _transitionBadgeHtml(badge) {
+  const cfg = {
+    paused:          { label: 'Training paused', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
+    resumed:         { label: 'Training resumed', cls: 'bg-green-100 text-green-700 border-green-200' },
+    broken_protocol: { label: 'Protocol broken',  cls: 'bg-red-100 text-red-700 border-red-200' },
+    discontinued:    { label: 'Discontinued',      cls: 'bg-slate-100 text-slate-600 border-slate-200' },
+  }[badge];
+  if (!cfg) return '';
+  return `<span class="inline-block mt-2 px-2 py-0.5 rounded-full text-xs font-medium border ${cfg.cls}">${cfg.label}</span>`;
+}
+
 function renderTimelineTab() {
   const container = document.getElementById('timeline-tab-content');
   if (!container) return;
 
   // Merge protocol events with synthetic patient milestones, sort most-recent first
-  const all = [...(  _completeEventsCache || []), ..._syntheticPatientEvents()];
+  const all = [...(_completeEventsCache || []), ..._syntheticPatientEvents()];
   all.sort((a, b) => {
     const ta = a.filed_at || a.completion_date || '';
     const tb = b.filed_at || b.completion_date || '';
     return tb.localeCompare(ta);
   });
 
-  const events = all;
-  if (!events.length) {
+  if (!all.length) {
     container.innerHTML = `
       <div class="flex flex-col items-center justify-center py-16 text-slate-300">
         <i class="fas fa-stream text-3xl mb-3"></i>
@@ -601,8 +791,11 @@ function renderTimelineTab() {
       </div>`;
     return;
   }
-  const items = events.map((ev, i) => {
-    const isLast   = i === events.length - 1;
+
+  const transitions = _deriveTransitions(patientData || {}, all);
+
+  const items = all.map((ev, i) => {
+    const isLast   = i === all.length - 1;
     const schedStr = _fmtDate(ev.scheduled_date);
     const compStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
     const filedStr = ev.filed_at ? _fmtDateTime(ev.filed_at) : '';
@@ -611,15 +804,15 @@ function renderTimelineTab() {
     const dayNum   = _dayNumber(ev.completion_date);
     const dayLabel = dayNum !== null ? `Day ${dayNum}` : null;
     const isSynthetic = !!ev._synthetic;
-    const circleCls = isSynthetic
-      ? 'bg-blue-500 ring-blue-300'
-      : 'bg-green-500 ring-green-300';
+    const circleCls   = isSynthetic ? 'bg-blue-500 ring-blue-300' : 'bg-green-500 ring-green-300';
+    const badge       = !isSynthetic ? _transitionBadgeHtml(transitions.get(ev.id)) : '';
     return `
       <div class="grid gap-x-4 px-2 -mx-2 ${rowBg}" style="grid-template-columns:1fr 20px 1fr">
         <div class="text-right pb-${isLast ? '2' : '7'} pt-2">
           <p class="text-sm font-semibold text-slate-800">${ev.event_name}</p>
           ${!isSynthetic ? `<p class="text-xs text-slate-400 mt-0.5">Scheduled: ${schedStr}</p>` : ''}
           ${dayLabel ? `<p class="text-sm font-semibold text-indigo-500 mt-1">${dayLabel}</p>` : ''}
+          ${badge}
         </div>
         <div class="flex flex-col items-center pt-2">
           <div class="w-3 h-3 rounded-full ${circleCls} border-2 border-white ring-1 z-10 flex-shrink-0"></div>
@@ -1220,20 +1413,27 @@ function _buildRivDeviceRows() {
       <!-- Repaired on site fields -->
       <div id="riv-${dev.device_type}-repaired-fields" class="hidden space-y-2 pl-2 border-l-2 border-orange-200">
         <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
-          <textarea id="riv-${dev.device_type}-fault-desc" rows="2"
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+          <textarea id="riv-${dev.device_type}-repair-notes" rows="2"
             class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
-            placeholder="What was wrong with the device…"></textarea>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Repair description <span class="text-red-400">*</span></label>
-          <textarea id="riv-${dev.device_type}-repair-desc" rows="2"
-            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
-            placeholder="What was done to fix it…"></textarea>
+            placeholder="Describe what was done to fix the device…"></textarea>
         </div>
       </div>
       <!-- Swapped fields -->
       <div id="riv-${dev.device_type}-swapped-fields" class="hidden space-y-2 pl-2 border-l-2 border-orange-200">
+        <div>
+          <p class="text-xs font-medium text-slate-600 mb-2">Swap type <span class="text-red-400">*</span></p>
+          <div class="space-y-1">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="riv-${dev.device_type}-swap-type" value="fault_driven" class="w-4 h-4 accent-orange-600">
+              <span class="text-sm text-slate-700">Fault-driven (device suspected/confirmed faulty)</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="riv-${dev.device_type}-swap-type" value="preventive" class="w-4 h-4 accent-orange-600">
+              <span class="text-sm text-slate-700">Preventive (precautionary replacement)</span>
+            </label>
+          </div>
+        </div>
         <div>
           <label class="block text-xs font-medium text-slate-600 mb-1">New device <span class="text-red-400">*</span></label>
           <select id="riv-${dev.device_type}-new-device"
@@ -1242,7 +1442,7 @@ function _buildRivDeviceRows() {
           </select>
         </div>
         <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Swap notes <span class="text-red-400">*</span></label>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
           <textarea id="riv-${dev.device_type}-swap-notes" rows="2"
             class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
             placeholder="Reason for swap…"></textarea>
@@ -1283,18 +1483,17 @@ async function saveRobotIssueVisit() {
     let payload = { device: dev.device_type, outcome, old_device_id: dev.old_device_id };
 
     if (outcome === 'repaired_on_site') {
-      const faultDesc  = document.getElementById(`riv-${dev.device_type}-fault-desc`).value.trim();
-      const repairDesc = document.getElementById(`riv-${dev.device_type}-repair-desc`).value.trim();
-      if (!faultDesc)  { setError('riv-error', `${capLabel} fault description is required.`); return; }
-      if (!repairDesc) { setError('riv-error', `${capLabel} repair description is required.`); return; }
-      payload.fault_description  = faultDesc;
-      payload.repair_description = repairDesc;
+      const repairNotes = document.getElementById(`riv-${dev.device_type}-repair-notes`).value.trim();
+      if (!repairNotes) { setError('riv-error', `${capLabel} repair notes are required.`); return; }
+      payload.notes = repairNotes;
     } else if (outcome === 'swapped') {
-      const newDevice  = document.getElementById(`riv-${dev.device_type}-new-device`).value || null;
-      const swapNotes  = document.getElementById(`riv-${dev.device_type}-swap-notes`).value.trim();
-      if (!swapNotes) { setError('riv-error', `${capLabel} swap notes are required.`); return; }
+      const swapType  = document.querySelector(`input[name="riv-${dev.device_type}-swap-type"]:checked`)?.value;
+      const newDevice = document.getElementById(`riv-${dev.device_type}-new-device`).value || null;
+      const swapNotes = document.getElementById(`riv-${dev.device_type}-swap-notes`).value.trim();
+      if (!swapType) { setError('riv-error', `${capLabel} swap type is required.`); return; }
       payload.new_device_id = newDevice;
-      payload.notes         = swapNotes;
+      payload.swap_type     = swapType;
+      payload.notes         = swapNotes || null;
     } else {
       const neitherNotes = document.getElementById(`riv-${dev.device_type}-neither-notes`).value.trim();
       if (!neitherNotes) { setError('riv-error', `${capLabel} notes are required.`); return; }
@@ -1438,12 +1637,14 @@ async function saveAdverseEventFollowup() {
 
 // ── Resolve Robot Issue Visit modal ───────────────────────────────────────────
 
-let _rrivEventId = null;
-let _rrivDevices = []; // [{device_type, old_device_id, available}]
+let _rrivEventId     = null;
+let _rrivDevices     = []; // [{device_type, old_device_id, available}] — taken-back devices
+let _rrivOtherDevices = []; // [{device_type, old_device_id, available}] — still-assigned devices
 
 async function openResolveRobotIssueVisitModal(ev) {
-  _rrivEventId = ev.id;
-  _rrivDevices = [];
+  _rrivEventId      = ev.id;
+  _rrivDevices      = [];
+  _rrivOtherDevices = [];
 
   // Find the triggering robot_issue_visit in the completed events cache
   const triggeredBy = ev.triggered_by;
@@ -1461,12 +1662,14 @@ async function openResolveRobotIssueVisitModal(ev) {
   document.getElementById('rriv-notes').value = '';
   document.getElementById('rriv-device-rows').innerHTML =
     '<p class="text-sm text-slate-400 italic">Loading device info…</p>';
+  const otherSec = document.getElementById('rriv-other-device-section');
+  if (otherSec) { otherSec.innerHTML = ''; otherSec.classList.add('hidden'); }
   _resetAttachment('rriv');
   setError('rriv-error', '');
 
   document.getElementById('rriv-date').onchange = function () {
     const val = this.value;
-    if (val && val > new Date().toISOString().slice(0, 16)) {
+    if (val && val > _nowForInput()) {
       setError('rriv-error', 'Visit date cannot be in the future.');
       this.value = '';
     } else {
@@ -1476,7 +1679,8 @@ async function openResolveRobotIssueVisitModal(ev) {
 
   document.getElementById('rriv-resume-date').onchange = function () {
     const val = this.value;
-    if (val && val > new Date().toISOString().slice(0, 10)) {
+    const today = _nowForInput().slice(0, 10);
+    if (val && val > today) {
       setError('rriv-error', 'Can resume from date cannot be in the future.');
       this.value = '';
     } else {
@@ -1490,10 +1694,11 @@ async function openResolveRobotIssueVisitModal(ev) {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
     const devData = await res.json();
 
-    // Only show devices that were taken back (swapped + null new_device_id)
+    // Devices taken back (swapped + null new_device_id)
     const takenBack = (rivEvent?.device_outcomes || []).filter(
       o => o.outcome === 'swapped' && o.new_device_id == null
     );
+    const takenBackTypes = new Set(takenBack.map(o => o.device));
 
     for (const outcome of takenBack) {
       _rrivDevices.push({
@@ -1503,12 +1708,25 @@ async function openResolveRobotIssueVisitModal(ev) {
       });
     }
 
+    // Other devices still assigned to the patient (not taken back)
+    for (const deviceType of ['pluto', 'mars']) {
+      const cur = deviceType === 'pluto' ? devData.current_pluto : devData.current_mars;
+      if (cur && !takenBackTypes.has(deviceType)) {
+        _rrivOtherDevices.push({
+          device_type:   deviceType,
+          old_device_id: cur,
+          available:     devData[deviceType] || [],
+        });
+      }
+    }
+
     if (_rrivDevices.length === 0) {
       document.getElementById('rriv-device-rows').innerHTML =
         '<p class="text-sm text-slate-400 italic">No taken-back devices found.</p>';
     } else {
       _buildRrivDeviceRows();
     }
+    _buildRrivOtherDeviceSection();
   } catch (e) {
     document.getElementById('rriv-device-rows').innerHTML =
       '<p class="text-sm text-red-500">Failed to load device info.</p>';
@@ -1573,6 +1791,126 @@ function _buildRrivDeviceRows() {
   }
 }
 
+function _buildRrivOtherDeviceSection() {
+  const section = document.getElementById('rriv-other-device-section');
+  section.innerHTML = '';
+  if (_rrivOtherDevices.length === 0) {
+    section.classList.add('hidden');
+    return;
+  }
+  section.classList.remove('hidden');
+  const deviceNames = _rrivOtherDevices
+    .map(d => d.device_type.charAt(0).toUpperCase() + d.device_type.slice(1))
+    .join(' / ');
+  const wrapper = document.createElement('div');
+  wrapper.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+  wrapper.innerHTML = `
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" id="rriv-other-device-toggle" class="w-4 h-4 accent-orange-600">
+      <span class="text-sm font-medium text-slate-700">Also attended to ${deviceNames}</span>
+    </label>
+    <div id="rriv-other-device-rows" class="hidden space-y-3 mt-2"></div>
+  `;
+  section.appendChild(wrapper);
+  const toggle = document.getElementById('rriv-other-device-toggle');
+  const rows   = document.getElementById('rriv-other-device-rows');
+  toggle.onchange = function () {
+    rows.classList.toggle('hidden', !this.checked);
+    if (this.checked) _buildRrivOtherRows();
+    else rows.innerHTML = '';
+  };
+}
+
+function _buildRrivOtherRows() {
+  const rows = document.getElementById('rriv-other-device-rows');
+  rows.innerHTML = '';
+  for (const dev of _rrivOtherDevices) {
+    const label    = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+    const oldLabel = dev.old_device_id
+      ? `<span class="font-mono">${dev.old_device_id}</span>`
+      : '<span class="text-slate-400 italic">None assigned</span>';
+    let swapOptions = '<option value="">No device available</option>';
+    for (const d of dev.available) swapOptions += `<option value="${d.id}">${d.id}</option>`;
+
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'border border-slate-100 rounded-xl p-3 space-y-3 bg-slate-50';
+    rowDiv.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-semibold text-slate-800">${label}</span>
+        <span class="text-xs text-slate-500">Current: ${oldLabel}</span>
+      </div>
+      <div>
+        <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+        <div class="space-y-2">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="rriv-other-${dev.device_type}-outcome" value="repaired_on_site" class="w-4 h-4 accent-orange-600"
+              onchange="_rrivOtherOutcomeChange('${dev.device_type}')">
+            <span class="text-sm text-slate-700">Repaired on site</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="rriv-other-${dev.device_type}-outcome" value="swapped" class="w-4 h-4 accent-orange-600"
+              onchange="_rrivOtherOutcomeChange('${dev.device_type}')">
+            <span class="text-sm text-slate-700">Swapped</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="rriv-other-${dev.device_type}-outcome" value="neither" class="w-4 h-4 accent-orange-600"
+              onchange="_rrivOtherOutcomeChange('${dev.device_type}')">
+            <span class="text-sm text-slate-700">Neither (no action taken)</span>
+          </label>
+        </div>
+      </div>
+      <div id="rriv-other-${dev.device_type}-repaired-fields" class="hidden space-y-2 pl-2 border-l-2 border-orange-200">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+        <textarea id="rriv-other-${dev.device_type}-repair-notes" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+          placeholder="Describe what was done to fix the device…"></textarea>
+      </div>
+      <div id="rriv-other-${dev.device_type}-swapped-fields" class="hidden space-y-2 pl-2 border-l-2 border-orange-200">
+        <div>
+          <p class="text-xs font-medium text-slate-600 mb-2">Swap type <span class="text-red-400">*</span></p>
+          <div class="space-y-1">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="rriv-other-${dev.device_type}-swap-type" value="fault_driven" class="w-4 h-4 accent-orange-600">
+              <span class="text-sm text-slate-700">Fault-driven (device suspected/confirmed faulty)</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="rriv-other-${dev.device_type}-swap-type" value="preventive" class="w-4 h-4 accent-orange-600">
+              <span class="text-sm text-slate-700">Preventive (precautionary replacement)</span>
+            </label>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">New device <span class="text-red-400">*</span></label>
+          <select id="rriv-other-${dev.device_type}-new-device"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 bg-white">
+            ${swapOptions}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+          <textarea id="rriv-other-${dev.device_type}-swap-notes" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+            placeholder="Reason for swap…"></textarea>
+        </div>
+      </div>
+      <div id="rriv-other-${dev.device_type}-neither-fields" class="hidden pl-2 border-l-2 border-slate-200">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+        <textarea id="rriv-other-${dev.device_type}-neither-notes" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
+          placeholder="Explain why no action was taken…"></textarea>
+      </div>
+    `;
+    rows.appendChild(rowDiv);
+  }
+}
+
+function _rrivOtherOutcomeChange(deviceType) {
+  const outcome = document.querySelector(`input[name="rriv-other-${deviceType}-outcome"]:checked`)?.value;
+  document.getElementById(`rriv-other-${deviceType}-repaired-fields`).classList.toggle('hidden', outcome !== 'repaired_on_site');
+  document.getElementById(`rriv-other-${deviceType}-swapped-fields`).classList.toggle('hidden', outcome !== 'swapped');
+  document.getElementById(`rriv-other-${deviceType}-neither-fields`).classList.toggle('hidden', outcome !== 'neither');
+}
+
 async function saveResolveRobotIssueVisit() {
   const date       = document.getElementById('rriv-date').value;
   const resumeDate = document.getElementById('rriv-resume-date').value;
@@ -1582,7 +1920,7 @@ async function saveResolveRobotIssueVisit() {
   if (!date)       { setError('rriv-error', 'Visit date is required.'); return; }
   if (!resumeDate) { setError('rriv-error', 'Can resume from date is required.'); return; }
 
-  const deviceAssignments = [];
+  const deviceReplacements = [];
   for (const dev of _rrivDevices) {
     const sel = document.getElementById(`rriv-${dev.device_type}-select`);
     if (!sel) continue;
@@ -1598,7 +1936,7 @@ async function saveResolveRobotIssueVisit() {
       }
     }
 
-    deviceAssignments.push({
+    deviceReplacements.push({
       device:        dev.device_type,
       old_device_id: dev.old_device_id,
       new_device_id: newDeviceId,
@@ -1606,12 +1944,43 @@ async function saveResolveRobotIssueVisit() {
     });
   }
 
+  const otherDeviceOutcomes = [];
+  const otherToggle = document.getElementById('rriv-other-device-toggle');
+  if (otherToggle?.checked) {
+    for (const dev of _rrivOtherDevices) {
+      const outcome  = document.querySelector(`input[name="rriv-other-${dev.device_type}-outcome"]:checked`)?.value || '';
+      const capLabel = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+      if (!outcome) { setError('rriv-error', `Outcome is required for ${capLabel}.`); return; }
+
+      let otherPayload = { device: dev.device_type, outcome, old_device_id: dev.old_device_id };
+      if (outcome === 'repaired_on_site') {
+        const repairNotes = document.getElementById(`rriv-other-${dev.device_type}-repair-notes`).value.trim();
+        if (!repairNotes) { setError('rriv-error', `${capLabel} repair notes are required.`); return; }
+        otherPayload.notes = repairNotes;
+      } else if (outcome === 'swapped') {
+        const swapType  = document.querySelector(`input[name="rriv-other-${dev.device_type}-swap-type"]:checked`)?.value;
+        const newDevice = document.getElementById(`rriv-other-${dev.device_type}-new-device`).value || null;
+        const swapNotes = document.getElementById(`rriv-other-${dev.device_type}-swap-notes`).value.trim();
+        if (!swapType) { setError('rriv-error', `${capLabel} swap type is required.`); return; }
+        otherPayload.new_device_id = newDevice;
+        otherPayload.swap_type     = swapType;
+        otherPayload.notes         = swapNotes || null;
+      } else {
+        const neitherNotes = document.getElementById(`rriv-other-${dev.device_type}-neither-notes`).value.trim();
+        if (!neitherNotes) { setError('rriv-error', `${capLabel} notes are required.`); return; }
+        otherPayload.notes = neitherNotes;
+      }
+      otherDeviceOutcomes.push(otherPayload);
+    }
+  }
+
   if (!_validateAttachment('rriv', 'rriv-error')) return;
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/resolve-robot-issue-visit`,
-    { event_id: _rrivEventId, completion_date: date, can_resume_from: resumeDate, notes, device_assignments: deviceAssignments }
+    { event_id: _rrivEventId, completion_date: date, can_resume_from: resumeDate, notes,
+      device_replacements: deviceReplacements, other_device_outcomes: otherDeviceOutcomes }
   );
   if (!ok) { setError('rriv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 

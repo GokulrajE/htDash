@@ -136,6 +136,15 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   | Timeline       | All                 |
 
 - **Overview tab** (default):
+  0. **Pause alert banner** — shown only when `status === 'paused'`. Full-width amber strip (red when ≥ 8 days total) injected above the Patient Info / Key Dates grid. Contains:
+     - "Training Paused" heading with pause icon
+     - "Paused since: \<date\>" and "Days paused so far: X / 10"
+     - A **segmented progress bar** over 10 days: one colour slice per closed past epoch (from `pauseHistory` closed entries) plus a distinct colour for the current open epoch. Each slice width = its `days` / 10. Turns red at ≥ 8 days total.
+     - Reason pills: "Robot issue pending" (if any `resolve_robot_issue_visit` stubs exist in `incomplete`) and/or "Adverse event pending" (if any `adverse_event_followup` stubs exist in `incomplete`)
+     - The "days paused so far" is `cumulativePauseDays` (closed epochs) + `(today − trainingPausedDate).days` (current open epoch). Banner is hidden for all other statuses.
+  0b. **Pause history card** — rendered as a `col-span-5` card inside the Patient Info / Key Dates grid, appearing as a second row spanning the full width. Hidden when `pauseHistory` is empty; shown as soon as any pause epoch exists. Shows a compact table of all pause epochs from `pauseHistory`:
+     - Columns: Epoch # | Start date | End date | Days | Reasons
+     - The current open epoch shows "Ongoing" for End and "—" for Days.
   1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date, Pluto ID *(experimental group)*, Mars ID *(experimental group)*, AG Watch Right ID *(both groups)*, AG Watch Left ID *(both groups)*,
   2. **Key Dates card** — A0, Activation, Training Completion, A1, A2, Discontinuation dates. A separate **Days card** sits alongside showing days elapsed since activation (Day 1 = activation date). Displays `—` until activated. Hidden for terminal states (discontinued, all_completed, pre_discontinued). Calculated client-side in `patient_detail.js`.
   3. **Events panels** — Three columns: Completed | Overdue | Upcoming. Fetched from `GET /api/patients/<homer_id>/events`.
@@ -153,9 +162,20 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - Alternating row backgrounds for readability.
 
   **Split layout** (3-column CSS grid: `1fr 20px 1fr`):
-  - *Left column* (right-aligned): event name (bold), scheduled date (`start – end` for windowed, single date if `start == end`, `—` if `null`; omitted for synthetic events), **Day N** relative to `activationDate` (negative for events before activation; omitted if patient not yet activated).
+  - *Left column* (right-aligned): event name (bold), scheduled date (`start – end` for windowed, single date if `start == end`, `—` if `null`; omitted for synthetic events), **Day N** relative to `activationDate` (negative for events before activation; omitted if patient not yet activated), **transition badge** (bottom-left, see below).
   - *Centre column*: circle marker + connecting vertical line.
   - *Right column*: completion datetime, filed-at timestamp, then extra event-specific fields in order: Pluto Device, Mars Device, Demo Done, Right Watch, Left Watch, Prescription File, any additional fields, **Notes always last**. Empty/false fields are omitted.
+
+  **Transition badges** — a small pill shown at the bottom-left of the left column whenever that event caused a patient state transition. Derived client-side by `_deriveTransitions(patient, events)` — never stored. At most one badge per event.
+
+  | Badge | Colour | Condition |
+  |---|---|---|
+  | Training paused | amber | Event `id` appears in any `pauseHistory[*].reasons[*].event_id` |
+  | Training resumed | green | Event `id` matches a closed `pauseHistory[*].end_event_id` |
+  | Protocol broken | red | Event `completion_date` (date only) matches `brokenProtocolDate` |
+  | Discontinued | slate | Event `completion_date` (date only) matches `discontinuationDate` |
+
+  `_deriveTransitions(patient, events)` returns a `Map<event_id, badge>` built once when the timeline renders. Synthetic events (Enrolled, A0) never carry badges.
 
   Data from the `complete` array in `GET /api/patients/<homer_id>/events` (all fields except `id` are returned).
 
@@ -573,27 +593,29 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Modal: `robot-issue-visit-modal`
   - **Context banner** (read-only): "Robot issue call on \<date\>"
   - Visit Date/Time (datetime, required; cannot be in the future)
-  - **Per device — both Pluto and Mars always shown.** The engineer must record an outcome for every device. If nothing was done for a device (e.g. only one device was relevant to the visit), select **Neither** and explain in notes.
+  - **Per device — both Pluto and Mars always shown.** The engineer must record an outcome for every device. If nothing was done for a device, select **Neither** and explain in notes.
     - Device name and current device ID (read-only labels)
     - **Outcome** (radio, required):
       - **Repaired on site** — device fixed during the visit; stays assigned; no inventory change:
-        - Fault description (textarea, required) — what was wrong
-        - Repair description (textarea, required) — what was done to fix it
+        - Notes (textarea, required) — what was done
       - **Swapped** — device replaced on site:
         - New device (dropdown): available working devices + null ("No device available")
-        - Notes (textarea, required) — reason for swap; compulsory even when a replacement is available
+        - **Swap type** (radio, required): **Fault-driven** (device suspected/confirmed faulty) / **Preventive** (precautionary replacement, not necessarily faulty)
+        - Notes (textarea, required)
       - **Neither (no action taken)** — nothing done for this device (not relevant to visit, or usage guidance only):
-        - Notes (textarea, required) — explain why no action was taken (e.g. "Only Mars was relevant; Pluto not inspected")
+        - Notes (textarea, required) — explain why no action was taken
   - Additional notes (textarea, optional)
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete`
   - For each device:
-    - If **Repaired on site**: no assignment change, device not marked faulty; create a completed `robot_fault_report` entry in `devices/fault_reports/<type>.json` with `resolution` filled in immediately
-    - If **Swapped + new device selected**: close current assignment; mark old device faulty in inventory; open new assignment for new device; create an open `robot_fault_report` entry (`resolution: null`)
-    - If **Swapped + null** (no replacement available): close current assignment; mark old device faulty; no new assignment; set `trainingPausedDate`; create `resolve_robot_issue_visit` stub in `incomplete`; create an open `robot_fault_report` entry (`resolution: null`)
+    - If **Repaired on site**: no assignment change, device not marked faulty; no fault report created (detail deferred to Devices page)
+    - If **Swapped + fault-driven + new device selected**: close current assignment; mark old device faulty in inventory; open new assignment; create a pending fault report stub in `devices/fault_reports/<type>.json` (`resolution: null`, `swap_type: "fault_driven"`)
+    - If **Swapped + fault-driven + null** (no replacement): close current assignment; mark old device faulty; no new assignment; set `trainingPausedDate`; create `resolve_robot_issue_visit` stub; create pending fault report stub
+    - If **Swapped + preventive**: close current assignment; open new assignment if non-null; device NOT marked faulty; no fault report
+    - If **Swapped + preventive + null**: close current assignment; no new assignment; set `trainingPausedDate`; create `resolve_robot_issue_visit` stub; device NOT marked faulty; no fault report
     - If **Neither**: no device change, no pause, no fault report
-  - Append completed entry to `free.robot_issue_visit` with `completion_date`, `filed_at`, `device_outcomes` (per device: `device`, `outcome`, `old_device_id`, `new_device_id`, `notes`), `notes`, `triggered_by`, `attachment`
+  - Append completed entry to `free.robot_issue_visit` with `completion_date`, `filed_at`, `device_outcomes` (per device: `device`, `outcome`, `swap_type`, `old_device_id`, `new_device_id`, `notes`), `notes`, `triggered_by`, `attachment`
 - Log message: `Robot issue visit recorded`; if any device taken back with no replacement: also `Training paused — robot issue`
 
 ---
@@ -623,24 +645,37 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Resolve Robot Issue — Replacement Visit (`resolve_robot_issue_visit`)
-- Trigger: `resolve_robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue visit has any device swapped with no replacement available)
+- Trigger: `resolve_robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue visit swaps a device with no replacement available)
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
 - Modal: `resolve-robot-issue-visit-modal`
   - **Context banner** (read-only): "Robot issue visit on \<date\> — device(s) taken back without replacement"
   - Visit Date/Time (datetime, required; cannot be in the future)
-  - **Per device taken back** (one row per device that was taken back without replacement in `robot_issue_visit`):
-    - Old device ID (read-only): the faulty device taken back
-    - New device (dropdown): available working devices + null ("No device available"); compulsory notes if null selected
-  - **Can resume from** (date, required; cannot be in the future) — the earliest date training is possible again
-  - Notes (textarea, optional)
+  - **Per taken-back device** (one row per device that was taken back without replacement — always required):
+    - Device name + "taken back — no current assignment" (read-only label)
+    - New device (dropdown): available working devices + null ("No device available")
+    - Notes (textarea, required if null selected — explain why no replacement available)
+    - If null selected: another `resolve_robot_issue_visit` stub is created on save
+  - **Other device** (the device that was NOT taken back — optional section):
+    - Checkbox: "Also attended to \<device name\> during this visit"
+    - If checked, reveals full outcome sub-form identical to `robot_issue_visit`:
+      - Current device ID (read-only)
+      - **Outcome** (radio, required): Repaired on site / Swapped / Neither (no action taken)
+        - Repaired: Notes (required)
+        - Swapped: New device dropdown + **Swap type** (Fault-driven / Preventive) + Notes (required)
+        - Neither: Notes (required)
+  - **Can resume from** (date, required; cannot be in the future) — earliest date training is possible again
+  - Additional notes (textarea, optional)
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete`
-  - For each taken-back device: open new assignment if a device was selected; if null again, create another `resolve_robot_issue_visit` stub
-  - Append completed entry to `free.resolve_robot_issue_visit` with `completion_date`, `filed_at`, `can_resume_from`, `device_assignments` (per device: `device`, `old_device_id`, `new_device_id`, `notes`), `notes`, `attachment`
-  - If no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain in `incomplete`: compute `cumulativePauseDays` as `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (minimum 0); add to existing `cumulativePauseDays`; clear `trainingPausedDate`; if total > 10, patient transitions to `broken_protocol`
-  - If `adverse_event_followup` stubs remain in `incomplete`: no change to pause fields (adverse events still blocking)
+  - For each taken-back device:
+    - If new device selected: open new assignment; if `swap_type` was fault-driven on the original `robot_issue_visit`, update existing fault report stub with replacement info
+    - If null again: create another `resolve_robot_issue_visit` stub
+  - For the other device (if attended to): same per-device logic as `robot_issue_visit` server actions
+  - Append completed entry to `free.resolve_robot_issue_visit` with `completion_date`, `filed_at`, `can_resume_from`, `device_replacements` (per taken-back device: `device`, `old_device_id`, `new_device_id`, `notes`), `other_device_outcomes` (per attended other device: same fields as `robot_issue_visit` `device_outcomes`), `notes`, `attachment`
+  - If no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain: compute `cumulativePauseDays`; clear `trainingPausedDate`; if total > 10, patient transitions to `broken_protocol`
+  - If `adverse_event_followup` stubs remain: no change to pause fields
 - Log message: `Robot issue resolved — replacement device assigned`
 
 ---
@@ -695,3 +730,18 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Log message written to the device log
 
 This ensures the device inventory accurately reflects availability for new patient assignments, independent of the patient protocol lifecycle.
+
+### Fault Report Classification (Devices page — not yet implemented)
+
+**Context:** When a device is swapped with `swap_type: "fault_driven"` in `robot_issue_visit` or `resolve_robot_issue_visit`, a pending fault report stub is created in `devices/fault_reports/<type>.json` with `resolution: null`. The engineer needs to complete this report when they have had time to diagnose the fault.
+
+**Required feature:** A **"Complete Fault Report"** action in the Devices page, available to `engineer` and `admin`, that:
+- Lists all pending fault report stubs (where `resolution: null`)
+- For each stub, allows the engineer to record:
+  - Fault description — what was wrong with the device
+  - Action taken — what was done (repaired, parts replaced, etc.)
+  - Outcome: `repaired` | `condemned` (beyond repair)
+- On save: fills `resolution` on the stub; if `condemned`, marks the device as permanently inactive
+- Log message written to the device log
+
+**Note:** Swaps with `swap_type: "preventive"` do not create fault report stubs — the device is not considered faulty and can be reassigned immediately.

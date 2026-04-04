@@ -78,6 +78,38 @@
     <!-- ── Overview ────────────────────────────────────────────────────────── -->
     <div id="tab-overview" class="tab-pane flex flex-col flex-1 min-h-0 gap-4">
 
+      <!-- Pause alert banner (shown only when status = paused) -->
+      <div id="pause-banner" class="hidden flex-shrink-0 bg-amber-50 border border-amber-300 rounded-2xl px-5 py-4">
+        <div class="flex items-start gap-4">
+          <div class="flex-shrink-0 w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+            <i class="fas fa-pause-circle text-amber-600 text-xl"></i>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-3 mb-1">
+              <p class="text-sm font-bold text-amber-800">Training Paused</p>
+              <div id="pause-reason-pills" class="flex gap-2"></div>
+            </div>
+            <p class="text-xs text-amber-700 mb-2">
+              Paused since: <span id="pause-since" class="font-semibold">—</span>
+              &nbsp;·&nbsp;
+              Days paused so far: <span id="pause-days-label" class="font-semibold">—</span> / 10
+            </p>
+            <!-- Segmented progress bar: one slice per closed epoch + current epoch -->
+            <div id="pause-bar-container" class="w-full bg-amber-100 rounded-full h-2 flex overflow-hidden"></div>
+            <div class="flex gap-4 mt-1.5">
+              <span class="flex items-center gap-1 text-xs text-slate-500">
+                <span class="inline-block w-2.5 h-2 rounded-sm bg-amber-500 flex-shrink-0"></span>
+                Prior epochs: <span id="pause-prior-days" class="font-medium text-slate-600">0</span>d
+              </span>
+              <span class="flex items-center gap-1 text-xs text-slate-500">
+                <span class="inline-block w-2.5 h-2 rounded-sm bg-orange-300 flex-shrink-0"></span>
+                Current epoch: <span id="pause-current-days" class="font-medium text-slate-600">0</span>d
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Patient info + Key dates + Days counter (locked) -->
       <div class="grid grid-cols-5 gap-4 flex-shrink-0">
 
@@ -149,6 +181,12 @@
           <div class="flex-1 flex items-center justify-center">
             <p id="days-elapsed-number" class="text-8xl font-black text-slate-800 leading-none"></p>
           </div>
+        </div>
+
+        <!-- Pause history (shown only when pauseHistory is non-empty) -->
+        <div id="pause-history-section" class="hidden col-span-5 bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Pause History</h3>
+          <div id="pause-history-content"></div>
         </div>
 
       </div>
@@ -1115,6 +1153,8 @@
       </div>
       <!-- Per taken-back device rows (built by JS) -->
       <div id="rriv-device-rows" class="space-y-3"></div>
+      <!-- Optional other device section (built by JS) -->
+      <div id="rriv-other-device-section" class="hidden"></div>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Can resume from <span class="text-red-500">*</span></label>
         <p class="text-xs text-slate-500 mb-1">Earliest date training can resume.</p>

@@ -113,6 +113,7 @@ All fields are factual — status is never stored but always derived.
 
   "trainingPausedDate":         null,
   "cumulativePauseDays":        0,
+  "pauseHistory":               [],
 
   "brokenProtocolDate":         null,
 
@@ -131,7 +132,41 @@ All fields are factual — status is never stored but always derived.
 
 **Pause fields (both groups):**
 - `trainingPausedDate` — set when training is paused; `null` when not paused. Set when a robot issue visit swaps a device with no replacement available, or when an adverse event is filed with `training_blocked: true`. Cleared when all pausing causes are resolved: no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain in `incomplete` (meaning all adverse events have been marked resolved).
-- `cumulativePauseDays` — total pause days accumulated across all episodes. Incremented when the last outstanding pause cause is resolved, using `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (exclusive end; minimum 0 — same-day resolution contributes 0 pause days). Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`. A patient can have multiple simultaneous pause causes (e.g. two adverse events + robot issue); `trainingPausedDate` is only cleared when all are resolved.
+- `cumulativePauseDays` — total pause days accumulated across all *closed* pause epochs. Incremented when the last outstanding pause cause is resolved, using `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (exclusive end; minimum 0 — same-day resolution contributes 0 pause days). Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`. A patient can have multiple simultaneous pause causes (e.g. two adverse events + robot issue); `trainingPausedDate` is only cleared when all are resolved.
+- `pauseHistory` — list of all pause epochs, one entry per continuous uninterrupted pause period. An entry is appended when training is first paused (i.e. `trainingPausedDate` transitions from `null`). If training is already paused and a new cause is added, no new entry is created — the new reason is appended to the current open entry's `reasons` list. Closed when the pause clears.
+
+```json
+"pauseHistory": [
+  {
+    "start":   "2026-03-15T10:00",
+    "end":     "2026-03-18T10:00",
+    "days":    3,
+    "reasons": [
+      {"type": "robot_issue",   "event_id": "<uuid of robot_issue_visit entry in free>"}
+    ]
+  },
+  {
+    "start":   "2026-04-01T09:00",
+    "end":     null,
+    "days":    null,
+    "reasons": [
+      {"type": "adverse_event", "event_id": "<uuid of adverse_event entry in free>"},
+      {"type": "robot_issue",   "event_id": "<uuid of robot_issue_visit entry in free>"}
+    ]
+  }
+]
+```
+
+  - `start` — datetime when the pause epoch began (`trainingPausedDate` at the time it was set)
+  - `end` — datetime when the pause cleared (`null` while active)
+  - `days` — `(end.date() − start.date()).days` (minimum 0); `null` while active
+  - `reasons` — one entry per cause that contributed to this pause epoch:
+    - `type`: `"robot_issue"` or `"adverse_event"`
+    - `event_id`: UUID of the causative event — `robot_issue_visit` entry (in `free.robot_issue_visit`) for robot issues; `adverse_event` entry (in `free.adverse_event`) for adverse events
+  - **Server touch points:**
+    1. **Pause starts** (adverse event route or robot issue visit route): if `trainingPausedDate` was `null`, append a new open entry (`end: null`, `days: null`) with the first reason. Set `trainingPausedDate`.
+    2. **New cause added while already paused**: append the new reason to the last open entry's `reasons` list. Do not create a new entry.
+    3. **Pause clears** (adverse event followup route or resolve robot issue visit route): fill `end` and `days` on the last open entry. Clear `trainingPausedDate`. Increment `cumulativePauseDays`.
 
 **Broken protocol detection field:**
 - `brokenProtocolDate` — date when `broken_protocol` was first detected; set automatically on login. `null` until first detected. Never cleared once set.
@@ -578,10 +613,9 @@ Created when a `robot_issue_call` has `visit_required: true`. Completed by engin
     {
       "device": "pluto | mars",
       "outcome": "repaired_on_site | swapped | neither",
+      "swap_type": "fault_driven | preventive | null",
       "old_device_id": "",
       "new_device_id": null,
-      "fault_description": null,
-      "repair_description": null,
       "notes": null
     }
   ],
@@ -591,16 +625,16 @@ Created when a `robot_issue_call` has `visit_required: true`. Completed by engin
 }
 ```
 
-- `device_outcomes`: one entry per device (always both Pluto and Mars) — the engineer records an outcome for every device checked during the visit.
-  - `outcome`: `"repaired_on_site"` — device fixed on site, stays assigned, not marked faulty; `"swapped"` — device replaced, old device marked faulty; `"neither"` — no action taken for this device (not relevant to visit, or usage guidance only); no device change.
-  - `old_device_id`: derived server-side from the patient's current assignment at save time.
-  - `new_device_id`: the replacement device ID (swapped only); `null` if no replacement available or outcome is not swapped.
-  - `fault_description`: required when `outcome = "repaired_on_site"` — what was wrong.
-  - `repair_description`: required when `outcome = "repaired_on_site"` — what was done to fix it.
-  - `notes`: required when `outcome = "swapped"` or `"neither"`; `null` otherwise.
+- `device_outcomes`: one entry per device (always both Pluto and Mars).
+  - `outcome`: `"repaired_on_site"` — fixed on site, stays assigned; `"swapped"` — replaced; `"neither"` — no action taken.
+  - `swap_type`: `"fault_driven"` — device suspected/confirmed faulty (creates a pending fault report stub); `"preventive"` — precautionary replacement, device not marked faulty; `null` when outcome is not `"swapped"`.
+  - `old_device_id`: derived server-side from patient's current assignment at save time.
+  - `new_device_id`: replacement device ID (swapped only); `null` if no replacement available.
+  - `notes`: required for all outcomes; `null` only if never entered (should not occur).
 - **On save:**
-  - `"repaired_on_site"`: create a completed `robot_fault_report` in `devices/fault_reports/<type>.json` with `resolution` filled immediately.
-  - `"swapped"`: mark old device faulty; open new assignment if `new_device_id` is non-null; create an open `robot_fault_report` (`resolution: null`). If `new_device_id` is null: also set `trainingPausedDate` and create a `resolve_robot_issue_visit` stub.
+  - `"repaired_on_site"`: no assignment change, device not marked faulty; no fault report (detail deferred to Devices page).
+  - `"swapped" + "fault_driven"`: mark old device faulty; open new assignment if `new_device_id` non-null; create a pending fault report stub in `devices/fault_reports/<type>.json` (`resolution: null`). If `new_device_id` is null: also set `trainingPausedDate` and create `resolve_robot_issue_visit` stub.
+  - `"swapped" + "preventive"`: open new assignment if `new_device_id` non-null; device NOT marked faulty; no fault report. If `new_device_id` is null: set `trainingPausedDate` and create `resolve_robot_issue_visit` stub.
   - `"neither"`: no device change, no fault report.
 
 **`resolve_robot_issue_visit`** *(experimental only)*
@@ -626,9 +660,19 @@ Created when a `robot_issue_visit` swaps a device with no replacement available 
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "can_resume_from": "YYYY-MM-DD",
-  "device_assignments": [
+  "device_replacements": [
     {
       "device": "pluto | mars",
+      "old_device_id": null,
+      "new_device_id": null,
+      "notes": null
+    }
+  ],
+  "other_device_outcomes": [
+    {
+      "device": "pluto | mars",
+      "outcome": "repaired_on_site | swapped | neither",
+      "swap_type": "fault_driven | preventive | null",
       "old_device_id": "",
       "new_device_id": null,
       "notes": null
@@ -640,9 +684,10 @@ Created when a `robot_issue_visit` swaps a device with no replacement available 
 }
 ```
 
-- `device_assignments`: one entry per device that was taken back without replacement.
+- `device_replacements`: one entry per device that was taken back without replacement (from the triggering `robot_issue_visit`). `old_device_id` is null because the device is no longer assigned.
   - `new_device_id`: replacement assigned; if `null` again, another `resolve_robot_issue_visit` stub is created.
   - `notes`: required when `new_device_id` is null — explains why no replacement was available.
+- `other_device_outcomes`: one entry per other device the engineer attended to during this visit (optional; empty list `[]` if none). Same field semantics as `robot_issue_visit` `device_outcomes` including `swap_type`.
 - Pause clears when no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain.
 
 **`patient_call`**
@@ -728,11 +773,10 @@ Stores engineering fault reports for Pluto and Mars devices. Not part of `protoc
       "id": "<uuid>",
       "device_id": "RPLUTO002",
       "homer_id": "HOCMCV002",
+      "event_id": "<uuid of robot_issue_visit or resolve_robot_issue_visit entry>",
       "visit_date": "YYYY-MM-DDTHH:MM",
-      "outcome": "repaired_on_site | swapped",
-      "fault_description": "",
-      "repair_description": null,
-      "swap_notes": null,
+      "swap_type": "fault_driven",
+      "notes": "",
       "filed_by": "<loginid>",
       "filed_at": "YYYY-MM-DDTHH:MM:SS",
       "resolution": null
@@ -741,12 +785,11 @@ Stores engineering fault reports for Pluto and Mars devices. Not part of `protoc
 }
 ```
 
-- `outcome`: `"repaired_on_site"` — device fixed on site and stayed with patient; `"swapped"` — device taken back, faulty flag set.
-- `fault_description`: what was observed to be wrong (required for both outcomes).
-- `repair_description`: what the engineer did to fix it — required when `outcome = "repaired_on_site"`; `null` for swapped (repair happens later).
-- `swap_notes`: required when `outcome = "swapped"` — reason for the swap.
-- `resolution`: `null` until `robot_fault_resolution` is implemented. When resolved, records repair details and the date the device was returned to service. The device's `faulty` flag is only cleared when `resolution` is filled.
-- `"repaired_on_site"` reports are created with `resolution` already populated (fault and repair happened in the same visit); `"swapped"` reports start with `resolution: null`.
+- Created only for `"fault_driven"` swaps in `robot_issue_visit` and `resolve_robot_issue_visit`. Preventive swaps and repaired-on-site outcomes do not create fault report stubs.
+- `event_id`: UUID of the `robot_issue_visit` or `resolve_robot_issue_visit` entry that triggered this stub — for traceability.
+- `swap_type`: always `"fault_driven"` (only fault-driven swaps create stubs).
+- `notes`: the swap notes from the modal at creation time; may be empty string.
+- `resolution`: `null` until completed via the "Complete Fault Report" action on the Devices page (future feature). When resolved, records fault description, repair action, and outcome (`repaired` | `condemned`). The device's `faulty` flag is only cleared when `resolution` is filled.
 
 **`pre_discontinuation`** / **`discontinuation`**
 ```json
@@ -1018,8 +1061,8 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 | `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
 | `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
 | `robot_issue_call` | Robot Issue — Engineer Call | anytime | — | — | `activation` | `user` | Engineer call to assess a robot malfunction reported during a home visit or patient call. Created directly when the "robot issue" toggle is checked in the triggering modal — no intermediate `robot_issue` event. May spawn a `robot_issue_visit` stub. |
-| `robot_issue_visit` | Robot Issue — Engineer Visit | anytime | — | — | `activation` | `user` | Engineer site visit to inspect and repair/swap Pluto and Mars devices. Both devices always shown; engineer records outcome for each ("Neither (no action taken)" for unaffected devices). May spawn a `resolve_robot_issue_visit` stub and a training pause. |
-| `resolve_robot_issue_visit` | Robot Issue — Replacement Visit | anytime | — | — | `activation` | `user` | Engineer follow-up visit to deliver a replacement device that was unavailable during the initial visit. Clears the training pause when all outstanding stubs are resolved. |
+| `robot_issue_visit` | Robot Issue — Engineer Visit | anytime | — | — | `activation` | `user` | Engineer site visit to inspect and repair/swap Pluto and Mars devices. Both devices always shown; outcome required for each. Swapped outcome requires `swap_type` (fault-driven creates pending fault report stub; preventive does not). May spawn `resolve_robot_issue_visit` stub and training pause. |
+| `resolve_robot_issue_visit` | Robot Issue — Replacement Visit | anytime | — | — | `activation` | `user` | Engineer visit to deliver replacement for taken-back device. Taken-back device replacement required; optional section for the other device (full outcome sub-form). Clears the training pause when all outstanding stubs are resolved. |
 | `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
 | `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
 
