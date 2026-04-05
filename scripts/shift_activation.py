@@ -32,7 +32,7 @@ FMT      = '%Y-%m-%dT%H:%M'
 FMT_SECS = '%Y-%m-%dT%H:%M:%S'
 
 DATETIME_FIELDS = ('completion_date', 'session_start', 'session_end',
-                   'sync_datetime', 'worn_datetime')
+                   'sync_datetime', 'worn_datetime', 'cancelled_at')
 
 
 def parse_dt(value: str) -> datetime:
@@ -186,6 +186,11 @@ def shift_activation(homer_id: str, days: int, hospital: str) -> None:
         for entry in events_data.get(section, []):
             shift_entry(entry, event_index, new_a0, new_activation, n_delta)
             count += 1
+
+    # Cancelled stubs: shift scheduled_date like incomplete entries + shift cancelled_at
+    for entry in events_data.get('cancelled', []):
+        shift_entry(entry, event_index, new_a0, new_activation, n_delta)
+        count += 1
 
     shift_free_section(events_data.get('free', {}), n_delta)
 

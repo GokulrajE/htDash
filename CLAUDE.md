@@ -359,7 +359,7 @@ When modifying any pause-related logic, verify ALL of the following are kept in 
 | `routes/user_management.py` — `api_complete_resolve_robot_issue_visit` | Same as above |
 | `routes/user_management.py` — `api_create_patient` | Initialises `pauseHistory: []` |
 | `scripts/reset_test_patient.py` | Initialises `pauseHistory: []` |
-| `scripts/shift_activation.py` | Shifts `pauseHistory[*].start` and `pauseHistory[*].end` by N days |
+| `scripts/shift_activation.py` | Shifts `pauseHistory[*].start` and `pauseHistory[*].end` by N days; also shifts `cancelled[*].scheduled_date` and `cancelled_at` |
 | `templates/patient_detail.html` | Pause history table section present in Overview tab |
 | `static/js/app/patient_detail.js` — `renderPauseBanner` | Segmented progress bar driven by `pauseHistory` closed entries + current open epoch |
 | `static/js/app/patient_detail.js` — `renderPauseHistoryTable` | Renders pause history table from `p.pauseHistory` |

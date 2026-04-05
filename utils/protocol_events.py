@@ -99,17 +99,24 @@ def create_protocol_events(hospital_folder: str, homer_id: str,
         incomplete.append(_make_incomplete_entry(event, scheduled_date))
 
     free: dict = {
-        'adverse_event':      [],
-        'patient_call':       [],
-        'pre_discontinuation': None,
-        'discontinuation':     None,
+        'adverse_event':               [],
+        'adverse_event_followup':      [],
+        'adverse_event_followup_visit': [],
+        'adverse_event_clinical_visit': [],
+        'patient_call':                [],
+        'watch_record':                [],
+        'pre_discontinuation':          None,
+        'discontinuation':              None,
     }
     if group == 'experimental':
-        free['robot_issue'] = []
+        free['robot_issue_call']          = []
+        free['robot_issue_visit']         = []
+        free['resolve_robot_issue_visit'] = []
 
     data = {
         'incomplete': incomplete,
         'complete':   [],
+        'cancelled':  [],
         'free':       free,
     }
     write_protocol_events(hospital_folder, homer_id, data)
