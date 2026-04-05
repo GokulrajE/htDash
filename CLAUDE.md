@@ -61,14 +61,19 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 10. ✅ Follow-up call modal — including triggered events (adverse_event, robot_issue_call, watch_record)
 11. ✅ Agwatch timing modal
 12. ✅ Watch record modal — chain + triggered modes, lost watch handling
-13. ⬜ Patient call modal
-14. ⬜ Assessment modals (a1, a2)
-15. ⬜ Patient detail tab content — Call Logs, Adverse Events, Watch Records, Robot Issues (exp only)
-16. ⬜ Devices page
-17. ⬜ SIMs page
-18. ⬜ Cleanup — remove old `dashboard.html` and unused JS
-19. ⬜ Test all routes and functionality
-20. ⬜ Merge to `main`
+13. ✅ Patient call modal
+14. ⬜ Fix `create_protocol_events()` — update `free` section keys + add top-level `cancelled: []`
+15. ⬜ Update File Adverse Event modal — add scheduling toggles for follow-up visit / clinical visit
+16. ⬜ Update Adverse Event Follow-up Call modal — `patient_initiated`, `ae_discussions`, scheduling toggles
+17. ⬜ Adverse Event Follow-up Visit modal (new)
+18. ⬜ Adverse Event Clinical Visit modal (new)
+19. ⬜ Assessment modals (a1, a2)
+20. ⬜ Patient detail tab content — Call Logs, Adverse Events, Watch Records, Robot Issues (exp only)
+21. ⬜ Devices page
+22. ⬜ SIMs page
+23. ⬜ Cleanup — remove old `dashboard.html` and unused JS
+24. ⬜ Test all routes and functionality
+25. ⬜ Merge to `main`
 
 ---
 
@@ -160,7 +165,8 @@ The script shifts the patient's entire timeline by N days (positive or negative)
 - **AG Watch timing session bounds (hard validation):** the `adl_agwatch_timing_d03` / `vcg_agwatch_timing_d03` modals enforce that every non-null exercise `start`/`end` falls within the `session_start`/`session_end` from `home_visit_d03`. The `adl_agwatch_timing_d15` / `vcg_agwatch_timing_d15` modals apply the same hard constraint using `home_visit_d15`. The form cannot be saved if any timing falls outside the session window.
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
 - **Timeline transition badges** are also never stored — derived client-side by `_deriveTransitions(patient, events)` in `patient_detail.js`. Returns a `Map<event_id, badge>`. Four badge types: `"paused"` (amber), `"resumed"` (green), `"broken_protocol"` (red), `"discontinued"` (slate). Detection rules: paused = event id in `pauseHistory[*].reasons[*].event_id`; resumed = event id matches `pauseHistory[*].end_event_id` (set by the route that closes the epoch); broken_protocol = event `completion_date[:10]` matches `brokenProtocolDate`; discontinued = event `completion_date[:10]` matches `discontinuationDate`.
-- Free event types: `patient_call`, `adverse_event`, `adverse_event_followup`, `robot_issue_call` (experimental only), `robot_issue_visit` (experimental only), `resolve_robot_issue_visit` (experimental only), `watch_record`, `discontinuation`. There is no standalone `robot_issue` event — the chain starts directly at `robot_issue_call`.
+- Free event types: `patient_call`, `adverse_event`, `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit`, `robot_issue_call` (experimental only), `robot_issue_visit` (experimental only), `resolve_robot_issue_visit` (experimental only), `watch_record`, `discontinuation`. There is no standalone `robot_issue` event — the chain starts directly at `robot_issue_call`.
+- **Cancellable events:** some free events (currently `adverse_event_followup_visit` and `adverse_event_clinical_visit`) carry `cancellable: true` in their stub. The modal shows a **Cancel Visit** button. Clicking it prompts for a `cancellation_reason` (textarea, required). On cancellation the stub is moved to a top-level `cancelled` array in `protocol_events.json` with `cancelled_at` timestamp and `cancellation_reason`. No further stubs are auto-created. Cancellable stubs are otherwise identical to regular stubs — they appear as overdue events and have `EVENT_OPENERS` entries.
 - **Triggered events:** `adverse_event`, `robot_issue_call`, and `watch_record` can only be created as triggered events — never standalone. They are triggered by: `activation`, `home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `patient_call`, `followup_call_d07`, or `followup_call_d21`. `robot_issue_call` is experimental-only and hidden for control patients in all modals.
   - Bidirectional references: the triggering event stores `triggered: [{type, id}, ...]`; the spawned event stores `triggered_by: {type, id}`.
   - **`adverse_event` uses a two-phase model:**
@@ -173,7 +179,10 @@ The script shifts the patient's entire timeline by N days (positive or negative)
   - **`resolve_robot_issue_visit` modal** shows: (1) taken-back device replacement dropdown (required — can only replace, not repair); (2) optional "other device" section with full outcome sub-form (Repaired / Swapped / Neither) identical to `robot_issue_visit`.
   - For `watch_record` triggered by any of the above: the existing open `incomplete` chain entry is **claimed** (no new entry created). `triggered_by` is stamped on the `incomplete` entry at save time. `scheduled_date` is also updated to `[now, now]` so it appears immediately as overdue.
   - Watch record trigger toggle is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
-- **`adverse_event_followup` chain:** seeded whenever any adverse event is filed (regardless of `training_blocked`). One stub exists at a time in `incomplete`, carrying `adverse_event_ids` — a list of all currently unresolved AE IDs. When a new AE is filed while a stub already exists, its ID is appended to the existing stub's list. `scheduled_date = [today, today + 1 day]` — active window for 1 day, overdue the day after. On completion the therapist marks each AE resolved or not; unresolved AEs carry into the next seeded stub. Chain ends when all AEs are resolved. `can_resume_from` (date only) is required per resolved AE that had `training_blocked: true`. Pause clears only when all pausing AEs have `can_resume_from` set AND no `resolve_robot_issue_visit` stubs remain.
+- **`adverse_event_followup` chain:** seeded whenever any adverse event is filed (regardless of `training_blocked`). One stub exists at a time in `incomplete`, carrying `adverse_event_ids` — a list of all currently unresolved AE IDs. When a new AE is filed while a stub already exists, its ID is appended to the existing stub's list. `scheduled_date = [today, today + 1 day]` — active window for 1 day, overdue the day after. On completion (via follow-up call, visit, or clinical visit) the therapist records per-AE `ae_discussions` (notes, resolved, can_resume_from). Unresolved AEs carry into the next seeded stub (back to a call-based follow-up). Chain ends when all AEs are resolved. `can_resume_from` (date only) is required per resolved AE that had `training_blocked: true`. Pause clears only when all pausing AEs have `can_resume_from` set AND no `resolve_robot_issue_visit` stubs remain.
+  - **`adverse_event_followup_visit` / `adverse_event_clinical_visit`:** scheduled from the follow-up call modal (or directly from the File AE modal). Stubs are cancellable. Both carry `adverse_event_ids` and follow the same per-AE `ae_discussions` structure. On completion, unresolved AEs re-seed a follow-up call stub (chain reverts to call-based). Pause clears on the same condition as above.
+  - **`ae_discussions` (replaces `resolutions`):** the key per-AE field on all follow-up event types. Each entry: `{ae_id, notes, resolved, can_resume_from}`. Stored on `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit`.
+  - **`patient_initiated` toggle** on `adverse_event_followup`: when the patient contacted the clinic first, the therapist should first file a `patient_call` (with `ae_discussed: true`) and then open the follow-up call stub. Setting `patient_initiated: true` reveals a **Related patient call** selector (required) — a dropdown of `patient_call` entries for this patient where `ae_discussed: true`. Stored as `related_patient_call_id` on the completed follow-up record.
 - **`resolve_robot_issue_visit` stub:** created when a `robot_issue_visit` (or a subsequent `resolve_robot_issue_visit`) assigns no replacement for a taken-back device (`new_device_id: null`). Patient has no device; training paused. Resolved by engineer/admin: delivers replacement(s); may also optionally attend to the other device. Records `can_resume_from`. If null selected again, another stub is created. Pause clears only when no `resolve_robot_issue_visit` stubs remain AND no `adverse_event_followup` stubs remain.
 - **`pauseHistory` array:** tracks each continuous pause epoch on the patient JSON. One entry per uninterrupted pause period — append a new entry when `trainingPausedDate` transitions from `null`; close it (fill `end` and `days`) when the pause clears. If a second cause fires while already paused, append to the current open entry's `reasons` list (no new entry). Each reason carries `{type: "robot_issue"|"adverse_event", event_id: <uuid>}` referencing the causative `robot_issue_visit` or `adverse_event` entry in `free`. `cumulativePauseDays` is still stored as a scalar for quick status derivation but is now also derivable as `sum(e["days"] for e in pauseHistory if e["days"] is not None)`.
 - **Watch record chain:** seeded at activation with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`. On each completion, a new open chain entry is seeded with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`.
@@ -270,6 +279,9 @@ Fill in ✅ / ⬜. Caption is always included when attachment is ✅.
 | `a2_assessment` | ⬜ |
 | `patient_call` | ✅ |
 | `adverse_event` | ✅ |
+| `adverse_event_followup` | ✅ |
+| `adverse_event_followup_visit` | ✅ |
+| `adverse_event_clinical_visit` | ✅ |
 | `robot_issue_call` | ✅ |
 | `robot_issue_visit` | ✅ |
 | `resolve_robot_issue_visit` | ✅ |
@@ -311,7 +323,7 @@ Both event APIs must compute `blocked_by` using the same logic (depends_on entri
 | `routes/dashboard.py` | `GET /api/dashboard/events` | Cross-patient events |
 
 ### Protocol event openers (patient detail page)
-Every protocol event that has a modal must be listed in `EVENT_OPENERS` in `patient_detail.js`. When a new modal is implemented, add the entry. Currently registered: `exp_device_install`, `activation`, `discontinuation_reminder`, `adl_prescription_d01/d15`, `vcg_prescription_d01/d15`, `prescription_printout_d01/d15`, `home_visit_d02/d03/d15`, `followup_call_d07/d21`, `training_completion_d29`, `adl_agwatch_timing_d03/d15`, `vcg_agwatch_timing_d03/d15`, `watch_record`, `adverse_event`, `robot_issue_call`, `robot_issue_visit`, `adverse_event_followup`, `resolve_robot_issue_visit`.
+Every protocol event that has a modal must be listed in `EVENT_OPENERS` in `patient_detail.js`. When a new modal is implemented, add the entry. Currently registered: `exp_device_install`, `activation`, `discontinuation_reminder`, `adl_prescription_d01/d15`, `vcg_prescription_d01/d15`, `prescription_printout_d01/d15`, `home_visit_d02/d03/d15`, `followup_call_d07/d21`, `training_completion_d29`, `adl_agwatch_timing_d03/d15`, `vcg_agwatch_timing_d03/d15`, `watch_record`, `adverse_event`, `robot_issue_call`, `robot_issue_visit`, `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit`, `resolve_robot_issue_visit`.
 
 ### Synthetic events
 Some events are not stored in `protocol_events.json` but injected at query time by both event APIs. These require matching `EVENT_OPENERS` entries in `patient_detail.js`.
@@ -342,6 +354,8 @@ When modifying any pause-related logic, verify ALL of the following are kept in 
 | `routes/user_management.py` — `api_complete_adverse_event` | Appends new open entry to `pauseHistory` when `trainingPausedDate` transitions from `null`; appends to `reasons` if already paused |
 | `routes/user_management.py` — `api_complete_robot_issue_visit` | Same as above |
 | `routes/user_management.py` — `api_complete_adverse_event_followup` | Closes the open entry (fills `end`, `days`) when pause clears |
+| `routes/user_management.py` — `api_complete_adverse_event_followup_visit` | Same as above |
+| `routes/user_management.py` — `api_complete_adverse_event_clinical_visit` | Same as above |
 | `routes/user_management.py` — `api_complete_resolve_robot_issue_visit` | Same as above |
 | `routes/user_management.py` — `api_create_patient` | Initialises `pauseHistory: []` |
 | `scripts/reset_test_patient.py` | Initialises `pauseHistory: []` |

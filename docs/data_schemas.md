@@ -503,18 +503,22 @@ Extra fields on `complete`:
 
 ```json
 {
-  "adverse_event":             [],
-  "adverse_event_followup":    [],
-  "robot_issue_call":          [],
-  "robot_issue_visit":         [],
-  "resolve_robot_issue_visit": [],
-  "patient_call":              [],
-  "pre_discontinuation":       null,
-  "discontinuation":           null
+  "adverse_event":                  [],
+  "adverse_event_followup":         [],
+  "adverse_event_followup_visit":   [],
+  "adverse_event_clinical_visit":   [],
+  "robot_issue_call":               [],
+  "robot_issue_visit":              [],
+  "resolve_robot_issue_visit":      [],
+  "patient_call":                   [],
+  "pre_discontinuation":            null,
+  "discontinuation":                null
 }
 ```
 
-`robot_issue_call`, `robot_issue_visit`, `resolve_robot_issue_visit` are only present for experimental patients. `adverse_event_followup` is present for all patients.
+`robot_issue_call`, `robot_issue_visit`, `resolve_robot_issue_visit` are only present for experimental patients. All AE-related arrays are present for all patients.
+
+**Cancellable events:** `adverse_event_followup_visit` and `adverse_event_clinical_visit` stubs carry `cancellable: true` in `study_protocol.json`. A cancelled stub is removed from `incomplete` and appended to a top-level `cancelled` array in `protocol_events.json` with a `cancellation_reason` and `cancelled_at` timestamp. Cancelled events appear in the timeline for traceability but do not count as completions.
 
 `robot_fault_report` entries are **not** stored in `protocol_events.json` — they live in `devices/fault_reports/<type>.json` (see device schemas below).
 
@@ -544,12 +548,15 @@ Uses a **two-phase model**. Never created standalone — always triggered by a h
   "description": "",
   "action_taken": "",
   "training_blocked": false,
+  "scheduled_followup_visit":    { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
+  "scheduled_clinical_visit":    { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
   "attachment": null,
   "attachment_caption": null
 }
 ```
 
 - `training_blocked`: `true` if training was blocked as a result of this adverse event. When `true`, this AE's ID is included in follow-up stubs and `trainingPausedDate` is set on the patient. When `false`, the follow-up chain still runs (for monitoring) but no pause mechanics apply for this AE.
+- `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled. If scheduled, `stub_id` points to the created stub in `incomplete`; `target_datetime` is the target date/time entered by the therapist (not strict — actual time recorded at completion).
 
 **`robot_issue_call`** *(experimental only)*
 
@@ -702,6 +709,7 @@ Stores both the call details and forward references to any downstream events it 
   "duration_minutes": 15,
   "call_type": "patient_initiated | therapist_initiated",
   "reason": null,
+  "ae_discussed": false,
   "notes": "",
   "triggered": [
     { "type": "adverse_event | robot_issue_call | watch_record", "id": "<uuid of triggered entry>" }
@@ -711,6 +719,7 @@ Stores both the call details and forward references to any downstream events it 
 
 - `call_type`: `"patient_initiated"` (default) or `"therapist_initiated"` (unplanned outbound call by therapist).
 - `reason`: required and non-null when `call_type = "therapist_initiated"`; documents why the call was made outside the normal protocol. `null` for patient-initiated calls.
+- `ae_discussed`: `true` if one or more ongoing adverse events were discussed during this call. Used to filter eligible patient calls when linking from a patient-initiated follow-up call stub.
 - `triggered`: list of downstream events created as a result of this call; empty list `[]` if none.
 - `type` in triggered entries: `"adverse_event"`, `"robot_issue_call"`, or `"watch_record"` (referring to a `watch_record` entry in `incomplete`/`complete`).
 
@@ -739,28 +748,124 @@ Daily follow-up call chain seeded whenever any adverse event is filed. One stub 
   "adverse_event_ids": ["<AE1_id>", "<AE2_id>"],
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "patient_initiated": false,
+  "related_patient_call_id": null,
   "duration_minutes": 15,
   "notes": "",
-  "resolutions": [
+  "ae_discussions": [
     {
       "adverse_event_id": "<AE1_id>",
+      "notes": "",
       "resolved": true,
       "can_resume_from": "YYYY-MM-DD"
     },
     {
       "adverse_event_id": "<AE2_id>",
+      "notes": "",
       "resolved": false,
       "can_resume_from": null
     }
   ],
+  "scheduled_followup_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
+  "scheduled_clinical_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
   "attachment": null,
   "attachment_caption": null
 }
 ```
 
-- `resolutions`: one entry per AE in `adverse_event_ids`. `can_resume_from` is required when `resolved: true` AND the AE had `training_blocked: true`; `null` otherwise. Date only (`YYYY-MM-DD`).
+- `patient_initiated`: `true` if the patient called the therapist; `false` (default) if the therapist initiated the call.
+- `related_patient_call_id`: UUID of the linked `patient_call` entry (only set when `patient_initiated: true` and the therapist links it); `null` otherwise.
+- `ae_discussions`: one entry per AE in `adverse_event_ids`. `notes` records what was discussed for that specific AE. `can_resume_from` is required when `resolved: true` AND the AE had `training_blocked: true`; `null` otherwise. Date only (`YYYY-MM-DD`).
+- `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled from this call.
 - **Chain continuation:** after save, a new stub is seeded with `adverse_event_ids` = IDs of unresolved AEs and `scheduled_date: [today, today + 1 day]`. If all AEs are resolved, no new stub is seeded.
 - **Pause resolution:** when all AEs are resolved and no `resolve_robot_issue_visit` stubs remain, `cumulativePauseDays` is incremented by `(max(can_resume_from) − trainingPausedDate.date()).days` (minimum 0) and `trainingPausedDate` is cleared.
+
+---
+
+**`adverse_event_followup_visit`**
+
+Therapist home visit to follow up on one or more adverse events. Cancellable (`cancellable: true` in `study_protocol.json`). Available for both groups.
+
+**Stub** (lives in `incomplete`; created by "File Adverse Event" or any follow-up event):
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "adverse_event_followup_visit",
+  "adverse_event_ids": ["<AE1_id>", "<AE2_id>"],
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "triggered_by": { "type": "adverse_event | adverse_event_followup | adverse_event_followup_visit | adverse_event_clinical_visit", "id": "<uuid>" },
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "cancellable": true
+}
+```
+
+- `scheduled_date`: both elements set to the therapist-entered target datetime (`[target, target]`); point-in-time event. Appears as upcoming until the target date, then overdue.
+
+**Completed record** (moves from `incomplete` → `free.adverse_event_followup_visit`):
+```json
+{
+  "id": "<uuid>",
+  "adverse_event_ids": ["<AE1_id>", "<AE2_id>"],
+  "session_start": "YYYY-MM-DDTHH:MM",
+  "session_end": "YYYY-MM-DDTHH:MM",
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "ae_discussions": [
+    {
+      "adverse_event_id": "<AE1_id>",
+      "notes": "",
+      "resolved": true,
+      "can_resume_from": "YYYY-MM-DD"
+    }
+  ],
+  "scheduled_followup_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
+  "scheduled_clinical_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
+  "notes": null,
+  "attachment": null,
+  "attachment_caption": null
+}
+```
+
+- `session_start` / `session_end`: actual clock times of the visit (same calendar date; end must be after start). `completion_date` = `session_start`.
+- `ae_discussions`: one entry per AE in `adverse_event_ids` — same structure as `adverse_event_followup`.
+- `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled from this visit.
+- **Pause resolution:** same logic as `adverse_event_followup` — clears pause when all AEs resolved and no `resolve_robot_issue_visit` stubs remain.
+
+**Cancelled record** (moves from `incomplete` → top-level `cancelled` array in `protocol_events.json`):
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "adverse_event_followup_visit",
+  "adverse_event_ids": ["<AE1_id>"],
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "triggered_by": { "type": "...", "id": "<uuid>" },
+  "cancelled_at": "YYYY-MM-DDTHH:MM:SS",
+  "cancellation_reason": ""
+}
+```
+
+---
+
+**`adverse_event_clinical_visit`**
+
+Patient visits hospital consultant. Cancellable. Available for both groups.
+
+Same schema as `adverse_event_followup_visit` with one distinction:
+- `session_start` / `session_end`: the actual time the patient was at the hospital, as reported by the patient (therapist was not present).
+- All other fields identical. Stored in `free.adverse_event_clinical_visit`.
+
+---
+
+**AE history assembly (read-time)**
+
+When rendering the Adverse Events tab, the server assembles a per-AE history view by scanning all follow-up event types for each AE's ID:
+
+1. Load all entries in `free.adverse_event_followup`, `free.adverse_event_followup_visit`, `free.adverse_event_clinical_visit`
+2. For each AE in `free.adverse_event`, collect all entries from step 1 that contain the AE's ID in their `adverse_event_ids`
+3. Sort collected entries chronologically by `completion_date`
+4. The AE is **resolved** if any entry's `ae_discussions` contains `{adverse_event_id: <this_id>, resolved: true}`; `can_resume_from` taken from that entry
+
+This is computed at read time — no resolution state is stored on the AE entry itself.
 
 ### `devices/fault_reports/<type>.json`
 

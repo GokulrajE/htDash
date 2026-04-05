@@ -188,10 +188,18 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - `GET /api/patients/<homer_id>/prescription/vcg_prescription_d01` (or `d15`)
   - `GET /api/patients/<homer_id>/agwatch-timing/vcg_agwatch_timing_d03` (or `d15`)
 
-- **Stub tabs** — Devices, Call Logs, Adverse Events, Watch Records, Robot Issues show "Coming soon"
+- **Adverse Events tab** — `admin` and `therapist` only (engineers cannot see this tab). Shows one card per adverse event, assembled client-side from the events API. Each card presents:
+  - AE header: date + description + `training_blocked` badge (red "Training blocked" pill if true)
+  - Below the header: a chronological list of all follow-up activity referencing this AE's ID — any `adverse_event_followup` call entry whose `ae_discussions` list contains this AE's ID, any `adverse_event_followup_visit` or `adverse_event_clinical_visit` completed entry with this AE's ID, and any `patient_call` entry where `ae_discussed: true` (shown as "Patient call — \<date\>", greyed out when the only connection is `ae_discussed` rather than explicit `ae_id` linkage). Each activity row shows: event type, date, and the per-AE discussion notes from `ae_discussions[*].notes`.
+  - Resolved AEs show a green "Resolved" badge + resolution date (`can_resume_from` if available, else discussion date)
+  - Unresolved AEs show an amber "Ongoing" badge
+  - Cards sorted: unresolved first (most recent first), then resolved (most recent first)
+  - Assembly: data fetched from `GET /api/patients/<homer_id>/events` (which returns all `free` arrays); assembled per-AE by joining on `ae_id` across event types — no separate endpoint required
+
+- **Stub tabs** — Devices, Call Logs, Watch Records, Robot Issues show "Coming soon"
 
 
-**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
+**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [File Adverse Event](#file-adverse-event-adverse_event), [Adverse Event Follow-up Call](#adverse-event-follow-up-call-adverse_event_followup), [Adverse Event Follow-up Visit](#adverse-event-follow-up-visit-adverse_event_followup_visit), [Adverse Event Clinical Visit](#adverse-event-clinical-visit-adverse_event_clinical_visit), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
 
 ---
 
@@ -464,13 +472,15 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Duration (integer minutes, required; must be > 0)
   - Notes (textarea, required)
   - **Therapist initiated** (toggle, default off) — indicates an unplanned outbound call by the therapist (e.g. following up after an adverse event). Protocol follow-up calls (D7/D21) are not recorded here. When toggled on, a **Reason** field (textarea, required) appears to document why the call was made outside the normal protocol.
+  - **Adverse event(s) discussed** (checkbox, default unchecked) — indicates that one or more ongoing adverse events were discussed during this call. Stored as `ae_discussed: true/false`. Used on the Adverse Events tab to show that a patient call touched an AE, and allows follow-up calls to reference this patient call as the initiating contact when `patient_initiated: true`.
   - **Triggered events section** — optional; user selects which downstream events arose from this call:
     - **Adverse Event** (toggle, both groups): if enabled, shows an info note only — no sub-form fields
     - **Robot Issue** (toggle, experimental only — hidden for control patients): if enabled, shows an info note only — no sub-form fields
     - **Watch Record** (toggle, both groups): only shown if at least one watch is currently assigned (`agWatchRightID` or `agWatchLeftID` is not null); if enabled, shows an info note — no sub-form fields
   - Multiple toggles may be enabled simultaneously
+  - Attachment (optional PDF)
 - Server actions:
-  - Append `patient_call` entry to `free.patient_call` in `protocol_events.json`, with `call_type`, `reason` (if therapist initiated), `triggered: [...]`
+  - Append `patient_call` entry to `free.patient_call` in `protocol_events.json`, with `call_type`, `reason` (if therapist initiated), `ae_discussed`, `triggered: [...]`
   - For each enabled toggle:
     - **Adverse event**: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "patient_call", id: <call_id>}` — stub is completed later via the standalone `adverse-event-modal`
     - **Robot issue** (exp only): append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "patient_call", id: <call_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
@@ -545,22 +555,27 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ---
 
-### Adverse Event (`adverse_event`)
+### File Adverse Event (`adverse_event`)
 - Trigger: `adverse_event` event row on patient detail — only appears when a stub exists in `incomplete` (created by a triggering event: activation, home visit, follow-up call, or patient call)
 - Allowed users: `admin`, `therapist`
 - Modal: `adverse-event-modal`
+  - Title: "File Adverse Event"
   - **Context banner** (read-only): "Triggered by: \<triggering event name\>" — derived from the stub's `triggered_by.type`
   - Event Date (datetime, required; cannot be in the future)
   - Description (textarea, required)
   - Action taken (textarea, required)
   - Training blocked as a result (checkbox) — when checked, `trainingPausedDate` is set and the patient transitions to `paused`
+  - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past)
+  - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past)
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.adverse_event` with `completion_date`, `filed_at`, `description`, `action_taken`, `training_blocked`, `triggered_by` (carried from stub), `attachment` (if uploaded)
-  - If `training_blocked` is checked: set `trainingPausedDate` on `<homer_id>.json`
+  - Append completed entry to `free.adverse_event` with `completion_date`, `filed_at`, `description`, `action_taken`, `training_blocked`, `triggered_by` (carried from stub), `scheduled_followup_visit`, `scheduled_clinical_visit` (both `null` if not scheduled), `attachment` (if uploaded)
+  - If `training_blocked` is checked: set `trainingPausedDate` on `<homer_id>.json`; append pause epoch to `pauseHistory`
+  - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids: [<this_ae_id>]`, `triggered_by: {type: "adverse_event", id: <this_ae_id>}`; store `stub_id` in `scheduled_followup_visit`
+  - If clinical visit scheduled: same for `adverse_event_clinical_visit`
   - **Always** (regardless of `training_blocked`): if an `adverse_event_followup` stub already exists in `incomplete`, add this event's ID to its `adverse_event_ids` list. If no stub exists, seed a new one with `adverse_event_ids: [<this_event_id>]`, `scheduled_date: [today, today + 1 day]`
-- Log message: `Adverse event recorded`; if training blocked: also `Training paused — adverse event`
+- Log message: `Adverse event filed`; if training blocked: also `Training paused — adverse event`; if visits scheduled: `Adverse event follow-up visit scheduled` / `Adverse event clinical visit scheduled`
 
 ---
 
@@ -625,22 +640,27 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Allowed users: `admin`, `therapist`
 - Modal: `adverse-event-followup-modal`
   - **Context banner** (read-only): lists all adverse events covered by this follow-up (names + dates), derived from `adverse_event_ids`
+  - **Patient initiated** (toggle, default off) — indicates that the patient contacted the clinic first (rather than the therapist initiating the call). When on, a **Related patient call** selector appears (required when toggle is on): dropdown of all `patient_call` entries for this patient where `ae_discussed: true`, shown as "DD Mon YYYY · HH:MM". Selecting one stores `related_patient_call_id`. The therapist should first log the patient call via the Patient Call modal, then open this follow-up.
   - Call Date/Time (datetime, required; cannot be in the future)
   - Duration (integer minutes, required; must be > 0)
-  - Notes (textarea, required)
-  - **Per adverse event** — one row per AE in `adverse_event_ids`:
+  - Notes (textarea, optional) — general call-level notes
+  - **Per adverse event** — one section per AE in `adverse_event_ids`:
     - AE name/date (read-only label)
+    - **Discussion notes** (textarea, optional) — what was discussed about this AE during the call
     - **Resolved** (checkbox)
-    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise) — the earliest date training is possible again from this AE's perspective. If resolved today and training can happen today, enter today (0 pause days counted).
+    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise) — the earliest date training is possible again from this AE's perspective
+  - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). If an `adverse_event_followup_visit` stub already exists that covers all current `adverse_event_ids`, this toggle is hidden (stub already scheduled)
+  - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Same hide-if-exists logic as above.
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
-  - Append completed entry to `free.adverse_event_followup` with `completion_date`, `filed_at`, `duration_minutes`, `notes`, `resolutions` (per-AE resolved + `can_resume_from`), `attachment` (if uploaded)
-  - For each AE marked resolved with `training_blocked: true`: note its `can_resume_from`
-  - If any AEs remain unresolved: seed next stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
+  - Append completed entry to `free.adverse_event_followup` with `completion_date`, `filed_at`, `patient_initiated`, `related_patient_call_id` (if patient-initiated), `duration_minutes`, `notes`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `scheduled_followup_visit`, `scheduled_clinical_visit` (both `null` if not scheduled), `triggered_by` (from stub), `attachment` (if uploaded)
+  - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids: [<all AE IDs in this call>]`, `triggered_by: {type: "adverse_event_followup", id: <this_event_id>}`
+  - If clinical visit scheduled: same for `adverse_event_clinical_visit`
+  - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
   - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: increment `cumulativePauseDays` by `(max(can_resume_from across all pausing AEs) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
   - If all AEs resolved but `resolve_robot_issue_visit` stubs still remain: no change to pause fields (robot issue still blocking)
-- Log message: `Adverse event follow-up call recorded`; if all resolved: also `Adverse event(s) resolved`
+- Log message: `Adverse event follow-up call recorded`; if visits scheduled: `AE follow-up visit scheduled` / `AE clinical visit scheduled`; if all resolved: also `Adverse event(s) resolved`
 
 ---
 
@@ -677,6 +697,54 @@ Each action is defined once here. Pages above reference which actions apply to t
   - If no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain: compute `cumulativePauseDays`; clear `trainingPausedDate`; if total > 10, patient transitions to `broken_protocol`
   - If `adverse_event_followup` stubs remain: no change to pause fields
 - Log message: `Robot issue resolved — replacement device assigned`
+
+---
+
+### Adverse Event Follow-up Visit (`adverse_event_followup_visit`)
+- Trigger: `adverse_event_followup_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a follow-up visit is scheduled.
+- Allowed users: `admin`, `therapist`
+- Cancellable: yes — a **Cancel Visit** button is shown in the modal footer. Clicking it prompts for a cancellation reason (textarea, required). Cancellation moves the stub to the top-level `cancelled` array in `protocol_events.json` with `cancelled_at` timestamp and `cancellation_reason`. No further stubs are created.
+- Modal: `adverse-event-followup-visit-modal`
+  - **Context banner** (read-only): lists all adverse events covered by this visit (names + dates), derived from `adverse_event_ids`
+  - Visit start (datetime, required; cannot be in the future)
+  - Visit end (datetime, required; must be same calendar date as start; must be after start)
+  - **Per adverse event** — one section per AE in `adverse_event_ids`:
+    - AE name/date (read-only label)
+    - **Discussion notes** (textarea, optional) — what was discussed / observed during this visit for this AE
+    - **Resolved** (checkbox)
+    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
+  - Visit-level notes (textarea, optional)
+  - Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - Append completed entry to `free.adverse_event_followup_visit` with `completion_date` (= visit start), `filed_at`, `visit_start`, `visit_end`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `notes`, `triggered_by` (from stub), `attachment` (if uploaded)
+  - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]` (back to call-based follow-up)
+  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: clear pause (same logic as follow-up call)
+- Log message: `Adverse event follow-up visit recorded`; if all resolved: also `Adverse event(s) resolved`
+
+---
+
+### Adverse Event Clinical Visit (`adverse_event_clinical_visit`)
+- Trigger: `adverse_event_clinical_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a clinical visit is scheduled.
+- Allowed users: `admin`, `therapist`
+- Cancellable: yes — same cancellation behaviour as `adverse_event_followup_visit` (reason required, stored as `cancellation_reason`)
+- Modal: `adverse-event-clinical-visit-modal`
+  - **Context banner** (read-only): lists all adverse events covered by this visit (names + dates)
+  - Visit start (datetime, required; cannot be in the future)
+  - Visit end (datetime, required; same calendar date; after start)
+  - **Per adverse event** — one section per AE in `adverse_event_ids`:
+    - AE name/date (read-only label)
+    - **Discussion notes** (textarea, optional) — notes from the consultant / therapist discussion about this AE
+    - **Resolved** (checkbox)
+    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
+  - Visit-level notes (textarea, optional)
+  - Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - Append completed entry to `free.adverse_event_clinical_visit` with `completion_date` (= visit start), `filed_at`, `visit_start`, `visit_end`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `notes`, `triggered_by` (from stub), `attachment` (if uploaded)
+  - If any AEs remain unresolved: seed next `adverse_event_followup` stub (back to call-based chain)
+  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain: clear pause (same logic)
+- Log message: `Adverse event clinical visit recorded`; if all resolved: also `Adverse event(s) resolved`
 
 ---
 
@@ -745,3 +813,23 @@ This ensures the device inventory accurately reflects availability for new patie
 - Log message written to the device log
 
 **Note:** Swaps with `swap_type: "preventive"` do not create fault report stubs — the device is not considered faulty and can be reassigned immediately.
+
+### Adverse Event Amendment (Future)
+
+**Context:** Once an adverse event is filed, the description and action taken are locked. There is currently no way to correct a clerical error.
+
+**Required feature:** An **"Amend"** action on each AE card in the Adverse Events tab, available to `admin` only, that:
+- Opens a small modal with editable description and action taken fields pre-filled
+- Requires an amendment reason (textarea, required)
+- On save: updates the record in `free.adverse_event` and appends an `amendments` list entry recording the original values, the reason, and the amendment timestamp
+- Log message: `Adverse event amended — <ae_id>`
+
+### Clinical Notes Tab (Future)
+
+**Context:** The current Adverse Events tab assembles a per-AE history for monitoring purposes. As the study grows, therapists have requested a dedicated free-form notes area per patient — not tied to a specific event.
+
+**Required feature:** A **Clinical Notes** tab on the patient detail page, available to `admin` and `therapist`, with:
+- A chronological list of free-text notes, each with author, date, and text
+- An "Add Note" button opening a simple modal with a textarea (required)
+- Notes stored in `free.clinical_notes` array
+- Notes are read-only after filing; amendment via admin only (same amendment pattern as AE)
