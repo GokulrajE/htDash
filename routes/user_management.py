@@ -2350,7 +2350,7 @@ def api_upload_attachment(homer_id):
     if not caption:
         return jsonify({'error': 'Caption is required'}), 400
 
-    # Find event in complete list
+    # Find event — search complete list first, then all free arrays
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
         return jsonify({'error': 'Protocol events not found'}), 404
@@ -2360,7 +2360,13 @@ def api_upload_attachment(homer_id):
         None
     )
     if not entry:
-        return jsonify({'error': 'Completed event not found'}), 404
+        for val in events_data.get('free', {}).values():
+            if isinstance(val, list):
+                entry = next((e for e in val if e.get('id') == event_id), None)
+                if entry:
+                    break
+    if not entry:
+        return jsonify({'error': 'Event not found'}), 404
 
     # Save PDF as attachments/<event_id>.pdf
     attachment_rel  = f'attachments/{event_id}.pdf'

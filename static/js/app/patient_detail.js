@@ -3205,8 +3205,8 @@ async function savePatientCall() {
     if (!uploaded) { saveBtn.disabled = false; return; }
   }
 
-  hideModal('patient-call-modal');
   saveBtn.disabled = false;
+  hideModal('patient-call-modal');
   await loadPatientEvents();
 }
 
