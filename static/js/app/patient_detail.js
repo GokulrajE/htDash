@@ -530,6 +530,10 @@ const _FIELD_ORDER = [
   'pluto_id', 'mars_id', 'demo_done',
   'ag_watch_right', 'ag_watch_left',
   'prescription_file',
+  'description', 'action_taken', 'training_blocked',
+  'visit_start', 'visit_end',
+  'duration_minutes',
+  'ae_discussions', 'resolutions',
 ];
 
 const _FIELD_LABELS = {
@@ -554,6 +558,11 @@ const _FIELD_LABELS = {
   device_replacements:  'Device Replacements',
   other_device_outcomes: 'Other Device Outcomes',
   visit_required:       'Visit Required',
+  visit_start:          'Visit Start',
+  visit_end:            'Visit End',
+  ae_discussions:       'AE Discussions',
+  resolutions:          'AE Resolutions',
+  training_blocked:     'Training Blocked',
   paused:              'Paused',
   notes:               'Notes',
 };
@@ -620,6 +629,14 @@ function _timelineExtraFields(ev) {
         const to   = d.new_device_id || 'none';
         const note = d.notes ? ` (${d.notes})` : '';
         return `${dev}: ${from} → ${to}${note}`;
+      }).join('; ');
+    } else if ((key === 'ae_discussions' || key === 'resolutions') && Array.isArray(val)) {
+      if (!val.length) continue;
+      display = val.map(r => {
+        const status = r.resolved ? '✓ Resolved' : '○ Ongoing';
+        const resume = r.can_resume_from ? ` (resume from ${r.can_resume_from})` : '';
+        const disc   = r.notes ? ` — ${r.notes}` : '';
+        return `${status}${resume}${disc}`;
       }).join('; ');
     } else if (key === 'duration_minutes') {
       display = `${val} min`;
@@ -1666,6 +1683,203 @@ async function saveAdverseEventFollowup() {
   await loadPatientEvents();
 }
 
+// ── AE Follow-up Visit modal ──────────────────────────────────────────────────
+
+let _aefvEventId   = null;
+let _aefvAeDetails = [];
+
+function _buildAeVisitRows(prefix, aeDetails) {
+  return aeDetails.map((ae, i) => {
+    const dateStr = ae.date ? _fmtDateTime(ae.date) : 'Unknown date';
+    const pauseTag = ae.training_blocked
+      ? ' <span class="text-xs text-red-600 font-medium">(training blocked)</span>' : '';
+    const resumeField = ae.training_blocked
+      ? `<div id="${prefix}-resume-wrap-${i}" class="hidden mt-2">
+           <label class="block text-xs font-medium text-slate-600 mb-1">Can resume from <span class="text-red-400">*</span></label>
+           <input type="date" id="${prefix}-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+         </div>` : '';
+    return `<div class="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+      <div class="text-sm font-medium text-slate-700">Adverse Event — ${dateStr}${pauseTag}</div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600 mb-1">Discussion notes</label>
+        <textarea id="${prefix}-disc-${i}" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="What was discussed for this AE…"></textarea>
+      </div>
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" id="${prefix}-resolved-${i}" onchange="_aeVisitToggleResume('${prefix}', ${i})" class="w-4 h-4 rounded border-slate-300">
+        <span class="text-sm text-slate-700">Resolved</span>
+      </label>
+      ${resumeField}
+    </div>`;
+  }).join('');
+}
+
+function _aeVisitToggleResume(prefix, i) {
+  const wrap = document.getElementById(`${prefix}-resume-wrap-${i}`);
+  if (!wrap) return;
+  const resolved = document.getElementById(`${prefix}-resolved-${i}`).checked;
+  wrap.classList.toggle('hidden', !resolved);
+  if (!resolved) document.getElementById(`${prefix}-resume-${i}`).value = '';
+}
+
+function _collectAeDiscussions(prefix, aeDetails) {
+  // Returns {discussions, error}
+  const discussions = [];
+  for (let i = 0; i < aeDetails.length; i++) {
+    const ae       = aeDetails[i];
+    const notes    = document.getElementById(`${prefix}-disc-${i}`)?.value.trim() || null;
+    const resolved = document.getElementById(`${prefix}-resolved-${i}`).checked;
+    let can_resume_from = null;
+    if (resolved && ae.training_blocked) {
+      can_resume_from = document.getElementById(`${prefix}-resume-${i}`)?.value || '';
+      if (!can_resume_from)
+        return { discussions: null, error: 'Can resume from date is required for resolved training-blocked events.' };
+    }
+    discussions.push({ adverse_event_id: ae.id, notes, resolved, can_resume_from: can_resume_from || null });
+  }
+  return { discussions, error: null };
+}
+
+function _loadAeDetails(aeIds) {
+  return aeIds.map(id => {
+    const ae = (_completeEventsCache || []).find(e => e.id === id);
+    return { id, date: ae?.completion_date || '', training_blocked: ae?.training_blocked || false };
+  });
+}
+
+function _buildAeContextBanner(prefix, aeDetails) {
+  const el = document.getElementById(`${prefix}-context-banner`);
+  el.innerHTML = aeDetails.length
+    ? aeDetails.map(ae => {
+        const dateStr  = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
+        const pauseTag = ae.training_blocked
+          ? ' <span class="text-red-600 font-medium">(training blocked)</span>' : '';
+        return `<div>Adverse Event${dateStr}${pauseTag}</div>`;
+      }).join('')
+    : '<div class="text-slate-400">No adverse events found.</div>';
+}
+
+function openAeFollowupVisitModal(ev) {
+  _aefvEventId   = ev.id;
+  _aefvAeDetails = _loadAeDetails(ev.adverse_event_ids || []);
+  _buildAeContextBanner('aefv', _aefvAeDetails);
+  document.getElementById('aefv-ae-rows').innerHTML = _buildAeVisitRows('aefv', _aefvAeDetails);
+  document.getElementById('aefv-start').value = '';
+  document.getElementById('aefv-end').value   = '';
+  document.getElementById('aefv-notes').value = '';
+  _resetAttachment('aefv');
+  setError('aefv-error', '');
+  _attachSessionEndGuard('aefv-start', 'aefv-end', 'aefv-error');
+  _attachDateGuard('aefv-start', 'aefv-error');
+  showModal('ae-followup-visit-modal');
+}
+
+async function saveAeFollowupVisit() {
+  const start   = document.getElementById('aefv-start').value;
+  const end     = document.getElementById('aefv-end').value;
+  const notes   = document.getElementById('aefv-notes').value.trim();
+  const saveBtn = document.getElementById('aefv-save');
+
+  if (!start) { setError('aefv-error', 'Visit start is required.'); return; }
+  if (!end)   { setError('aefv-error', 'Visit end is required.'); return; }
+  if (start.split('T')[0] !== end.split('T')[0]) { setError('aefv-error', 'Start and end must be on the same date.'); return; }
+  if (end <= start) { setError('aefv-error', 'Visit end must be after visit start.'); return; }
+  if (!_validateAttachment('aefv', 'aefv-error')) return;
+
+  const { discussions, error } = _collectAeDiscussions('aefv', _aefvAeDetails);
+  if (error) { setError('aefv-error', error); return; }
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-followup-visit`,
+    { event_id: _aefvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions }
+  );
+  if (!ok) { setError('aefv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('aefv');
+  if (file) {
+    const uploaded = await _uploadAttachment(data.id, file, caption, 'aefv-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('ae-followup-visit-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
+// ── AE Clinical Visit modal ───────────────────────────────────────────────────
+
+let _aecvEventId   = null;
+let _aecvAeDetails = [];
+
+function openAeClinicalVisitModal(ev) {
+  _aecvEventId   = ev.id;
+  _aecvAeDetails = _loadAeDetails(ev.adverse_event_ids || []);
+  _buildAeContextBanner('aecv', _aecvAeDetails);
+  document.getElementById('aecv-ae-rows').innerHTML = _buildAeVisitRows('aecv', _aecvAeDetails);
+  document.getElementById('aecv-start').value = '';
+  document.getElementById('aecv-end').value   = '';
+  document.getElementById('aecv-notes').value = '';
+  _resetAttachment('aecv');
+  setError('aecv-error', '');
+  _attachSessionEndGuard('aecv-start', 'aecv-end', 'aecv-error');
+  _attachDateGuard('aecv-start', 'aecv-error');
+  showModal('ae-clinical-visit-modal');
+}
+
+async function saveAeClinicalVisit() {
+  const start   = document.getElementById('aecv-start').value;
+  const end     = document.getElementById('aecv-end').value;
+  const notes   = document.getElementById('aecv-notes').value.trim();
+  const saveBtn = document.getElementById('aecv-save');
+
+  if (!start) { setError('aecv-error', 'Visit start is required.'); return; }
+  if (!end)   { setError('aecv-error', 'Visit end is required.'); return; }
+  if (start.split('T')[0] !== end.split('T')[0]) { setError('aecv-error', 'Start and end must be on the same date.'); return; }
+  if (end <= start) { setError('aecv-error', 'Visit end must be after visit start.'); return; }
+  if (!_validateAttachment('aecv', 'aecv-error')) return;
+
+  const { discussions, error } = _collectAeDiscussions('aecv', _aecvAeDetails);
+  if (error) { setError('aecv-error', error); return; }
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-clinical-visit`,
+    { event_id: _aecvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions }
+  );
+  if (!ok) { setError('aecv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('aecv');
+  if (file) {
+    const uploaded = await _uploadAttachment(data.id, file, caption, 'aecv-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('ae-clinical-visit-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
+// ── AE visit cancellation ─────────────────────────────────────────────────────
+
+async function _cancelAeVisit(prefix) {
+  const reason = prompt('Reason for cancellation (required):');
+  if (reason === null) return; // user dismissed
+  if (!reason.trim()) { alert('Cancellation reason is required.'); return; }
+
+  const eventId  = prefix === 'aefv' ? _aefvEventId : _aecvEventId;
+  const modalId  = prefix === 'aefv' ? 'ae-followup-visit-modal' : 'ae-clinical-visit-modal';
+  const endpoint = prefix === 'aefv' ? 'ae-followup-visit' : 'ae-clinical-visit';
+
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/cancel-event/${endpoint}`,
+    { event_id: eventId, cancellation_reason: reason.trim() }
+  );
+  if (!ok) { alert(data.error || 'Failed to cancel.'); return; }
+
+  hideModal(modalId);
+  await loadPatientEvents();
+}
+
 // ── Resolve Robot Issue Visit modal ───────────────────────────────────────────
 
 let _rrivEventId     = null;
@@ -2070,6 +2284,8 @@ const EVENT_OPENERS = {
   robot_issue_call:             (ev) => openRobotIssueCallModal(ev),
   robot_issue_visit:            (ev) => openRobotIssueVisitModal(ev),
   adverse_event_followup:       (ev) => openAdverseEventFollowupModal(ev),
+  adverse_event_followup_visit: (ev) => openAeFollowupVisitModal(ev),
+  adverse_event_clinical_visit: (ev) => openAeClinicalVisitModal(ev),
   resolve_robot_issue_visit:    (ev) => openResolveRobotIssueVisitModal(ev),
 };
 

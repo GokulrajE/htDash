@@ -212,12 +212,14 @@ def api_patient_events(homer_id):
     # Free events are already "complete" — include them so they appear in the
     # timeline and completed-events count.
     _FREE_EVENT_NAMES = {
-        'patient_call':              'Patient Call',
-        'adverse_event':             'Adverse Event',
-        'adverse_event_followup':    'Adverse Event Follow-up',
-        'robot_issue_call':          'Robot Issue — Engineer Call',
-        'robot_issue_visit':         'Robot Issue — Engineer Visit',
-        'resolve_robot_issue_visit': 'Robot Issue — Replacement Visit',
+        'patient_call':                  'Patient Call',
+        'adverse_event':                 'File Adverse Event',
+        'adverse_event_followup':        'Adverse Event Follow-up Call',
+        'adverse_event_followup_visit':  'Adverse Event Follow-up Visit',
+        'adverse_event_clinical_visit':  'Adverse Event Clinical Visit',
+        'robot_issue_call':              'Robot Issue — Engineer Call',
+        'robot_issue_visit':             'Robot Issue — Engineer Visit',
+        'resolve_robot_issue_visit':     'Robot Issue — Replacement Visit',
     }
     for free_type, free_name in _FREE_EVENT_NAMES.items():
         for entry in events_data.get('free', {}).get(free_type, []):
@@ -1351,9 +1353,304 @@ def api_complete_adverse_event_followup(homer_id):
 
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event follow-up call recorded.')
 
+    return jsonify({'ok': True, 'id': event_id})
+
+
+def _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes, filed_at, event_id, folder, homer_id, loginid, session_id):
+    """Clear trainingPausedDate if all AEs resolved and no resolve_robot_issue_visit stubs remain."""
+    resolve_ri_stubs = [
+        e for e in events_data.get('incomplete', [])
+        if e.get('protocol_event_id') == 'resolve_robot_issue_visit'
+    ]
+    if not patient_meta or not patient_meta.get('trainingPausedDate') or resolve_ri_stubs:
+        return
+    training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
+    resume_dates = []
+    for r in resolutions:
+        ae = free_aes.get(r.get('adverse_event_id'), {})
+        if r.get('resolved') and ae.get('training_blocked') and r.get('can_resume_from'):
+            try:
+                resume_dates.append(date.fromisoformat(r['can_resume_from']))
+            except ValueError:
+                pass
+    pause_days = max(0, (max(resume_dates) - training_paused).days) if resume_dates else 0
+    patient_meta['cumulativePauseDays'] = (patient_meta.get('cumulativePauseDays') or 0) + pause_days
+    end_dt = filed_at[:16]
+    open_epoch = next((e for e in patient_meta.get('pauseHistory', []) if e.get('end') is None), None)
+    if open_epoch:
+        open_epoch['end']          = end_dt
+        open_epoch['days']         = pause_days
+        open_epoch['end_event_id'] = event_id
+    patient_meta['trainingPausedDate'] = None
+    if (patient_meta.get('cumulativePauseDays') or 0) > 10:
+        if not patient_meta.get('brokenProtocolDate'):
+            patient_meta['brokenProtocolDate'] = filed_at[:10]
+    write_patient_meta(folder, homer_id, patient_meta)
+    write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
+
+
+def _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, resolutions, free_aes,
+                                     patient_meta, filed_at, event_id,
+                                     folder, homer_id, loginid, session_id):
+    """Seed next follow-up stub for unresolved AEs, or clear pause if all resolved."""
+    resolved_ids   = {r['adverse_event_id'] for r in resolutions if r.get('resolved')}
+    unresolved_ids = [ae_id for ae_id in stub_ae_ids if ae_id not in resolved_ids]
+    today_str = date.today().strftime('%Y-%m-%dT%H:%M')
+    tomorrow  = (date.today() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
+    if unresolved_ids:
+        events_data.setdefault('incomplete', []).append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'adverse_event_followup',
+            'adverse_event_ids': unresolved_ids,
+            'scheduled_date':    [today_str, tomorrow],
+            'filed_at':          filed_at,
+        })
+    else:
+        _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes,
+                                     filed_at, event_id, folder, homer_id, loginid, session_id)
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/ae-followup-visit', methods=['POST'])
+def api_complete_ae_followup_visit(homer_id):
+    """Complete an adverse_event_followup_visit stub."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body            = request.get_json() or {}
+    event_id        = body.get('event_id')
+    visit_start     = (body.get('visit_start') or '').strip()
+    visit_end       = (body.get('visit_end') or '').strip()
+    notes           = (body.get('notes') or '').strip() or None
+    ae_discussions  = body.get('ae_discussions', [])
+
+    if not event_id:
+        return jsonify({'error': 'event_id is required.'}), 400
+    if not visit_start:
+        return jsonify({'error': 'Visit start is required.'}), 400
+    if not visit_end:
+        return jsonify({'error': 'Visit end is required.'}), 400
+    try:
+        start_dt = datetime.strptime(visit_start, '%Y-%m-%dT%H:%M')
+        end_dt   = datetime.strptime(visit_end,   '%Y-%m-%dT%H:%M')
+        if start_dt > datetime.now():
+            return jsonify({'error': 'Visit start cannot be in the future.'}), 400
+        if start_dt.date() != end_dt.date():
+            return jsonify({'error': 'Visit start and end must be on the same date.'}), 400
+        if end_dt <= start_dt:
+            return jsonify({'error': 'Visit end must be after visit start.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+    if not isinstance(ae_discussions, list):
+        return jsonify({'error': 'ae_discussions must be a list.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == 'adverse_event_followup_visit' and e.get('id') == event_id),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Follow-up visit stub not found.'}), 404
+
+    stub_ae_ids = entry.get('adverse_event_ids', [])
+    free_aes    = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
+
+    for r in ae_discussions:
+        ae_id = r.get('adverse_event_id')
+        if ae_id not in stub_ae_ids:
+            return jsonify({'error': f'Unknown adverse_event_id: {ae_id}'}), 400
+        if r.get('resolved'):
+            ae = free_aes.get(ae_id, {})
+            if ae.get('training_blocked') and not (r.get('can_resume_from') or '').strip():
+                return jsonify({'error': 'can_resume_from is required for resolved training-blocked events.'}), 400
+
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+
+    complete_entry = {
+        **entry,
+        'completion_date': visit_start,
+        'filed_at':        filed_at,
+        'visit_start':     visit_start,
+        'visit_end':       visit_end,
+        'ae_discussions':  ae_discussions,
+        'notes':           notes,
+    }
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
+    events_data.setdefault('free', {}).setdefault('adverse_event_followup_visit', []).append(complete_entry)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    patient_meta = read_patient_meta(folder, homer_id)
+    _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
+                                     patient_meta, filed_at, event_id,
+                                     folder, homer_id, loginid, session_id)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+    write_patient_log(folder, homer_id, loginid, session_id, 'AE follow-up visit recorded.')
+
+    return jsonify({'ok': True, 'id': event_id})
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/ae-clinical-visit', methods=['POST'])
+def api_complete_ae_clinical_visit(homer_id):
+    """Complete an adverse_event_clinical_visit stub."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body            = request.get_json() or {}
+    event_id        = body.get('event_id')
+    visit_start     = (body.get('visit_start') or '').strip()
+    visit_end       = (body.get('visit_end') or '').strip()
+    notes           = (body.get('notes') or '').strip() or None
+    ae_discussions  = body.get('ae_discussions', [])
+
+    if not event_id:
+        return jsonify({'error': 'event_id is required.'}), 400
+    if not visit_start:
+        return jsonify({'error': 'Visit start is required.'}), 400
+    if not visit_end:
+        return jsonify({'error': 'Visit end is required.'}), 400
+    try:
+        start_dt = datetime.strptime(visit_start, '%Y-%m-%dT%H:%M')
+        end_dt   = datetime.strptime(visit_end,   '%Y-%m-%dT%H:%M')
+        if start_dt > datetime.now():
+            return jsonify({'error': 'Visit start cannot be in the future.'}), 400
+        if start_dt.date() != end_dt.date():
+            return jsonify({'error': 'Visit start and end must be on the same date.'}), 400
+        if end_dt <= start_dt:
+            return jsonify({'error': 'Visit end must be after visit start.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+    if not isinstance(ae_discussions, list):
+        return jsonify({'error': 'ae_discussions must be a list.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == 'adverse_event_clinical_visit' and e.get('id') == event_id),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Clinical visit stub not found.'}), 404
+
+    stub_ae_ids = entry.get('adverse_event_ids', [])
+    free_aes    = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
+
+    for r in ae_discussions:
+        ae_id = r.get('adverse_event_id')
+        if ae_id not in stub_ae_ids:
+            return jsonify({'error': f'Unknown adverse_event_id: {ae_id}'}), 400
+        if r.get('resolved'):
+            ae = free_aes.get(ae_id, {})
+            if ae.get('training_blocked') and not (r.get('can_resume_from') or '').strip():
+                return jsonify({'error': 'can_resume_from is required for resolved training-blocked events.'}), 400
+
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+
+    complete_entry = {
+        **entry,
+        'completion_date': visit_start,
+        'filed_at':        filed_at,
+        'visit_start':     visit_start,
+        'visit_end':       visit_end,
+        'ae_discussions':  ae_discussions,
+        'notes':           notes,
+    }
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
+    events_data.setdefault('free', {}).setdefault('adverse_event_clinical_visit', []).append(complete_entry)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    patient_meta = read_patient_meta(folder, homer_id)
+    _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
+                                     patient_meta, filed_at, event_id,
+                                     folder, homer_id, loginid, session_id)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+    write_patient_log(folder, homer_id, loginid, session_id, 'AE clinical visit recorded.')
+
+    return jsonify({'ok': True, 'id': event_id})
+
+
+@bp.route('/api/patients/<homer_id>/cancel-event/<event_type>', methods=['POST'])
+def api_cancel_event(homer_id, event_type):
+    """Cancel a cancellable stub — moves it from incomplete to cancelled array."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    cancellable_types = {'ae-followup-visit': 'adverse_event_followup_visit',
+                         'ae-clinical-visit':  'adverse_event_clinical_visit'}
+    protocol_event_id = cancellable_types.get(event_type)
+    if not protocol_event_id:
+        return jsonify({'error': 'Unknown or non-cancellable event type.'}), 400
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body                = request.get_json() or {}
+    event_id            = body.get('event_id')
+    cancellation_reason = (body.get('cancellation_reason') or '').strip()
+
+    if not event_id:
+        return jsonify({'error': 'event_id is required.'}), 400
+    if not cancellation_reason:
+        return jsonify({'error': 'Cancellation reason is required.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == protocol_event_id and e.get('id') == event_id),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Stub not found.'}), 404
+
+    cancelled_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    cancelled_entry = {**entry, 'cancelled_at': cancelled_at, 'cancellation_reason': cancellation_reason}
+
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
+    events_data.setdefault('cancelled', []).append(cancelled_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      f'{protocol_event_id} cancelled — {cancellation_reason}')
+
     return jsonify({'ok': True})
-
-
 
 
 @bp.route('/api/patients/<homer_id>/complete-event/robot-issue-call', methods=['POST'])
