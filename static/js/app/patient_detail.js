@@ -1172,10 +1172,29 @@ function openAdverseEventModal(ev) {
     ? (_AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type)
     : 'Unknown';
   document.getElementById('ae-context-banner').textContent = `Triggered by: ${triggerLabel}`;
-  document.getElementById('ae-date').value        = '';
-  document.getElementById('ae-description').value = '';
+  document.getElementById('ae-date').value         = '';
+  document.getElementById('ae-description').value  = '';
   document.getElementById('ae-action-taken').value = '';
-  document.getElementById('ae-paused').checked    = false;
+  document.getElementById('ae-paused').checked     = false;
+
+  document.getElementById('ae-schedule-visit').checked    = false;
+  document.getElementById('ae-visit-date-wrap').classList.add('hidden');
+  document.getElementById('ae-visit-date').value           = '';
+  document.getElementById('ae-schedule-clinical').checked  = false;
+  document.getElementById('ae-clinical-date-wrap').classList.add('hidden');
+  document.getElementById('ae-clinical-date').value        = '';
+
+  document.getElementById('ae-schedule-visit').onchange = () => {
+    const on = document.getElementById('ae-schedule-visit').checked;
+    document.getElementById('ae-visit-date-wrap').classList.toggle('hidden', !on);
+    if (!on) document.getElementById('ae-visit-date').value = '';
+  };
+  document.getElementById('ae-schedule-clinical').onchange = () => {
+    const on = document.getElementById('ae-schedule-clinical').checked;
+    document.getElementById('ae-clinical-date-wrap').classList.toggle('hidden', !on);
+    if (!on) document.getElementById('ae-clinical-date').value = '';
+  };
+
   _resetAttachment('ae');
   setError('ae-error', '');
   _attachDateGuard('ae-date', 'ae-error');
@@ -1189,21 +1208,33 @@ async function saveAdverseEvent() {
   const training_blocked = document.getElementById('ae-paused').checked;
   const saveBtn          = document.getElementById('ae-save');
 
+  const scheduleVisit    = document.getElementById('ae-schedule-visit').checked;
+  const visitDate        = document.getElementById('ae-visit-date').value;
+  const scheduleClinical = document.getElementById('ae-schedule-clinical').checked;
+  const clinicalDate     = document.getElementById('ae-clinical-date').value;
+
   if (!date)        { setError('ae-error', 'Event date is required.'); return; }
   if (!description) { setError('ae-error', 'Description is required.'); return; }
   if (!actionTaken) { setError('ae-error', 'Action taken is required.'); return; }
+  if (scheduleVisit && !visitDate)    { setError('ae-error', 'Follow-up visit date is required.'); return; }
+  if (scheduleClinical && !clinicalDate) { setError('ae-error', 'Clinical visit date is required.'); return; }
   if (!_validateAttachment('ae', 'ae-error')) return;
 
   saveBtn.disabled = true;
+  const payload = {
+    event_id: _aeEventId, completion_date: date, description,
+    action_taken: actionTaken, training_blocked,
+    scheduled_followup_visit:  scheduleVisit    ? visitDate    : null,
+    scheduled_clinical_visit:  scheduleClinical ? clinicalDate : null,
+  };
   const { ok, data } = await apiPost(
-    `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event`,
-    { event_id: _aeEventId, completion_date: date, description, action_taken: actionTaken, training_blocked }
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event`, payload
   );
   if (!ok) { setError('ae-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
   const { file, caption } = _readAttachment('ae');
   if (file) {
-    const uploaded = await _uploadAttachment(_aeEventId, file, caption, 'ae-error');
+    const uploaded = await _uploadAttachment(data.id, file, caption, 'ae-error');
     if (!uploaded) { saveBtn.disabled = false; return; }
   }
 

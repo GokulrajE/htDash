@@ -1001,7 +1001,7 @@
 <div id="adverse-event-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-md w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Adverse Event</h3>
+      <h3 class="text-xl font-bold text-slate-800">File Adverse Event</h3>
       <button onclick="hideModal('adverse-event-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
@@ -1022,6 +1022,28 @@
         <input type="checkbox" id="ae-paused" class="w-4 h-4 rounded border-slate-300">
         <span class="text-sm text-slate-700">Training paused as a result</span>
       </label>
+      <!-- Follow-up visit scheduling -->
+      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="ae-schedule-visit" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a follow-up visit</span>
+        </label>
+        <div id="ae-visit-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="ae-visit-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+      </div>
+      <!-- Clinical visit scheduling -->
+      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="ae-schedule-clinical" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a clinical visit</span>
+        </label>
+        <div id="ae-clinical-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="ae-clinical-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+      </div>
       {{ attachment_section('ae') }}
     </div>
     <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">

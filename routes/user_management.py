@@ -1072,12 +1072,14 @@ def api_complete_adverse_event(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    body             = request.get_json() or {}
-    event_id         = body.get('event_id')
-    completion_date  = (body.get('completion_date') or '').strip()
-    description      = (body.get('description') or '').strip()
-    action_taken     = (body.get('action_taken') or '').strip()
-    training_blocked = bool(body.get('training_blocked', False))
+    body                      = request.get_json() or {}
+    event_id                  = body.get('event_id')
+    completion_date           = (body.get('completion_date') or '').strip()
+    description               = (body.get('description') or '').strip()
+    action_taken              = (body.get('action_taken') or '').strip()
+    training_blocked          = bool(body.get('training_blocked', False))
+    scheduled_followup_visit  = (body.get('scheduled_followup_visit') or '').strip() or None
+    scheduled_clinical_visit  = (body.get('scheduled_clinical_visit') or '').strip() or None
 
     if not event_id:
         return jsonify({'error': 'event_id is required.'}), 400
@@ -1092,6 +1094,16 @@ def api_complete_adverse_event(homer_id):
         return jsonify({'error': 'Description is required.'}), 400
     if not action_taken:
         return jsonify({'error': 'Action taken is required.'}), 400
+    if scheduled_followup_visit:
+        try:
+            datetime.strptime(scheduled_followup_visit, '%Y-%m-%dT%H:%M')
+        except ValueError:
+            return jsonify({'error': 'Invalid follow-up visit date format.'}), 400
+    if scheduled_clinical_visit:
+        try:
+            datetime.strptime(scheduled_clinical_visit, '%Y-%m-%dT%H:%M')
+        except ValueError:
+            return jsonify({'error': 'Invalid clinical visit date format.'}), 400
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
@@ -1111,13 +1123,19 @@ def api_complete_adverse_event(homer_id):
     tomorrow  = (today + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
     today_str = today.strftime('%Y-%m-%dT%H:%M')
 
+    # Build completed entry
+    followup_visit_stub_id  = str(uuid.uuid4()) if scheduled_followup_visit else None
+    clinical_visit_stub_id  = str(uuid.uuid4()) if scheduled_clinical_visit else None
+
     complete_entry = {
         **entry,
-        'completion_date':  completion_date,
-        'filed_at':         filed_at,
-        'description':      description,
-        'action_taken':     action_taken,
-        'training_blocked': training_blocked,
+        'completion_date':          completion_date,
+        'filed_at':                 filed_at,
+        'description':              description,
+        'action_taken':             action_taken,
+        'training_blocked':         training_blocked,
+        'scheduled_followup_visit': followup_visit_stub_id,
+        'scheduled_clinical_visit': clinical_visit_stub_id,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
     events_data.setdefault('free', {}).setdefault('adverse_event', []).append(complete_entry)
@@ -1138,6 +1156,32 @@ def api_complete_adverse_event(homer_id):
                 open_epoch['reasons'].append(new_reason)
             write_patient_meta(folder, homer_id, patient_meta)
         write_patient_log(folder, homer_id, loginid, session_id, 'Training paused — adverse event')
+
+    # Schedule follow-up visit stub if requested
+    if scheduled_followup_visit:
+        events_data.setdefault('incomplete', []).append({
+            'id':                 followup_visit_stub_id,
+            'protocol_event_id':  'adverse_event_followup_visit',
+            'adverse_event_ids':  [event_id],
+            'scheduled_date':     [scheduled_followup_visit, scheduled_followup_visit],
+            'triggered_by':       {'type': 'adverse_event', 'id': event_id},
+            'filed_at':           filed_at,
+            'cancellable':        True,
+        })
+        write_patient_log(folder, homer_id, loginid, session_id, 'AE follow-up visit scheduled')
+
+    # Schedule clinical visit stub if requested
+    if scheduled_clinical_visit:
+        events_data.setdefault('incomplete', []).append({
+            'id':                 clinical_visit_stub_id,
+            'protocol_event_id':  'adverse_event_clinical_visit',
+            'adverse_event_ids':  [event_id],
+            'scheduled_date':     [scheduled_clinical_visit, scheduled_clinical_visit],
+            'triggered_by':       {'type': 'adverse_event', 'id': event_id},
+            'filed_at':           filed_at,
+            'cancellable':        True,
+        })
+        write_patient_log(folder, homer_id, loginid, session_id, 'AE clinical visit scheduled')
 
     # Always seed/update the adverse_event_followup stub
     followup_stub = next(
@@ -1162,7 +1206,7 @@ def api_complete_adverse_event(homer_id):
 
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event recorded.')
 
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'id': event_id})
 
 
 @bp.route('/api/patients/<homer_id>/complete-event/adverse-event-followup', methods=['POST'])
