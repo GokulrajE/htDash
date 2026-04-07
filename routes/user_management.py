@@ -827,6 +827,25 @@ _FOLLOWUP_CALL_IDS = {
     'followup_call_d21': 'attachments/followup_call_d21.pdf',
 }
 
+# Stubs moved to cancelled[] when training_completion_d29 is recorded.
+# a1_assessment, a2_assessment, adverse_event_followup_visit, and
+# adverse_event_clinical_visit are intentionally excluded.
+_TRAINING_COMPLETION_CANCELLED_IDS = {
+    'exp_device_install',
+    'activation',
+    'adl_prescription_d01',   'adl_prescription_d15',
+    'vcg_prescription_d01',   'vcg_prescription_d15',
+    'prescription_printout_d01', 'prescription_printout_d15',
+    'home_visit_d02',         'home_visit_d03',    'home_visit_d15',
+    'adl_agwatch_timing_d03', 'adl_agwatch_timing_d15',
+    'vcg_agwatch_timing_d03', 'vcg_agwatch_timing_d15',
+    'followup_call_d07',      'followup_call_d21',
+    'training_completion_d29',
+    'watch_record',
+    'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
+    'adverse_event_followup',
+}
+
 
 @bp.route('/api/patients/<homer_id>/complete-event/simple', methods=['POST'])
 def api_complete_simple_event(homer_id):
@@ -899,32 +918,71 @@ def api_complete_simple_event(homer_id):
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
     events_data.setdefault('complete', []).append(complete_entry)
 
-    from utils.protocol_events import write_protocol_events
-    write_protocol_events(folder, homer_id, events_data)
-
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    # training_completion_d29: set trainingCompletionDate; handle paused state
+    # training_completion_d29: cancel remaining stubs, record date, clear pause
     if protocol_event_id == 'training_completion_d29':
+        to_cancel = [e for e in events_data.get('incomplete', [])
+                     if e.get('protocol_event_id') in _TRAINING_COMPLETION_CANCELLED_IDS]
+        events_data['incomplete'] = [
+            e for e in events_data.get('incomplete', [])
+            if e.get('protocol_event_id') not in _TRAINING_COMPLETION_CANCELLED_IDS
+        ]
+        for stub in to_cancel:
+            events_data.setdefault('cancelled', []).append({
+                **stub,
+                'cancelled_at':        filed_at,
+                'cancellation_reason': 'Training completed',
+            })
+
         patient = read_patient_meta(folder, homer_id)
         if patient:
             patient['trainingCompletionDate'] = completion_date
-            # If patient was paused, clear the pause and discard resolve_robot_issue_visit stubs
-            # (robot is returned on d29; adverse event resolve stubs persist)
             if patient.get('trainingPausedDate'):
                 patient['trainingPausedDate'] = None
-                ev_data = read_protocol_events(folder, homer_id)
-                if ev_data:
-                    ev_data['incomplete'] = [
-                        e for e in ev_data.get('incomplete', [])
-                        if e.get('protocol_event_id') != 'resolve_robot_issue_visit'
-                    ]
-                    write_protocol_events(folder, homer_id, ev_data)
                 write_patient_log(folder, homer_id, loginid, session_id,
                                   'Training pause cleared — training completed')
+
+            # Return robot devices (experimental patients only)
+            if patient.get('group') == 'experimental':
+                for device_type in ('pluto', 'mars'):
+                    assignments = read_device_assignments(folder, device_type)
+                    current = next(
+                        (a for a in assignments
+                         if a.get('homer_id') == homer_id and a.get('returned_date') is None),
+                        None
+                    )
+                    if current:
+                        current['returned_date'] = completion_date
+                        write_device_assignments(folder, device_type, assignments)
+                        write_device_log(folder, current['device_id'], loginid, session_id,
+                                         f'Returned from {homer_id}')
+
+            # Return watches (both groups)
+            limb_map = {}
+            if patient.get('agWatchRightID'):
+                limb_map[patient['agWatchRightID']] = 'Right'
+            if patient.get('agWatchLeftID'):
+                limb_map[patient['agWatchLeftID']] = 'Left'
+            if limb_map:
+                aw_assignments = read_device_assignments(folder, 'agwatch')
+                for a in aw_assignments:
+                    if (a.get('homer_id') == homer_id
+                            and a.get('returned_date') is None
+                            and a.get('device_id') in limb_map):
+                        a['returned_date'] = completion_date
+                        limb = limb_map[a['device_id']]
+                        write_device_log(folder, a['device_id'], loginid, session_id,
+                                         f'Returned from {homer_id} ({limb})')
+                write_device_assignments(folder, 'agwatch', aw_assignments)
+                patient['agWatchRightID'] = None
+                patient['agWatchLeftID']  = None
+
             write_patient_meta(folder, homer_id, patient)
 
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
     write_patient_log(folder, homer_id, loginid, session_id,
                       _SIMPLE_EVENT_LOG_MESSAGES[protocol_event_id])
 
@@ -1136,8 +1194,10 @@ def api_complete_adverse_event(homer_id):
         'description':              description,
         'action_taken':             action_taken,
         'training_blocked':         training_blocked,
-        'scheduled_followup_visit': followup_visit_stub_id,
-        'scheduled_clinical_visit': clinical_visit_stub_id,
+        'resolved':                 False,
+        'can_resume_from':          None,
+        'scheduled_followup_visit': {'target_datetime': scheduled_followup_visit, 'stub_id': followup_visit_stub_id} if scheduled_followup_visit else None,
+        'scheduled_clinical_visit': {'target_datetime': scheduled_clinical_visit, 'stub_id': clinical_visit_stub_id} if scheduled_clinical_visit else None,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
     events_data.setdefault('free', {}).setdefault('adverse_event', []).append(complete_entry)
@@ -1228,7 +1288,7 @@ def api_complete_adverse_event_followup(homer_id):
     completion_date = (body.get('completion_date') or '').strip()
     duration_str    = str(body.get('duration_minutes', '')).strip()
     notes           = (body.get('notes') or '').strip()
-    resolutions     = body.get('resolutions', [])
+    ae_discussions  = body.get('ae_discussions', [])
 
     if not event_id:
         return jsonify({'error': 'event_id is required.'}), 400
@@ -1249,8 +1309,8 @@ def api_complete_adverse_event_followup(homer_id):
         return jsonify({'error': 'Duration must be a positive integer.'}), 400
     if not notes:
         return jsonify({'error': 'Notes are required.'}), 400
-    if not isinstance(resolutions, list):
-        return jsonify({'error': 'resolutions must be a list.'}), 400
+    if not isinstance(ae_discussions, list):
+        return jsonify({'error': 'ae_discussions must be a list.'}), 400
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
@@ -1265,13 +1325,10 @@ def api_complete_adverse_event_followup(homer_id):
     if not entry:
         return jsonify({'error': 'Follow-up stub not found.'}), 404
 
-    # Validate resolutions against the stub's AE list
     stub_ae_ids = entry.get('adverse_event_ids', [])
-    resolved_ids = {r['adverse_event_id'] for r in resolutions if r.get('resolved')}
+    free_aes    = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
 
-    # Look up each AE to check training_blocked
-    free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
-    for r in resolutions:
+    for r in ae_discussions:
         ae_id = r.get('adverse_event_id')
         if ae_id not in stub_ae_ids:
             return jsonify({'error': f'Unknown adverse_event_id: {ae_id}'}), 400
@@ -1280,9 +1337,9 @@ def api_complete_adverse_event_followup(homer_id):
             if ae.get('training_blocked') and not (r.get('can_resume_from') or '').strip():
                 return jsonify({'error': 'can_resume_from is required for resolved training-blocked events.'}), 400
 
-    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-    today    = date.today()
-    tomorrow = (today + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
+    filed_at  = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    today     = date.today()
+    tomorrow  = (today + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
     today_str = today.strftime('%Y-%m-%dT%H:%M')
 
     complete_entry = {
@@ -1291,7 +1348,7 @@ def api_complete_adverse_event_followup(homer_id):
         'filed_at':         filed_at,
         'duration_minutes': duration_minutes,
         'notes':            notes,
-        'resolutions':      resolutions,
+        'ae_discussions':   ae_discussions,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
     events_data.setdefault('free', {}).setdefault('adverse_event_followup', []).append(complete_entry)
@@ -1299,8 +1356,13 @@ def api_complete_adverse_event_followup(homer_id):
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    # Determine unresolved AEs to carry into next stub
-    unresolved_ids = [ae_id for ae_id in stub_ae_ids if ae_id not in resolved_ids]
+    # Write resolved/can_resume_from through to AE records
+    _write_ae_resolutions(events_data, ae_discussions)
+
+    # Seed next follow-up call stub for still-unresolved AEs
+    unresolved_ids = _unresolved_ae_ids(events_data)
+    # Only carry forward AEs that were in this call's stub
+    unresolved_ids = [ae_id for ae_id in unresolved_ids if ae_id in stub_ae_ids]
 
     if unresolved_ids:
         events_data.setdefault('incomplete', []).append({
@@ -1311,68 +1373,84 @@ def api_complete_adverse_event_followup(homer_id):
             'filed_at':          filed_at,
         })
     else:
-        # All AEs resolved — check if pause can be cleared
         patient_meta = read_patient_meta(folder, homer_id)
-        resolve_ri_stubs = [
-            e for e in events_data.get('incomplete', [])
-            if e.get('protocol_event_id') == 'resolve_robot_issue_visit'
-        ]
-        if patient_meta and patient_meta.get('trainingPausedDate') and not resolve_ri_stubs:
-            # Compute cumulativePauseDays from max can_resume_from across all pausing AEs
-            training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
-            resume_dates = []
-            for r in resolutions:
-                ae = free_aes.get(r.get('adverse_event_id'), {})
-                if r.get('resolved') and ae.get('training_blocked') and r.get('can_resume_from'):
-                    try:
-                        resume_dates.append(date.fromisoformat(r['can_resume_from']))
-                    except ValueError:
-                        pass
-            if resume_dates:
-                max_resume = max(resume_dates)
-                pause_days = max(0, (max_resume - training_paused).days)
-                patient_meta['cumulativePauseDays'] = (patient_meta.get('cumulativePauseDays') or 0) + pause_days
-            else:
-                pause_days = 0
-            # Close the open pauseHistory epoch
-            end_dt = filed_at[:16]
-            open_epoch = next((e for e in patient_meta.get('pauseHistory', []) if e.get('end') is None), None)
-            if open_epoch:
-                open_epoch['end']          = end_dt
-                open_epoch['days']         = pause_days
-                open_epoch['end_event_id'] = event_id
-            patient_meta['trainingPausedDate'] = None
-            if (patient_meta.get('cumulativePauseDays') or 0) > 10:
-                if not patient_meta.get('brokenProtocolDate'):
-                    patient_meta['brokenProtocolDate'] = filed_at[:10]
-            write_patient_meta(folder, homer_id, patient_meta)
-            write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
+        _clear_ae_pause_if_resolved(patient_meta, events_data, filed_at, event_id,
+                                     folder, homer_id, loginid, session_id)
 
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
-
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event follow-up call recorded.')
 
     return jsonify({'ok': True, 'id': event_id})
 
 
-def _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes, filed_at, event_id, folder, homer_id, loginid, session_id):
-    """Clear trainingPausedDate if all AEs resolved and no resolve_robot_issue_visit stubs remain."""
-    resolve_ri_stubs = [
+_AE_FOLLOWUP_EVENT_IDS = {
+    'adverse_event_followup',
+    'adverse_event_followup_visit',
+    'adverse_event_clinical_visit',
+}
+
+
+def _write_ae_resolutions(events_data, ae_discussions):
+    """Write resolved/can_resume_from from ae_discussions through to each AE record."""
+    free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
+    for r in ae_discussions:
+        ae_id = r.get('adverse_event_id')
+        if ae_id in free_aes and r.get('resolved'):
+            free_aes[ae_id]['resolved']       = True
+            free_aes[ae_id]['can_resume_from'] = r.get('can_resume_from') or None
+
+
+def _unresolved_ae_ids(events_data):
+    """Return list of AE IDs where resolved is not True."""
+    return [ae['id'] for ae in events_data.get('free', {}).get('adverse_event', [])
+            if not ae.get('resolved')]
+
+
+def _all_blocking_aes_resolved(events_data):
+    """Return True if all training_blocked AEs have resolved: True."""
+    return all(
+        ae.get('resolved')
+        for ae in events_data.get('free', {}).get('adverse_event', [])
+        if ae.get('training_blocked')
+    )
+
+
+def _clear_ae_pause_if_resolved(patient_meta, events_data, filed_at, event_id,
+                                 folder, homer_id, loginid, session_id):
+    """Move all pending AE follow-up stubs to cancelled[]. If all blocking AEs resolved
+    and no resolve_robot_issue_visit stubs remain, also clear trainingPausedDate."""
+    # Move all pending AE follow-up / visit stubs to cancelled — chain is complete
+    to_cancel = [e for e in events_data.get('incomplete', [])
+                 if e.get('protocol_event_id') in _AE_FOLLOWUP_EVENT_IDS]
+    events_data['incomplete'] = [
         e for e in events_data.get('incomplete', [])
-        if e.get('protocol_event_id') == 'resolve_robot_issue_visit'
+        if e.get('protocol_event_id') not in _AE_FOLLOWUP_EVENT_IDS
     ]
+    for stub in to_cancel:
+        events_data.setdefault('cancelled', []).append({
+            **stub,
+            'cancelled_at':        filed_at,
+            'cancellation_reason': 'Adverse event resolved',
+        })
+    resolve_ri_stubs = [e for e in events_data.get('incomplete', [])
+                        if e.get('protocol_event_id') == 'resolve_robot_issue_visit']
     if not patient_meta or not patient_meta.get('trainingPausedDate') or resolve_ri_stubs:
         return
+    if not _all_blocking_aes_resolved(events_data):
+        return
     training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
-    resume_dates = []
-    for r in resolutions:
-        ae = free_aes.get(r.get('adverse_event_id'), {})
-        if r.get('resolved') and ae.get('training_blocked') and r.get('can_resume_from'):
-            try:
-                resume_dates.append(date.fromisoformat(r['can_resume_from']))
-            except ValueError:
-                pass
+    resume_dates = [
+        date.fromisoformat(ae['can_resume_from'])
+        for ae in events_data.get('free', {}).get('adverse_event', [])
+        if ae.get('training_blocked') and ae.get('resolved') and ae.get('can_resume_from')
+    ]
+    # Also include resolve_robot_issue_visit can_resume_from dates (already all cleared)
+    for rriv in events_data.get('free', {}).get('resolve_robot_issue_visit', []):
+        try:
+            resume_dates.append(date.fromisoformat(rriv['can_resume_from']))
+        except (ValueError, KeyError):
+            pass
     pause_days = max(0, (max(resume_dates) - training_paused).days) if resume_dates else 0
     patient_meta['cumulativePauseDays'] = (patient_meta.get('cumulativePauseDays') or 0) + pause_days
     end_dt = filed_at[:16]
@@ -1389,27 +1467,6 @@ def _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
 
 
-def _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, resolutions, free_aes,
-                                     patient_meta, filed_at, event_id,
-                                     folder, homer_id, loginid, session_id):
-    """Seed next follow-up stub for unresolved AEs, or clear pause if all resolved."""
-    resolved_ids   = {r['adverse_event_id'] for r in resolutions if r.get('resolved')}
-    unresolved_ids = [ae_id for ae_id in stub_ae_ids if ae_id not in resolved_ids]
-    today_str = date.today().strftime('%Y-%m-%dT%H:%M')
-    tomorrow  = (date.today() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
-    if unresolved_ids:
-        events_data.setdefault('incomplete', []).append({
-            'id':                str(uuid.uuid4()),
-            'protocol_event_id': 'adverse_event_followup',
-            'adverse_event_ids': unresolved_ids,
-            'scheduled_date':    [today_str, tomorrow],
-            'filed_at':          filed_at,
-        })
-    else:
-        _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes,
-                                     filed_at, event_id, folder, homer_id, loginid, session_id)
-
-
 @bp.route('/api/patients/<homer_id>/complete-event/ae-followup-visit', methods=['POST'])
 def api_complete_ae_followup_visit(homer_id):
     """Complete an adverse_event_followup_visit stub."""
@@ -1422,12 +1479,14 @@ def api_complete_ae_followup_visit(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    body            = request.get_json() or {}
-    event_id        = body.get('event_id')
-    visit_start     = (body.get('visit_start') or '').strip()
-    visit_end       = (body.get('visit_end') or '').strip()
-    notes           = (body.get('notes') or '').strip() or None
-    ae_discussions  = body.get('ae_discussions', [])
+    body                     = request.get_json() or {}
+    event_id                 = body.get('event_id')
+    visit_start              = (body.get('visit_start') or '').strip()
+    visit_end                = (body.get('visit_end') or '').strip()
+    notes                    = (body.get('notes') or '').strip() or None
+    ae_discussions           = body.get('ae_discussions', [])
+    scheduled_followup_visit = (body.get('scheduled_followup_visit') or '').strip() or None
+    scheduled_clinical_visit = (body.get('scheduled_clinical_visit') or '').strip() or None
 
     if not event_id:
         return jsonify({'error': 'event_id is required.'}), 400
@@ -1465,6 +1524,7 @@ def api_complete_ae_followup_visit(homer_id):
     stub_ae_ids = entry.get('adverse_event_ids', [])
     free_aes    = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
 
+    free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
     for r in ae_discussions:
         ae_id = r.get('adverse_event_id')
         if ae_id not in stub_ae_ids:
@@ -1491,9 +1551,34 @@ def api_complete_ae_followup_visit(homer_id):
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    patient_meta = read_patient_meta(folder, homer_id)
-    _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
-                                     patient_meta, filed_at, event_id,
+    # Write resolved/can_resume_from through to AE records
+    _write_ae_resolutions(events_data, ae_discussions)
+    unresolved_ids = [ae_id for ae_id in _unresolved_ae_ids(events_data) if ae_id in stub_ae_ids]
+
+    if scheduled_followup_visit and unresolved_ids:
+        events_data['incomplete'].append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'adverse_event_followup_visit',
+            'adverse_event_ids': unresolved_ids,
+            'scheduled_date':    [scheduled_followup_visit, scheduled_followup_visit],
+            'triggered_by':      {'type': 'adverse_event_followup_visit', 'id': event_id},
+            'cancellable':       True,
+            'filed_at':          filed_at,
+        })
+    if scheduled_clinical_visit and unresolved_ids:
+        events_data['incomplete'].append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'adverse_event_clinical_visit',
+            'adverse_event_ids': unresolved_ids,
+            'scheduled_date':    [scheduled_clinical_visit, scheduled_clinical_visit],
+            'triggered_by':      {'type': 'adverse_event_followup_visit', 'id': event_id},
+            'cancellable':       True,
+            'filed_at':          filed_at,
+        })
+
+    if not unresolved_ids:
+        patient_meta = read_patient_meta(folder, homer_id)
+        _clear_ae_pause_if_resolved(patient_meta, events_data, filed_at, event_id,
                                      folder, homer_id, loginid, session_id)
 
     from utils.protocol_events import write_protocol_events
@@ -1515,12 +1600,14 @@ def api_complete_ae_clinical_visit(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    body            = request.get_json() or {}
-    event_id        = body.get('event_id')
-    visit_start     = (body.get('visit_start') or '').strip()
-    visit_end       = (body.get('visit_end') or '').strip()
-    notes           = (body.get('notes') or '').strip() or None
-    ae_discussions  = body.get('ae_discussions', [])
+    body                     = request.get_json() or {}
+    event_id                 = body.get('event_id')
+    visit_start              = (body.get('visit_start') or '').strip()
+    visit_end                = (body.get('visit_end') or '').strip()
+    notes                    = (body.get('notes') or '').strip() or None
+    ae_discussions           = body.get('ae_discussions', [])
+    scheduled_followup_visit = (body.get('scheduled_followup_visit') or '').strip() or None
+    scheduled_clinical_visit = (body.get('scheduled_clinical_visit') or '').strip() or None
 
     if not event_id:
         return jsonify({'error': 'event_id is required.'}), 400
@@ -1584,9 +1671,34 @@ def api_complete_ae_clinical_visit(homer_id):
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    patient_meta = read_patient_meta(folder, homer_id)
-    _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
-                                     patient_meta, filed_at, event_id,
+    # Write resolved/can_resume_from through to AE records
+    _write_ae_resolutions(events_data, ae_discussions)
+    unresolved_ids = [ae_id for ae_id in _unresolved_ae_ids(events_data) if ae_id in stub_ae_ids]
+
+    if scheduled_followup_visit and unresolved_ids:
+        events_data['incomplete'].append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'adverse_event_followup_visit',
+            'adverse_event_ids': unresolved_ids,
+            'scheduled_date':    [scheduled_followup_visit, scheduled_followup_visit],
+            'triggered_by':      {'type': 'adverse_event_clinical_visit', 'id': event_id},
+            'cancellable':       True,
+            'filed_at':          filed_at,
+        })
+    if scheduled_clinical_visit and unresolved_ids:
+        events_data['incomplete'].append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'adverse_event_clinical_visit',
+            'adverse_event_ids': unresolved_ids,
+            'scheduled_date':    [scheduled_clinical_visit, scheduled_clinical_visit],
+            'triggered_by':      {'type': 'adverse_event_clinical_visit', 'id': event_id},
+            'cancellable':       True,
+            'filed_at':          filed_at,
+        })
+
+    if not unresolved_ids:
+        patient_meta = read_patient_meta(folder, homer_id)
+        _clear_ae_pause_if_resolved(patient_meta, events_data, filed_at, event_id,
                                      folder, homer_id, loginid, session_id)
 
     from utils.protocol_events import write_protocol_events
@@ -2137,10 +2249,8 @@ def api_complete_resolve_robot_issue_visit(homer_id):
     # Check if all pause causes are now resolved
     remaining_rriv = [e for e in events_data.get('incomplete', [])
                       if e.get('protocol_event_id') == 'resolve_robot_issue_visit']
-    remaining_aef  = [e for e in events_data.get('incomplete', [])
-                      if e.get('protocol_event_id') == 'adverse_event_followup']
 
-    if patient_meta.get('trainingPausedDate') and not remaining_rriv and not remaining_aef:
+    if patient_meta.get('trainingPausedDate') and not remaining_rriv and _all_blocking_aes_resolved(events_data):
         training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
 
         resume_dates = [resume_date]
@@ -2149,15 +2259,12 @@ def api_complete_resolve_robot_issue_visit(homer_id):
                 resume_dates.append(date.fromisoformat(rriv['can_resume_from']))
             except (ValueError, KeyError):
                 pass
-        free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
-        for aef in events_data.get('free', {}).get('adverse_event_followup', []):
-            for r in aef.get('resolutions', []):
-                ae = free_aes.get(r.get('adverse_event_id'), {})
-                if r.get('resolved') and ae.get('training_blocked') and r.get('can_resume_from'):
-                    try:
-                        resume_dates.append(date.fromisoformat(r['can_resume_from']))
-                    except ValueError:
-                        pass
+        for ae in events_data.get('free', {}).get('adverse_event', []):
+            if ae.get('training_blocked') and ae.get('resolved') and ae.get('can_resume_from'):
+                try:
+                    resume_dates.append(date.fromisoformat(ae['can_resume_from']))
+                except ValueError:
+                    pass
 
         max_resume = max(resume_dates)
         pause_days = max(0, (max_resume - training_paused).days)

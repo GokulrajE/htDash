@@ -532,6 +532,16 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
   - Update `<homer_id>.json` with `trainingCompletionDate = completion_date`
   - If patient was `paused`, also clear `trainingPausedDate` and increment `cumulativePauseDays`
+  - Move all of the following stubs from `incomplete` to `cancelled[]` with `cancellation_reason: "Training completed"` and `cancelled_at` timestamp:
+    - All remaining standard protocol events still in `incomplete` (home visits, prescriptions, agwatch timings, follow-up calls)
+    - `watch_record`
+    - `robot_issue_call`, `robot_issue_visit`, `resolve_robot_issue_visit`
+    - `adverse_event_followup`
+  - Leave the following in `incomplete` (not cancelled):
+    - `a1_assessment`, `a2_assessment`
+    - `adverse_event_followup_visit`, `adverse_event_clinical_visit`
+  - **Return robot devices (experimental patients only):** for each of Pluto and Mars, find the open assignment record in `devices/assignments/<type>.json` for this patient and set `returned_date = completion_date`. Append `Returned from <homer_id>` to each device's log file.
+  - **Return watches (both groups):** for each of Right and Left watches currently assigned (`agWatchRightID`, `agWatchLeftID` on the patient JSON), find the open assignment record in `devices/assignments/agwatch.json` and set `returned_date = completion_date`. Append `Returned from <homer_id> (<limb>)` to each watch's log file. Clear `agWatchRightID` and `agWatchLeftID` to `null` on `<homer_id>.json`.
 - Log message: `Training completion visit recorded`
 
 ---
@@ -655,11 +665,12 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Server actions:
   - Remove the stub from `incomplete` in `protocol_events.json`
   - Append completed entry to `free.adverse_event_followup` with `completion_date`, `filed_at`, `patient_initiated`, `related_patient_call_id` (if patient-initiated), `duration_minutes`, `notes`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `scheduled_followup_visit`, `scheduled_clinical_visit` (both `null` if not scheduled), `triggered_by` (from stub), `attachment` (if uploaded)
-  - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids: [<all AE IDs in this call>]`, `triggered_by: {type: "adverse_event_followup", id: <this_event_id>}`
+  - Update `resolved` and `can_resume_from` directly on each AE's record in `free.adverse_event` based on `ae_discussions` inputs
+  - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids: [<all AE IDs in this call>]`, `triggered_by: {type: "adverse_event_followup", id: <this_event_id>}`, `cancellable: true`
   - If clinical visit scheduled: same for `adverse_event_clinical_visit`
   - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
-  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: increment `cumulativePauseDays` by `(max(can_resume_from across all pausing AEs) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
-  - If all AEs resolved but `resolve_robot_issue_visit` stubs still remain: no change to pause fields (robot issue still blocking)
+  - If all AEs resolved: move all pending `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit` stubs from `incomplete` to `cancelled[]` with `cancellation_reason: "Adverse event resolved"` and `cancelled_at` timestamp; if no `resolve_robot_issue_visit` stubs remain: increment `cumulativePauseDays` by `(max(can_resume_from across all pausing AEs) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
+  - If all AEs resolved but `resolve_robot_issue_visit` stubs still remain: cancel follow-up stubs as above but no change to pause fields (robot issue still blocking)
 - Log message: `Adverse event follow-up call recorded`; if visits scheduled: `AE follow-up visit scheduled` / `AE clinical visit scheduled`; if all resolved: also `Adverse event(s) resolved`
 
 ---
@@ -694,14 +705,14 @@ Each action is defined once here. Pages above reference which actions apply to t
     - If null again: create another `resolve_robot_issue_visit` stub
   - For the other device (if attended to): same per-device logic as `robot_issue_visit` server actions
   - Append completed entry to `free.resolve_robot_issue_visit` with `completion_date`, `filed_at`, `can_resume_from`, `device_replacements` (per taken-back device: `device`, `old_device_id`, `new_device_id`, `notes`), `other_device_outcomes` (per attended other device: same fields as `robot_issue_visit` `device_outcomes`), `notes`, `attachment`
-  - If no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain: compute `cumulativePauseDays`; clear `trainingPausedDate`; if total > 10, patient transitions to `broken_protocol`
-  - If `adverse_event_followup` stubs remain: no change to pause fields
+  - If no `resolve_robot_issue_visit` stubs remain in `incomplete` AND all `training_blocked: true` AEs have `resolved: true`: compute `cumulativePauseDays`; clear `trainingPausedDate`; if total > 10, patient transitions to `broken_protocol`
+  - If any `training_blocked: true` AEs are still unresolved: no change to pause fields (AE still blocking)
 - Log message: `Robot issue resolved — replacement device assigned`
 
 ---
 
 ### Adverse Event Follow-up Visit (`adverse_event_followup_visit`)
-- Trigger: `adverse_event_followup_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a follow-up visit is scheduled.
+- Trigger: `adverse_event_followup_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the File Adverse Event modal, Adverse Event Follow-up Call modal, Adverse Event Follow-up Visit modal, or Adverse Event Clinical Visit modal when a follow-up visit is scheduled.
 - Allowed users: `admin`, `therapist`
 - Cancellable: yes — a **Cancel Visit** button is shown in the modal footer. Clicking it prompts for a cancellation reason (textarea, required). Cancellation moves the stub to the top-level `cancelled` array in `protocol_events.json` with `cancelled_at` timestamp and `cancellation_reason`. No further stubs are created.
 - Modal: `adverse-event-followup-visit-modal`
@@ -714,18 +725,23 @@ Each action is defined once here. Pages above reference which actions apply to t
     - **Resolved** (checkbox)
     - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
   - Visit-level notes (textarea, optional)
+  - **Schedule follow-up visit** (toggle, optional): if enabled, shows a target date input (date, required). Creates a new `adverse_event_followup_visit` stub.
+  - **Schedule clinical visit** (toggle, optional): if enabled, shows a target date input (date, required). Creates a new `adverse_event_clinical_visit` stub.
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete`
   - Append completed entry to `free.adverse_event_followup_visit` with `completion_date` (= visit start), `filed_at`, `visit_start`, `visit_end`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `notes`, `triggered_by` (from stub), `attachment` (if uploaded)
-  - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]` (back to call-based follow-up)
-  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: clear pause (same logic as follow-up call)
+  - Update `resolved` and `can_resume_from` directly on each AE's record in `free.adverse_event` based on `ae_discussions` inputs
+  - If `scheduled_followup_visit` date provided: append new stub to `incomplete` with `protocol_event_id = "adverse_event_followup_visit"`, `scheduled_date = [target_date, target_date]`, `adverse_event_ids` = unresolved AE IDs, `triggered_by = {type: "adverse_event_followup_visit", id: <this_entry_id>}`, `cancellable: true`
+  - If `scheduled_clinical_visit` date provided: same as above with `protocol_event_id = "adverse_event_clinical_visit"` and `triggered_by.type = "adverse_event_followup_visit"`
+  - **Does not seed a follow-up call** regardless of whether AEs remain unresolved
+  - If all AEs resolved: move all pending `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit` stubs from `incomplete` to `cancelled[]` with `cancellation_reason: "Adverse event resolved"` and `cancelled_at` timestamp; if no `resolve_robot_issue_visit` stubs remain: clear pause (same logic as follow-up call)
 - Log message: `Adverse event follow-up visit recorded`; if all resolved: also `Adverse event(s) resolved`
 
 ---
 
 ### Adverse Event Clinical Visit (`adverse_event_clinical_visit`)
-- Trigger: `adverse_event_clinical_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a clinical visit is scheduled.
+- Trigger: `adverse_event_clinical_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal, File Adverse Event modal, Follow-up Visit modal, or another Clinical Visit modal when a clinical visit is scheduled.
 - Allowed users: `admin`, `therapist`
 - Cancellable: yes — same cancellation behaviour as `adverse_event_followup_visit` (reason required, stored as `cancellation_reason`)
 - Modal: `adverse-event-clinical-visit-modal`
@@ -738,12 +754,17 @@ Each action is defined once here. Pages above reference which actions apply to t
     - **Resolved** (checkbox)
     - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
   - Visit-level notes (textarea, optional)
+  - **Schedule follow-up visit** (toggle, optional): if enabled, shows a target date input (date, required). Creates a new `adverse_event_followup_visit` stub.
+  - **Schedule clinical visit** (toggle, optional): if enabled, shows a target date input (date, required). Creates a new `adverse_event_clinical_visit` stub.
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete`
   - Append completed entry to `free.adverse_event_clinical_visit` with `completion_date` (= visit start), `filed_at`, `visit_start`, `visit_end`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `notes`, `triggered_by` (from stub), `attachment` (if uploaded)
-  - If any AEs remain unresolved: seed next `adverse_event_followup` stub (back to call-based chain)
-  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain: clear pause (same logic)
+  - Update `resolved` and `can_resume_from` directly on each AE's record in `free.adverse_event` based on `ae_discussions` inputs
+  - If `scheduled_followup_visit` date provided: append new stub to `incomplete` with `protocol_event_id = "adverse_event_followup_visit"`, `scheduled_date = [target_date, target_date]`, `adverse_event_ids` = unresolved AE IDs, `triggered_by = {type: "adverse_event_clinical_visit", id: <this_entry_id>}`, `cancellable: true`
+  - If `scheduled_clinical_visit` date provided: same as above with `protocol_event_id = "adverse_event_clinical_visit"` and `triggered_by.type = "adverse_event_clinical_visit"`
+  - **Does not seed a follow-up call** regardless of whether AEs remain unresolved
+  - If all AEs resolved: move all pending `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit` stubs from `incomplete` to `cancelled[]` with `cancellation_reason: "Adverse event resolved"` and `cancelled_at` timestamp; if no `resolve_robot_issue_visit` stubs remain: clear pause (same logic as follow-up call)
 - Log message: `Adverse event clinical visit recorded`; if all resolved: also `Adverse event(s) resolved`
 
 ---
