@@ -5047,8 +5047,8 @@ def api_prescription_pamphlet(homer_id):
                     day_match = 'd15'
                 else:
                     day_match = 'd01'
-                # Get the date when the prescription was completed
-                prescribed_date = entry.get('completion_date', '')
+                # Get the date: use completion_date if available, else use scheduled_date
+                prescribed_date = entry.get('completion_date') or (entry.get('scheduled_date', ['', ''])[0] if entry.get('scheduled_date') else '')
                 break
         if day_match:
             break

@@ -92,6 +92,12 @@
             padding: 12px;
             margin-bottom: 12px;
             page-break-inside: avoid;
+            page-break-before: always;
+            min-height: 250px;
+        }
+
+        .exercise-card.first-exercise {
+            page-break-before: auto;
         }
 
         .exercise-card:hover {
@@ -207,10 +213,10 @@
 
         {% if adl_exercises %}
         <div class="section">
-            <div class="exercise-type">{{ labels.adl_section }}</div>
+    
             <div class="section-title">ADL Exercises</div>
             {% for exercise in adl_exercises %}
-            <div class="exercise-card">
+            <div class="exercise-card {% if loop.first %}first-exercise{% endif %}">
                 <div class="exercise-name">{{ exercise.name }}</div>
 
                 {% if exercise.description %}
@@ -227,10 +233,11 @@
                 </div>
                 {% endif %}
 
-                {% if exercise.get("items") and exercise.get("items").strip() %}
+                {% set items_value = exercise.get("items", "") %}
+                {% if items_value and items_value|string|trim %}
                 <div class="exercise-field">
                     <div class="exercise-field-label">{{ labels.items }}</div>
-                    <div class="exercise-field-value">{{ exercise.get("items") }}</div>
+                    <div class="exercise-field-value">{{ items_value|string }}</div>
                 </div>
                 {% endif %}
 
@@ -252,10 +259,9 @@
 
         {% if vcg_exercises %}
         <div class="section">
-            <div class="exercise-type">{{ labels.vcg_section }}</div>
             <div class="section-title">VCG Exercises</div>
             {% for exercise in vcg_exercises %}
-            <div class="exercise-card">
+            <div class="exercise-card {% if loop.first %}first-exercise{% endif %}">
                 <div class="exercise-name">{{ exercise.name }}</div>
 
                 {% if exercise.description %}
@@ -272,10 +278,11 @@
                 </div>
                 {% endif %}
 
-                {% if exercise.get("items") and exercise.get("items").strip() %}
+                {% set items_value = exercise.get("items", "") %}
+                {% if items_value and items_value|string|trim %}
                 <div class="exercise-field">
                     <div class="exercise-field-label">{{ labels.items }}</div>
-                    <div class="exercise-field-value">{{ exercise.get("items") }}</div>
+                    <div class="exercise-field-value">{{ items_value|string }}</div>
                 </div>
                 {% endif %}
 
