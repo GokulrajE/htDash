@@ -369,438 +369,71 @@ When modifying any pause-related logic, verify ALL of the following are kept in 
 
 **Status:** ✅ Implemented
 
-After ADL and VCG prescriptions are saved, therapists can generate a multi-language exercise pamphlet for patients. The feature supports all 6 languages across the three hospital sites.
+Therapists can generate multi-language exercise pamphlets after ADL and VCG prescriptions are saved. Supports 6 languages across 3 sites (Ranipet: English/Tamil/Telugu, Manipal: English/Kannada/Hindi, Ludhiana: English/Punjabi/Hindi).
 
 ### How It Works
 
-1. **Trigger:** User clicks on `prescription_printout_d01` or `prescription_printout_d15` event
-2. **Modal Opens:** Shows language selector (filtered by therapist's site)
-3. **Preview:** Selected language renders HTML pamphlet with exercises, descriptions, dosage, items, and QR codes for YouTube videos
-4. **Save:** Client captures preview with `html2canvas`, generates PDF with `jsPDF`, uploads as attachment
-5. **Complete:** Event moves to complete state with PDF attachment
+1. Click `prescription_printout_d01` or `prescription_printout_d15` event
+2. Modal shows language selector (filtered by site)
+3. Select language → HTML preview renders
+4. Click "Save PDF" → html2canvas captures preview → jsPDF generates PDF → uploads as attachment
+5. Event marked complete, PDF downloads as `prescription_d01.pdf` or `prescription_d15.pdf`
 
-### Language Support (by site)
+### Architecture
 
-| Site | Languages |
-|---|---|
-| Ranipet | English, Tamil, Telugu |
-| Manipal | English, Kannada, Hindi |
-| Ludhiana | English, Punjabi, Hindi |
-
-### Technical Design
-
-**Why HTML → PDF (not direct reportlab):**
-- Python PDF libraries (reportlab) require font registration for Indian scripts
-- Browser rendering via Google Fonts Noto Sans family handles all Unicode scripts perfectly
-- Client-side `html2canvas` captures the rendered HTML as an image
-- `jsPDF` creates a PDF from the image
-- Result: Perfect rendering in all 6 languages without font complexity
+**Why HTML→PDF (not reportlab):** Browser rendering handles all Unicode scripts perfectly via Google Fonts Noto Sans; reportlab requires manual font registration.
 
 **Key Files:**
+- `templates/prescription_pamphlet.html` — Exercise cards with conditionals for empty fields
+- `routes/user_management.py` — `api_prescription_pamphlet`, `api_complete_prescription_printout`, `api_upload_attachment`, `api_download_attachment`
+- `templates/patient_detail.html` — Modal with language selector and preview pane
+- `static/js/app/patient_detail.js` — `openPrescriptionPrintoutModal()`, `_loadPrescriptionPamphlet()`, `savePrescriptionPrintout()`
 
-| File | Purpose |
-|---|---|
-| `templates/prescription_pamphlet.html` | Standalone HTML template with Google Fonts, exercise cards (name, description, dosage, items), QR code images |
-| `routes/user_management.py` — `api_prescription_pamphlet` | Fetches prescribed exercises, translates to requested language, generates QR codes as base64 data URIs |
-| `routes/user_management.py` — `api_complete_prescription_printout` | Marks event complete (attachment uploaded separately via `upload-attachment` endpoint) |
-| `templates/patient_detail.html` — `prescription-printout-modal` | Language selector + live preview pane + Save PDF button |
-| `static/js/app/patient_detail.js` — `openPrescriptionPrintoutModal` | Populates language selector based on `PATIENT_PLACE` |
-| `static/js/app/patient_detail.js` — `_loadPrescriptionPamphlet` | Fetches HTML preview on language change |
-| `static/js/app/patient_detail.js` — `savePrescriptionPrintout` | Captures preview, generates PDF, uploads as attachment, completes event |
+**API Flow:**
+1. `GET /api/patients/<id>/prescription-pamphlet?event_id=<id>&language=<lang>` → Returns rendered HTML
+2. `POST /api/patients/<id>/complete-event/prescription-printout` → Moves event to complete (FIRST)
+3. `POST /api/patients/<id>/upload-attachment` → Uploads PDF blob (SECOND)
+4. `GET /api/patients/<id>/download-attachment/<event_id>` → Returns PDF with friendly filename
 
-**Data Flow:**
+### All Issues Fixed
 
-1. `GET /api/patients/<homer_id>/prescription-pamphlet?event_id=<id>&language=<lang>`
-   - Determines day (d01/d15) from event ID
-   - Reads `adl/adl_prescription_d{day}.json` and `vcg_exercise/vcg_prescription_d{day}.json`
-   - Cross-references `prescribed_exercises[].exercise_id` against `config/homer_exercises.json`
-   - Extracts text from language key (falls back to English)
-   - Generates QR codes for YouTube URLs
-   - Returns rendered HTML
+| Issue | Status | Fix |
+|-------|--------|-----|
+| jsPDF not found | ✅ | Check all export patterns (camelCase, lowercase, nested, ES6) |
+| Items field blank | ✅ | Template checks `exercise.items and exercise.items.strip()` |
+| Event not found | ✅ | Mark event complete BEFORE uploading attachment |
+| PDF content cut off | ✅ | Temporarily remove height constraints before html2canvas capture |
+| Download filename (UUID) | ✅ | Use `_PRINTOUT_PDF_FILES` mapping: `prescription_d01.pdf`, `prescription_d15.pdf` |
+| Content-Disposition | ✅ | Set header directly: `attachment; filename="prescription_d01.pdf"` |
 
-2. `POST /api/patients/<homer_id>/upload-attachment` (existing endpoint)
-   - Client uploads generated PDF with `event_id` and caption
-   - Saves as `attachments/<event_id>.pdf`
-   - Updates event entry with `attachment` and `attachment_caption`
+### Implementation Details
 
-3. `POST /api/patients/<homer_id>/complete-event/prescription-printout`
-   - Accepts `event_id`, `protocol_event_id`, `language` (for logging)
-   - Moves event from `incomplete` to `complete`
-   - Logs action with selected language
+**`api_complete_prescription_printout()`** (`routes/user_management.py:733-784`)
+- Validates protocol_event_id in `_PRINTOUT_PDF_FILES`
+- Finds event in `incomplete` array
+- Moves to `complete` with timestamps
+- Logs action
 
-### CDN Dependencies
-
-- `html2canvas`: `https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js`
-- `jsPDF`: `https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js`
-
-### Attachment Configuration
-
-`prescription_printout_d01` and `prescription_printout_d15` are **NOT in the manual attachment list** because the PDF is generated and uploaded programmatically. The attachment field is populated by the `upload-attachment` endpoint, not by the `attachment_section()` macro.
+**`prescription_pamphlet.html`** (`templates/prescription_pamphlet.html`)
+- ADL (line 194): `{% if exercise.get("items") and exercise.get("items").strip() %}`
+- VCG (line 238): `{% if exercise.items and exercise.items.strip() %}`
+- Prevents empty "Items Needed" sections
 
 ### Testing
 
-1. Log in as a therapist (any site)
-2. Complete ADL + VCG prescriptions for a patient
-3. Click on `prescription_printout_d01`
-4. Select a language → preview renders
-5. Click "Save PDF" → PDF generated and uploaded
-6. Check Timeline tab → PDF download link present
-7. Download PDF → verify filename is `prescription_d01.pdf` (or `prescription_d15.pdf` for day 15)
-   - Should NOT be the UUID filename
-8. For debugging: check Flask console for `[FILENAME DEBUG]` and `[DOWNLOAD DEBUG]` logs
-
-### Code Implementation Details
-
-**`api_complete_prescription_printout()` endpoint** (`routes/user_management.py:733-784`)
-
-Purpose: Marks a prescription printout event as complete and moves it from `incomplete` to `complete` array.
-
-Key logic:
-1. Validates protocol_event_id is in `_PRINTOUT_PDF_FILES` (ensures valid d01/d15 event)
-2. Finds event in `incomplete` array
-3. Creates completion entry with `completion_date` and `filed_at` timestamps
-4. Moves event from `incomplete` to `complete` array
-5. Writes updated protocol_events.json
-6. Logs the completion
-
-Important: PDF attachment is uploaded separately via `/api/patients/<id>/upload-attachment` endpoint (not in this function)
-
-**`prescription_pamphlet.html` template** (`templates/prescription_pamphlet.html`)
-
-Template renders exercise cards for both ADL and VCG sections. Key features:
-- Conditional rendering of each field (description, dosage, items, QR code)
-- Handles empty/null values correctly using `.strip()` checks
-- Two sections: ADL exercises and VCG exercises
-
-Fixed issue with items field validation:
-```jinja2
-{# ADL section (line 194) #}
-{% if exercise.get("items") and exercise.get("items").strip() %}
-
-{# VCG section (line 238) #}
-{% if exercise.items and exercise.items.strip() %}
-```
-
-Both checks now ensure the items field:
-1. Exists (not null/undefined)
-2. Contains actual content (not just whitespace)
-
-This prevents displaying empty "Items Needed" sections.
-
-### Known Issues & Solutions
-
-**Issue 1: "jsPDF is not a constructor" error**
-
-**Symptom:** Error thrown when clicking "Save PDF" in the prescription printout modal.
-
-**Cause:** The jsPDF UMD library from CDN can export in multiple formats depending on the version:
-- `window.jsPDF` (direct constructor - camelCase)
-- `window.jspdf` (direct constructor - **lowercase**)
-- `window.jsPDF.jsPDF` (nested export)
-- `window.jspdf.jsPDF` (nested export - lowercase)
-- `window.jsPDF.default` (ES6 default export)
-- `window.jspdf.default` (ES6 default export - lowercase)
-
-Different CDN versions or browser environments expose it with different case sensitivity.
-
-**Solution:** Check all possible export locations and use the first available constructor, including **both camelCase and lowercase** variants.
-
-**Location:** `static/js/app/patient_detail.js` — `savePrescriptionPrintout()` function
-
-The code now tries (in order):
-1. `window.jsPDF` (camelCase direct constructor)
-2. `window.jspdf` (lowercase direct constructor)
-3. `window.jsPDF.jsPDF` (camelCase nested export)
-4. `window.jspdf.jsPDF` (lowercase nested export)
-5. `window.jsPDF.default` (camelCase ES6 export)
-6. `window.jspdf.default` (lowercase ES6 export)
-7. Auto-search object keys in both cases
-
-**Key Discovery:** The library may export as `window.jspdf` (lowercase) instead of `window.jsPDF` (camelCase) depending on the CDN version. The original code only checked camelCase, which is why it failed.
-
-This approach:
-- Handles **all case variations** of the export name
-- Tries nested and direct constructors
-- Automatically searches object keys if neither direct pattern works
-- Logs detailed debugging info to browser console showing which pattern was found
-- Throws a clear error with debugging hints if none are found
-
-**CDN Used:** `https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js`
-
-**Troubleshooting Steps if Issue Persists:**
-
-1. **Check Browser Console:**
-   - Open DevTools (F12)
-   - Look for jsPDF availability logs
-   - Check for network errors loading jsPDF library
-
-2. **If jsPDF shows "undefined":**
-   - The CDN may be blocked
-   - Check firewall/proxy settings
-   - Try a different network
-
-3. **If jsPDF shows object but not a function:**
-   - Check the console log for "Available keys in window.jsPDF:"
-   - The code will attempt to find any function in the object automatically
-
-4. **Force Refresh:**
-   - Clear browser cache: Ctrl+Shift+Delete (Windows) or Cmd+Shift+Delete (Mac)
-   - Hard refresh: Ctrl+F5 (Windows) or Cmd+Shift+R (Mac)
-   - Reload the page
-
----
-
-**Issue 1.5: "Event not found" during attachment upload**
-
-**Symptom:** PDF generates successfully, but "Event not found" error appears when trying to upload.
-
-**Root Cause:** The upload-attachment endpoint searches for the event in `complete` and `free` arrays, but **not in `incomplete`**. The prescription printout event starts in `incomplete`. 
-
-**Solution Applied:** Reversed operation order - now **marks event complete FIRST** (moves it from incomplete → complete), then uploads attachment (can find it in complete list).
-
-**Code Change:**
-```javascript
-// ❌ Before (fails - event not found):
-1. Upload attachment  ← event still in incomplete, not found!
-2. Mark event complete
-
-// ✅ After (works):
-1. Mark event complete  ← moves event to complete array
-2. Upload attachment   ← finds event in complete array
-```
-
----
-
-**Issue 1.7: 405 (Method Not Allowed) on upload-attachment**
-
-**Symptom:** Server responds with 405 (Method Not Allowed) when uploading PDF.
-
-**Root Cause:** The fetch is somehow being converted to GET instead of POST, or there's a route conflict.
-
-**Debug Steps:**
-
-1. **Open Browser Console** (F12) and go to Console tab
-2. **Try "Save PDF"** again
-3. **Look for detailed upload logs:**
-   ```
-   Upload details: {
-     url: "/api/patients/HOCMCV001/upload-attachment",
-     method: "POST",
-     event_id: "...",
-     file_size: 123456,
-     file_type: "application/pdf"
-   }
-   Upload response status: 405 Method Not Allowed
-   ```
-
-4. **Check the Network tab** (F12 → Network):
-   - Filter by "upload-attachment"
-   - Check if it shows POST or GET
-   - If GET, there's a redirect happening
-
-5. **Common causes:**
-   - Browser cache issue → clear cache and refresh (Ctrl+Shift+Delete then Ctrl+F5)
-   - ServiceWorker intercepting request → clear all site data
-   - Proxy/firewall converting POST to GET → check network settings
-
-**Workaround:** If debugging doesn't help, create a new endpoint specifically for this:
-- Instead of `/api/patients/<id>/upload-attachment`
-- Use `/api/patients/<id>/prescription-attachment` (unique name)
-
----
-
-**Issue 1.8: "Failed to upload attachment" - validation errors**
-
-**Symptom:** PDF generates successfully, but upload fails for other reasons.
-
-**Cause:** The server is rejecting the PDF upload. Common reasons:
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| `event_id is required` | Event ID not passed correctly | Ensure event is opened from event list |
-| `No file provided` | PDF blob not created | Try refreshing page and retry |
-| `Attachment must be a PDF file` | Filename doesn't end with `.pdf` | The code adds `.pdf` automatically - should not happen |
-| `Caption is required` | Caption field is empty | The code auto-generates caption - should not happen |
-| `Not authenticated` | Session expired | Refresh page and login again |
-| `Forbidden` | User privilege too low | Must be 'admin' or 'therapist' role |
-| `Patient not found` | Patient folder missing | Contact administrator |
-
-**Debugging Steps:**
-
-1. **Open Browser Console** (F12)
-2. **Look for error details** - Console will now show the actual server error
-3. **Check the error message** - will tell you exactly what's wrong
-4. **Common solutions:**
-   - Session expired → refresh page and login again
-   - Patient not found → verify patient ID is correct
-   - Privilege issues → verify user is therapist or admin role
-
-**Location:** `static/js/app/patient_detail.js` — `savePrescriptionPrintout()` function now logs:
-```javascript
-console.error('Upload error details:', errorData);
-console.error('Upload failed with status:', uploadRes.status);
-```
-
----
-
-**Issue 2: Items Needed field not displaying in preview**
-
-**Symptom:** "Items Needed" section appears blank or missing in the rendered pamphlet even though data is present.
-
-**Cause:** Empty string values fail Jinja2 truthiness checks (`{% if exercise.items %}`). Whitespace-only strings also evaluate to falsy.
-
-**Solution:** Check both for presence and non-empty content using `.strip()` in the Jinja2 conditional.
-
-**Location:** `templates/prescription_pamphlet.html` — exercise card sections (lines ~188 and 194)
-
-```jinja2
-// ❌ Before:
-{% if exercise.items %}
-    <div class="exercise-field">
-        <div class="exercise-field-label">Items Needed</div>
-        <div class="exercise-field-value">{{ exercise.items }}</div>
-    </div>
-{% endif %}
-
-// ✅ After:
-{% if exercise.items and exercise.items.strip() %}
-    <div class="exercise-field">
-        <div class="exercise-field-label">Items Needed</div>
-        <div class="exercise-field-value">{{ exercise.items }}</div>
-    </div>
-{% endif %}
-```
-
-Also applied to `dosage` field for consistency.
-
----
-
-### PDF Download & Content Issues & Fixes
-
-**Issue 1: Content missing or cut off in downloaded PDF**
-
-**Root Cause:** The preview div has `max-h-96 overflow-y-auto` (scroll container). html2canvas only captures visible content, not the full scrollable area. Downloaded PDF showed only ~50% of content.
-
-**Solution:** Before capturing, temporarily remove height constraints and let the div expand to full height. After capture, restore original styles.
-
-**Code Fix:**
-```javascript
-// Save original styles
-const originalMaxHeight = previewDiv.style.maxHeight;
-const originalOverflow = previewDiv.style.overflowY;
-
-// Expand to full height for capture
-previewDiv.style.maxHeight = 'none';
-previewDiv.style.overflowY = 'visible';
-previewDiv.style.height = 'auto';
-
-// Capture full content
-const canvas = await html2canvas(previewDiv, { ... });
-
-// Restore original styles
-previewDiv.style.maxHeight = originalMaxHeight;
-previewDiv.style.overflowY = originalOverflow;
-```
-
-**Result:** ✅ Downloaded PDF now contains all exercises and content
-
----
-
-**Issue 2: PDF not downloading properly with wrong filename**
-
-**Root Causes Fixed:**
-1. `as_attachment=False` → changed to `as_attachment=True` (enables actual downloads)
-2. Filename was UUID → now generates meaningful names like `Exercise_Prescription_d01_English.pdf`
-
-**How It Works Now:**
-1. When PDF is uploaded, server extracts day (d01/d15) and language from caption
-2. Generates friendly filename: `Exercise_Prescription_{day}_{Language}.pdf`
-3. Stores filename in event metadata (`attachment_filename`)
-4. On download, retrieves friendly filename from metadata
-5. Downloads with proper `as_attachment=True` header
-
-**Example Filenames Generated:**
-- `Exercise_Prescription_d01_English.pdf`
-- `Exercise_Prescription_d15_Tamil.pdf`
-- `Exercise_Prescription_d01_Hindi.pdf`
-
-**Code Changes:**
-- `routes/user_management.py` — `api_upload_attachment()`: generates and stores friendly filename
-- `routes/user_management.py` — `api_download_attachment()`: retrieves and uses friendly filename, enables download
-
----
-
-**Issue 2.2: Download filename not applied (RESOLVED ✅)**
-
-**Symptom:** Downloaded PDF file has UUID name (e.g., `bbbdb7af-f5da-4688-b279-6a67d637f115.pdf`) instead of friendly name.
-
-**Root Cause:** Complex language-based filename generation was unreliable. A simpler approach already existed in the codebase.
-
-**Solution:** Use the existing `_PRINTOUT_PDF_FILES` constant instead of complex caption parsing and language extraction. This maps protocol event IDs to clean, predictable filenames.
-
-**Code Mapping:**
-```python
-_PRINTOUT_PDF_FILES = {
-    'prescription_printout_d01': 'attachments/prescription_d01.pdf',
-    'prescription_printout_d15': 'attachments/prescription_d15.pdf',
-}
-```
-
-**Implementation:**
-```python
-# In upload endpoint:
-protocol_event_id = entry.get('protocol_event_id', '')
-friendly_filename = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
-
-# In download endpoint:
-protocol_event_id = entry.get('protocol_event_id', '')
-friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
-
-# Set Content-Disposition header:
-response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
-```
-
-**Result:** ✅ Downloaded files now use clean filenames:
-- `prescription_d01.pdf` for day 01 events
-- `prescription_d15.pdf` for day 15 events
-- Works for all languages (filename is language-independent)
-
----
-
-**Debugging:** If issues occur with filename handling, check Flask console for:
-```
-[FILENAME DEBUG] protocol_event_id=prescription_printout_d01, friendly_filename=attachments/prescription_d01.pdf
-[DOWNLOAD DEBUG] Found in complete, protocol_event_id=prescription_printout_d01, friendly_name=attachments/prescription_d01.pdf
-[DOWNLOAD DEBUG] Using friendly_name=attachments/prescription_d01.pdf
-```
-
----
-
-### Summary of Fixes Applied
-
-| Issue | Status | Details |
-|-------|--------|---------|
-| jsPDF constructor error | ✅ Fixed | Handles multiple UMD export patterns (camelCase, lowercase, nested) |
-| Items field not displaying | ✅ Fixed | Template now checks for non-empty strings using `.strip()` |
-| Event not found on upload | ✅ Fixed | Changed order: mark complete first, then upload attachment |
-| PDF content cut off | ✅ Fixed | Temporarily remove height constraints before html2canvas capture |
-| Download filename (UUID) | ✅ Fixed | Use `_PRINTOUT_PDF_FILES` constant for clean filenames (prescription_d01.pdf) |
-| Content-Disposition header | ✅ Fixed | Set header directly in response for maximum browser compatibility |
-
-**Current implementation:**
-- ✅ Multi-language support (6 languages across 3 sites)
-- ✅ Live preview with language selector
-- ✅ Client-side PDF generation (html2canvas + jsPDF)
-- ✅ Meaningful download filenames
-- ✅ Full exercise details with QR codes
-- ✅ Proper error handling and logging
+1. Log in as therapist
+2. Complete ADL + VCG prescriptions
+3. Click `prescription_printout_d01`
+4. Select language → preview renders
+5. Click "Save PDF" → PDF generates and uploads
+6. Check Timeline → download PDF as `prescription_d01.pdf`
 
 ### Future Enhancements
 
-- Add "Print" button for browser print dialog (if users prefer that over PDF download)
-- Customizable pamphlet sections (e.g., hide/show items needed)
-- Batch PDF generation for multiple patients
-- Server-side caching of generated PDFs
+- Print button for browser print dialog
+- Customizable sections (show/hide items, etc.)
+- Batch PDF generation
+- Server-side caching
 
 
 
