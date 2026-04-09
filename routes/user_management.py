@@ -25,6 +25,9 @@ from utils.file_handlers import FileHandler as FH
 from utils.s3_operations import S3Operations
 from utils.data_processors import DataProcessor
 import uuid
+import qrcode
+import io
+import base64
 
 
 bp = Blueprint("user_management", __name__)
@@ -43,7 +46,7 @@ def patients_page():
 def patient_detail_page(homer_id):
     if not flask_session.get('login_place'):
         return redirect(url_for('login'))
-    return render_template('patient_detail.html', homer_id=homer_id, active_page='patients')
+    return render_template('patient_detail.html', homer_id=homer_id, place=flask_session.get('login_place'), active_page='patients')
 
 
 @bp.route('/api/patients/<homer_id>', methods=['GET'])
@@ -729,7 +732,7 @@ def _generate_placeholder_pdf(homer_id: str, title: str) -> bytes:
 
 @bp.route('/api/patients/<homer_id>/complete-event/prescription-printout', methods=['POST'])
 def api_complete_prescription_printout(homer_id):
-    """Generate prescription PDF, save it, and mark the printout event complete."""
+    """Mark prescription printout event complete. PDF attachment is uploaded separately."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     folder = find_patient_folder(flask_session['login_place'], homer_id)
@@ -739,6 +742,7 @@ def api_complete_prescription_printout(homer_id):
     data              = request.get_json() or {}
     event_id          = data.get('event_id')
     protocol_event_id = data.get('protocol_event_id', '')
+    language          = data.get('language', 'english')  # For logging purposes
 
     if protocol_event_id not in _PRINTOUT_PDF_FILES:
         return jsonify({'error': 'Invalid protocol event ID.'}), 400
@@ -757,22 +761,12 @@ def api_complete_prescription_printout(homer_id):
     if not entry:
         return jsonify({'error': 'Event not found in incomplete list.'}), 404
 
-    # Generate and save the PDF
-    rel_path = _PRINTOUT_PDF_FILES[protocol_event_id]
-    pdf_path = get_patients_path(folder) / homer_id / rel_path
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    title = ('Revised Therapy Prescription Printout'
-             if protocol_event_id == 'prescription_printout_d15'
-             else 'Therapy Prescription Printout')
-    pdf_bytes = _generate_placeholder_pdf(homer_id, title)
-    pdf_path.write_bytes(pdf_bytes)
-
+    # Mark event complete (attachment will be added separately via upload-attachment endpoint)
     now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     complete_entry = {
         **entry,
         'completion_date': now,
         'filed_at':        now,
-        'attachment':      rel_path,
     }
 
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
@@ -783,12 +777,11 @@ def api_complete_prescription_printout(homer_id):
 
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
-    log_msg = ('Revised prescription printout generated'
-               if protocol_event_id == 'prescription_printout_d15'
-               else 'Prescription printout generated')
+    log_msg = ('Revised prescription printout completed' if protocol_event_id == 'prescription_printout_d15'
+               else 'Prescription printout completed')
     write_patient_log(folder, homer_id, loginid, session_id, log_msg)
 
-    return jsonify({'ok': True, 'attachment': rel_path})
+    return jsonify({'ok': True})
 
 
 @bp.route('/api/patients/<homer_id>/attachment/<path:rel_path>', methods=['GET'])
@@ -2715,9 +2708,28 @@ def api_upload_attachment(homer_id):
     attachment_path.parent.mkdir(parents=True, exist_ok=True)
     pdf_file.save(str(attachment_path))
 
+    # Generate friendly filename from protocol_event_id and caption language
+    protocol_event_id = entry.get('protocol_event_id', '')
+    day_match = 'd15' if 'd15' in protocol_event_id else 'd01'
+
+    # Extract language from caption (format: "Exercise Prescription Printout (language)")
+    language = 'English'
+    print(f'[FILENAME DEBUG] caption={repr(caption)}, has_paren={("(" in caption and ")" in caption)}')
+    if '(' in caption and ')' in caption:
+        lang_part = caption.split('(')[-1].split(')')[0].strip()
+        print(f'[FILENAME DEBUG] extracted lang_part={repr(lang_part)}')
+        if lang_part:
+            # Capitalize first letter only (e.g., "english" → "English", "tamil" → "Tamil")
+            language = lang_part[0].upper() + lang_part[1:].lower() if lang_part else 'English'
+            print(f'[FILENAME DEBUG] capitalized language={repr(language)}')
+
+    friendly_filename = f'Exercise_Prescription_{day_match}_{language}.pdf'
+    print(f'[FILENAME DEBUG] Generated filename: {friendly_filename} (day={day_match}, lang={language}, protocol={protocol_event_id})')
+
     # Stamp fields on the entry
     entry['attachment']         = attachment_rel
     entry['attachment_caption'] = caption
+    entry['attachment_filename'] = friendly_filename  # Store friendly name for downloads
 
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
@@ -2743,9 +2755,40 @@ def api_download_attachment(homer_id, event_id):
     if not attachment_path.exists():
         return jsonify({'error': 'Attachment not found'}), 404
 
-    return send_file(str(attachment_path), mimetype='application/pdf',
-                     as_attachment=False,
-                     download_name=f'{homer_id}_{event_id}.pdf')
+    # Try to find friendly filename from event metadata
+    events_data = read_protocol_events(folder, homer_id)
+    friendly_name = f'{homer_id}_Prescription_Printout.pdf'  # Default fallback
+    print(f'[DOWNLOAD DEBUG] event_id={event_id}, initial friendly_name={friendly_name}')
+
+    if events_data:
+        # Search in complete events
+        for entry in events_data.get('complete', []):
+            if entry.get('id') == event_id:
+                print(f'[DOWNLOAD DEBUG] Found in complete, has attachment_filename: {entry.get("attachment_filename")}')
+                if entry.get('attachment_filename'):
+                    friendly_name = entry['attachment_filename']
+                    print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
+                break
+        # Search in free events if not found
+        if friendly_name.endswith('Prescription_Printout.pdf'):
+            for val in events_data.get('free', {}).values():
+                if isinstance(val, list):
+                    for entry in val:
+                        if entry.get('id') == event_id:
+                            print(f'[DOWNLOAD DEBUG] Found in free, has attachment_filename: {entry.get("attachment_filename")}')
+                            if entry.get('attachment_filename'):
+                                friendly_name = entry['attachment_filename']
+                                print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
+                            break
+
+    print(f'[DOWNLOAD DEBUG] Final friendly_name={friendly_name}')
+    # Use Flask's send_file with download_name (Flask 3.1.2 uses this parameter)
+    return send_file(
+        str(attachment_path),
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=friendly_name
+    )
 
 
 @bp.route('/api/patients/<homer_id>/log-patient-call', methods=['POST'])
@@ -4865,6 +4908,132 @@ def api_get_prescription(homer_id, event_id):
     if data is None:
         return jsonify({'error': 'Prescription not found'}), 404
     return jsonify(data)
+
+
+# ── Prescription pamphlet helpers ──────────────────────────────────────────────
+
+def _make_qr_b64(url: str) -> str:
+    """Generate QR code image as base64 data URI."""
+    if not url or url.strip() == '':
+        return ''
+    try:
+        qr = qrcode.QRCode(version=1, box_size=4, border=2)
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ''
+
+
+def _get_exercise_text(exercise: dict, language: str) -> dict:
+    """Extract exercise text in the requested language, with English fallback."""
+    if language == 'english' or language not in exercise:
+        return {
+            'name':        exercise.get('name', ''),
+            'description': exercise.get('description', ''),
+            'dosage':      exercise.get('dosage', ''),
+            'items':       exercise.get('items', ''),
+        }
+    lang_block = exercise.get(language, {})
+    return {
+        'name':        lang_block.get('name')        or exercise.get('name', ''),
+        'description': lang_block.get('description') or exercise.get('description', ''),
+        'dosage':      lang_block.get('dosage')      or exercise.get('dosage', ''),
+        'items':       lang_block.get('items')       or exercise.get('items', ''),
+    }
+
+
+@bp.route('/api/patients/<homer_id>/prescription-pamphlet', methods=['GET'])
+def api_prescription_pamphlet(homer_id):
+    """Generate and return HTML pamphlet for prescribed exercises in requested language."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    event_id = request.args.get('event_id')
+    language = request.args.get('language', 'english')
+
+    if not event_id:
+        return jsonify({'error': 'Missing event_id'}), 400
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    # Load all exercises
+    all_exercises = _load_exercises()
+
+    # Determine which day (d01 or d15) from protocol_events
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found'}), 404
+
+    day_match = None
+    for section in ['incomplete', 'complete']:
+        for entry in events_data.get(section, []):
+            if entry.get('id') == event_id:
+                proto_id = entry.get('protocol_event_id', '')
+                if 'd15' in proto_id:
+                    day_match = 'd15'
+                else:
+                    day_match = 'd01'
+                break
+        if day_match:
+            break
+
+    if not day_match:
+        day_match = 'd01'  # Default to d01 if not found
+
+    # Read ADL prescription
+    adl_exercises_list = []
+    adl_rel_path = f'adl/adl_prescription_{day_match}.json'
+    adl_data = _read_prescription(folder, homer_id, adl_rel_path)
+    if adl_data and adl_data.get('prescribed_exercises'):
+        adl_lib = all_exercises.get('adl', {}).get('exercises', [])
+        for presc in adl_data['prescribed_exercises']:
+            ex_id = presc.get('exercise_id')
+            ex = next((e for e in adl_lib if e.get('id') == ex_id), None)
+            if ex:
+                text = _get_exercise_text(ex, language)
+                qr = _make_qr_b64(ex.get('youtube_url', ''))
+                adl_exercises_list.append({
+                    'name': text['name'],
+                    'description': text['description'],
+                    'dosage': text['dosage'],
+                    'items': text['items'],
+                    'qr_code': qr,
+                })
+
+    # Read VCG prescription
+    vcg_exercises_list = []
+    vcg_rel_path = f'vcg_exercise/vcg_prescription_{day_match}.json'
+    vcg_data = _read_prescription(folder, homer_id, vcg_rel_path)
+    if vcg_data and vcg_data.get('prescribed_exercises'):
+        # Determine VCG group from the data if available, default to vcg2
+        vcg_group = vcg_data.get('vcg_group', 'vcg2')
+        vcg_lib = all_exercises.get('vcg', {}).get(vcg_group, {}).get('exercises', [])
+        for presc in vcg_data['prescribed_exercises']:
+            ex_id = presc.get('exercise_id')
+            ex = next((e for e in vcg_lib if e.get('id') == ex_id), None)
+            if ex:
+                text = _get_exercise_text(ex, language)
+                qr = _make_qr_b64(ex.get('youtube_url', ''))
+                vcg_exercises_list.append({
+                    'name': text['name'],
+                    'description': text['description'],
+                    'dosage': text['dosage'],
+                    'items': text['items'],
+                    'qr_code': qr,
+                })
+
+    return render_template(
+        'prescription_pamphlet.html',
+        adl_exercises=adl_exercises_list,
+        vcg_exercises=vcg_exercises_list,
+        language=language
+    )
 
 
 @bp.route('/api/patients/<homer_id>/agwatch-timing/<protocol_event_id>', methods=['GET'])
