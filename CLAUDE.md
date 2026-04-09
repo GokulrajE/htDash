@@ -445,8 +445,9 @@ After ADL and VCG prescriptions are saved, therapists can generate a multi-langu
 4. Select a language → preview renders
 5. Click "Save PDF" → PDF generated and uploaded
 6. Check Timeline tab → PDF download link present
-7. Download PDF → verify filename is meaningful (e.g., `Exercise_Prescription_d01_English.pdf`) not a UUID
-8. For debugging: check Flask console for `[FILENAME DEBUG]` and `[DOWNLOAD DEBUG]` logs (see Issue 2.1)
+7. Download PDF → verify filename is `prescription_d01.pdf` (or `prescription_d15.pdf` for day 15)
+   - Should NOT be the UUID filename
+8. For debugging: check Flask console for `[FILENAME DEBUG]` and `[DOWNLOAD DEBUG]` logs
 
 ### Known Issues & Solutions
 
@@ -695,97 +696,44 @@ previewDiv.style.overflowY = originalOverflow;
 
 **Symptom:** Downloaded PDF file has UUID name (e.g., `bbbdb7af-f5da-4688-b279-6a67d637f115.pdf`) instead of friendly name.
 
-**Root Cause:** Flask's `send_file()` function doesn't reliably apply the filename parameter across all browsers/versions. The friendly filename was being generated and stored correctly but not used for downloads.
+**Root Cause:** Complex language-based filename generation was unreliable. A simpler approach already existed in the codebase.
 
-**Solution:** Use a direct response approach with explicit headers. Read the PDF file directly and create a Response object with all necessary headers set explicitly.
+**Solution:** Use the existing `_PRINTOUT_PDF_FILES` constant instead of complex caption parsing and language extraction. This maps protocol event IDs to clean, predictable filenames.
 
-**Code Change:**
+**Code Mapping:**
 ```python
-# ✅ Final working approach:
-with open(str(attachment_path), 'rb') as f:
-    pdf_data = f.read()
-
-from flask import make_response
-response = make_response(pdf_data)
-
-# Set all headers explicitly
-response.headers['Content-Type'] = 'application/pdf'
-response.headers['Content-Length'] = len(pdf_data)
-response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
-response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-response.headers['Pragma'] = 'no-cache'
-
-return response
+_PRINTOUT_PDF_FILES = {
+    'prescription_printout_d01': 'attachments/prescription_d01.pdf',
+    'prescription_printout_d15': 'attachments/prescription_d15.pdf',
+}
 ```
 
-**Result:** ✅ Downloaded files now use friendly filenames like `Exercise_Prescription_d01_Tamil.pdf`
+**Implementation:**
+```python
+# In upload endpoint:
+protocol_event_id = entry.get('protocol_event_id', '')
+friendly_filename = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
 
-**How It Works:**
-1. Event is stored with `attachment_filename: "Exercise_Prescription_d01_Tamil.pdf"`
-2. Download endpoint retrieves this from event metadata
-3. Content-Disposition header is set with the friendly filename
-4. Browser receives the header and uses it as the download filename
-5. File downloads as `Exercise_Prescription_d01_Tamil.pdf` instead of UUID
+# In download endpoint:
+protocol_event_id = entry.get('protocol_event_id', '')
+friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+
+# Set Content-Disposition header:
+response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
+```
+
+**Result:** ✅ Downloaded files now use clean filenames:
+- `prescription_d01.pdf` for day 01 events
+- `prescription_d15.pdf` for day 15 events
+- Works for all languages (filename is language-independent)
 
 ---
 
-**Issue 2.1: Filename generation debugging (comprehensive tracing)**
-
-**Purpose:** To help identify filename generation and retrieval issues if they occur.
-
-**Debugging approach:**
-The system now includes detailed console logging at every step of filename generation and retrieval:
-
-1. **Upload endpoint (`api_upload_attachment`)** logs:
-   - `[FILENAME DEBUG] caption='...'` - exact caption received from client
-   - `[FILENAME DEBUG] extracted lang_part='...'` - extracted language from parentheses
-   - `[FILENAME DEBUG] capitalized language='...'` - capitalized language string
-   - `[FILENAME DEBUG] Generated filename: Exercise_Prescription_d01_English.pdf` - final filename
-
-2. **Download endpoint (`api_download_attachment`)** logs:
-   - `[DOWNLOAD DEBUG] event_id='...'` - event ID being downloaded
-   - `[DOWNLOAD DEBUG] Found in complete, has attachment_filename: ...` - whether metadata found
-   - `[DOWNLOAD DEBUG] Using friendly_name='...'` - the filename being used for download
-   - `[DOWNLOAD DEBUG] Final friendly_name=...` - final filename sent to client
-
-**How to use these logs:**
-1. Open Flask console where htDash is running
-2. Generate and upload a prescription printout PDF
-3. Look for `[FILENAME DEBUG]` lines to see:
-   - What caption was received
-   - How language was extracted
-   - What friendly filename was generated
-4. Download the PDF and look for `[DOWNLOAD DEBUG]` lines to see:
-   - If attachment_filename was found in event metadata
-   - What filename was used for download
-
-**Expected log output on successful generation:**
+**Debugging:** If issues occur with filename handling, check Flask console for:
 ```
-[FILENAME DEBUG] caption='Exercise Prescription Printout (english)', has_paren=True
-[FILENAME DEBUG] extracted lang_part='english'
-[FILENAME DEBUG] capitalized language='English'
-[FILENAME DEBUG] Generated filename: Exercise_Prescription_d01_English.pdf (day=d01, lang=English, protocol=prescription_printout_d01)
-```
-
-**Expected log output on successful download:**
-```
-[DOWNLOAD DEBUG] event_id=<uuid>, initial friendly_name=HOCMCV002_Prescription_Printout.pdf
-[DOWNLOAD DEBUG] Found in complete, has attachment_filename: Exercise_Prescription_d01_English.pdf
-[DOWNLOAD DEBUG] Using friendly_name=Exercise_Prescription_d01_English.pdf
-[DOWNLOAD DEBUG] Final friendly_name=Exercise_Prescription_d01_English.pdf
-```
-
-**Implementation details:**
-- Filename format: `Exercise_Prescription_{day}_{Language}.pdf`
-  - Day: `d01` or `d15` (extracted from `protocol_event_id`)
-  - Language: Capitalized first letter (e.g., "english" → "English", "tamil" → "Tamil")
-- Stored in event metadata as `attachment_filename` field
-- Sets `Content-Disposition` header directly for maximum browser compatibility
-- Falls back to default filename if metadata not found
-
-**Header Format (RFC 6266):**
-```
-Content-Disposition: attachment; filename="Exercise_Prescription_d01_Tamil.pdf"
+[FILENAME DEBUG] protocol_event_id=prescription_printout_d01, friendly_filename=attachments/prescription_d01.pdf
+[DOWNLOAD DEBUG] Found in complete, protocol_event_id=prescription_printout_d01, friendly_name=attachments/prescription_d01.pdf
+[DOWNLOAD DEBUG] Using friendly_name=attachments/prescription_d01.pdf
 ```
 
 ---
