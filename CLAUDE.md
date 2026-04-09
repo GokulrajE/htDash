@@ -416,7 +416,7 @@ Therapists can generate multi-language exercise pamphlets after ADL and VCG pres
 
 **`prescription_pamphlet.html`** (`templates/prescription_pamphlet.html`)
 - ADL (line 194): `{% if exercise.get("items") and exercise.get("items").strip() %}`
-- VCG (line 238): `{% if exercise.items and exercise.items.strip() %}`
+- VCG (line 238):`{% if exercise.get("items") and exercise.get("items").strip() %}`
 - Prevents empty "Items Needed" sections
 
 ### Testing
@@ -435,5 +435,38 @@ Therapists can generate multi-language exercise pamphlets after ADL and VCG pres
 - Batch PDF generation
 - Server-side caching
 
+### Pamphlet Design (Updated)
+
+**Layout:**
+- **Info Bar** (top): Patient ID and Prescribed Date (formatted YYYY-MM-DD)
+- **Exercise Type Headers**: "ACTIVITIES OF DAILY LIVING (ADL)" and "VIRTUAL CENTER OF GRAVITY (VCG)" with translations
+- **Exercise Cards**: Name, description, dosage, items, QR code
+
+**Font Sizes (Optimized):**
+- Info labels: 10px | Info values: 13px
+- Section title: 14px | Exercise name: 13px
+- Field labels: 9px | Field values: 12px
+- QR text: 10px
+
+**Styling:**
+- Max width: 900px | Padding: 20px | Card padding: 12px
+- Word-break: break-word (prevents text cutoff)
+- QR size: 70x70px | Card background: #f9fafb
+- Print-friendly: page-break-inside: avoid
+
+**Multi-Language Support (✅ Implemented):**
+All labels translated to 6 languages (English, Tamil, Telugu, Kannada, Hindi, Punjabi):
+- Field names: Description, Dosage, Items Needed
+- Section headers: ADL, VCG exercise types
+- QR code text: "Scan for Video" + instructions
+- **NO language mixing**: Only selected language displayed in entire pamphlet
+
+**API Changes:**
+- `_get_field_labels(language)`: Returns dict with translated labels for selected language
+- Template receives: `patient_id`, `prescribed_date`, `labels` (all translations for that language)
+
+**Implementation:**
+- `routes/user_management.py`: Line 4937 defines `_get_field_labels()` with 6 language dictionaries
+- `templates/prescription_pamphlet.html`: Uses `{{ labels.* }}` variables for all text
 
 
