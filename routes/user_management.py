@@ -2782,15 +2782,15 @@ def api_download_attachment(homer_id, event_id):
                             break
 
     print(f'[DOWNLOAD DEBUG] Final friendly_name={friendly_name}')
-    # Set Content-Disposition header directly for reliable filename in all browsers
+    # Create response and explicitly set Content-Disposition header
+    with open(str(attachment_path), 'rb') as f:
+        pdf_data = f.read()
+
     from flask import make_response
-    response = make_response(send_file(
-        str(attachment_path),
-        mimetype='application/pdf',
-        as_attachment=False  # We'll set disposition header manually
-    ))
-    # RFC 6266: Content-Disposition with filename
+    response = make_response(pdf_data)
+    response.headers['Content-Type'] = 'application/pdf'
     response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
+    print(f'[DOWNLOAD DEBUG] Set header: Content-Disposition: attachment; filename="{friendly_name}"')
     return response
 
 
