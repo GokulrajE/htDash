@@ -2782,13 +2782,16 @@ def api_download_attachment(homer_id, event_id):
                             break
 
     print(f'[DOWNLOAD DEBUG] Final friendly_name={friendly_name}')
-    # Use Flask's send_file with download_name (Flask 3.1.2 uses this parameter)
-    return send_file(
+    # Set Content-Disposition header directly for reliable filename in all browsers
+    from flask import make_response
+    response = make_response(send_file(
         str(attachment_path),
         mimetype='application/pdf',
-        as_attachment=True,
-        download_name=friendly_name
-    )
+        as_attachment=False  # We'll set disposition header manually
+    ))
+    # RFC 6266: Content-Disposition with filename
+    response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
+    return response
 
 
 @bp.route('/api/patients/<homer_id>/log-patient-call', methods=['POST'])
