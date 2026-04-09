@@ -2708,28 +2708,14 @@ def api_upload_attachment(homer_id):
     attachment_path.parent.mkdir(parents=True, exist_ok=True)
     pdf_file.save(str(attachment_path))
 
-    # Generate friendly filename from protocol_event_id and caption language
+    # Use predefined filename based on protocol_event_id
     protocol_event_id = entry.get('protocol_event_id', '')
-    day_match = 'd15' if 'd15' in protocol_event_id else 'd01'
-
-    # Extract language from caption (format: "Exercise Prescription Printout (language)")
-    language = 'English'
-    print(f'[FILENAME DEBUG] caption={repr(caption)}, has_paren={("(" in caption and ")" in caption)}')
-    if '(' in caption and ')' in caption:
-        lang_part = caption.split('(')[-1].split(')')[0].strip()
-        print(f'[FILENAME DEBUG] extracted lang_part={repr(lang_part)}')
-        if lang_part:
-            # Capitalize first letter only (e.g., "english" → "English", "tamil" → "Tamil")
-            language = lang_part[0].upper() + lang_part[1:].lower() if lang_part else 'English'
-            print(f'[FILENAME DEBUG] capitalized language={repr(language)}')
-
-    friendly_filename = f'Exercise_Prescription_{day_match}_{language}.pdf'
-    print(f'[FILENAME DEBUG] Generated filename: {friendly_filename} (day={day_match}, lang={language}, protocol={protocol_event_id})')
+    friendly_filename = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+    print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
 
     # Stamp fields on the entry
     entry['attachment']         = attachment_rel
     entry['attachment_caption'] = caption
-    entry['attachment_filename'] = friendly_filename  # Store friendly name for downloads
 
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
@@ -2755,33 +2741,31 @@ def api_download_attachment(homer_id, event_id):
     if not attachment_path.exists():
         return jsonify({'error': 'Attachment not found'}), 404
 
-    # Try to find friendly filename from event metadata
+    # Get the friendly filename from protocol_event_id
     events_data = read_protocol_events(folder, homer_id)
-    friendly_name = f'{homer_id}_Prescription_Printout.pdf'  # Default fallback
-    print(f'[DOWNLOAD DEBUG] event_id={event_id}, initial friendly_name={friendly_name}')
+    friendly_name = 'prescription_attachment.pdf'  # Default fallback
+    print(f'[DOWNLOAD DEBUG] event_id={event_id}')
 
     if events_data:
         # Search in complete events
         for entry in events_data.get('complete', []):
             if entry.get('id') == event_id:
-                print(f'[DOWNLOAD DEBUG] Found in complete, has attachment_filename: {entry.get("attachment_filename")}')
-                if entry.get('attachment_filename'):
-                    friendly_name = entry['attachment_filename']
-                    print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
+                protocol_event_id = entry.get('protocol_event_id', '')
+                friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                print(f'[DOWNLOAD DEBUG] Found in complete, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                 break
         # Search in free events if not found
-        if friendly_name.endswith('Prescription_Printout.pdf'):
+        if friendly_name == 'prescription_attachment.pdf':
             for val in events_data.get('free', {}).values():
                 if isinstance(val, list):
                     for entry in val:
                         if entry.get('id') == event_id:
-                            print(f'[DOWNLOAD DEBUG] Found in free, has attachment_filename: {entry.get("attachment_filename")}')
-                            if entry.get('attachment_filename'):
-                                friendly_name = entry['attachment_filename']
-                                print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
+                            protocol_event_id = entry.get('protocol_event_id', '')
+                            friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                            print(f'[DOWNLOAD DEBUG] Found in free, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                             break
 
-    print(f'[DOWNLOAD DEBUG] Final friendly_name={friendly_name}')
+    print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
 
     # Read the PDF file
     with open(str(attachment_path), 'rb') as f:
