@@ -695,20 +695,37 @@ previewDiv.style.overflowY = originalOverflow;
 
 **Symptom:** Downloaded PDF file has UUID name (e.g., `bbbdb7af-f5da-4688-b279-6a67d637f115.pdf`) instead of friendly name.
 
-**Root Cause:** Flask's `send_file()` `download_name` parameter doesn't reliably apply the filename across all browsers. The friendl filename was being generated and stored correctly but not used for downloads.
+**Root Cause:** Flask's `send_file()` function doesn't reliably apply the filename parameter across all browsers/versions. The friendly filename was being generated and stored correctly but not used for downloads.
 
-**Solution:** Set `Content-Disposition` HTTP header directly using RFC 6266 format. This is the standard approach and works reliably across all browsers.
+**Solution:** Use a direct response approach with explicit headers. Read the PDF file directly and create a Response object with all necessary headers set explicitly.
 
 **Code Change:**
 ```python
-# ✅ Correct approach (sets header directly):
+# ✅ Final working approach:
+with open(str(attachment_path), 'rb') as f:
+    pdf_data = f.read()
+
 from flask import make_response
-response = make_response(send_file(str(attachment_path), mimetype='application/pdf'))
+response = make_response(pdf_data)
+
+# Set all headers explicitly
+response.headers['Content-Type'] = 'application/pdf'
+response.headers['Content-Length'] = len(pdf_data)
 response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
+response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+response.headers['Pragma'] = 'no-cache'
+
 return response
 ```
 
 **Result:** ✅ Downloaded files now use friendly filenames like `Exercise_Prescription_d01_Tamil.pdf`
+
+**How It Works:**
+1. Event is stored with `attachment_filename: "Exercise_Prescription_d01_Tamil.pdf"`
+2. Download endpoint retrieves this from event metadata
+3. Content-Disposition header is set with the friendly filename
+4. Browser receives the header and uses it as the download filename
+5. File downloads as `Exercise_Prescription_d01_Tamil.pdf` instead of UUID
 
 ---
 
