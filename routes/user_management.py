@@ -2782,15 +2782,30 @@ def api_download_attachment(homer_id, event_id):
                             break
 
     print(f'[DOWNLOAD DEBUG] Final friendly_name={friendly_name}')
-    # Create response and explicitly set Content-Disposition header
+
+    # Read the PDF file
     with open(str(attachment_path), 'rb') as f:
         pdf_data = f.read()
 
+    # Create response with the PDF data
     from flask import make_response
     response = make_response(pdf_data)
+
+    # Set headers explicitly for maximum compatibility
     response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Length'] = len(pdf_data)
+    # RFC 6266 format: attachment; filename="filename.pdf"
     response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
-    print(f'[DOWNLOAD DEBUG] Set header: Content-Disposition: attachment; filename="{friendly_name}"')
+
+    # Also set cache control to prevent caching
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+
+    print(f'[DOWNLOAD DEBUG] Response headers set:')
+    print(f'  Content-Type: application/pdf')
+    print(f'  Content-Length: {len(pdf_data)}')
+    print(f'  Content-Disposition: attachment; filename="{friendly_name}"')
+
     return response
 
 
