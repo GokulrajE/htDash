@@ -449,6 +449,44 @@ After ADL and VCG prescriptions are saved, therapists can generate a multi-langu
    - Should NOT be the UUID filename
 8. For debugging: check Flask console for `[FILENAME DEBUG]` and `[DOWNLOAD DEBUG]` logs
 
+### Code Implementation Details
+
+**`api_complete_prescription_printout()` endpoint** (`routes/user_management.py:733-784`)
+
+Purpose: Marks a prescription printout event as complete and moves it from `incomplete` to `complete` array.
+
+Key logic:
+1. Validates protocol_event_id is in `_PRINTOUT_PDF_FILES` (ensures valid d01/d15 event)
+2. Finds event in `incomplete` array
+3. Creates completion entry with `completion_date` and `filed_at` timestamps
+4. Moves event from `incomplete` to `complete` array
+5. Writes updated protocol_events.json
+6. Logs the completion
+
+Important: PDF attachment is uploaded separately via `/api/patients/<id>/upload-attachment` endpoint (not in this function)
+
+**`prescription_pamphlet.html` template** (`templates/prescription_pamphlet.html`)
+
+Template renders exercise cards for both ADL and VCG sections. Key features:
+- Conditional rendering of each field (description, dosage, items, QR code)
+- Handles empty/null values correctly using `.strip()` checks
+- Two sections: ADL exercises and VCG exercises
+
+Fixed issue with items field validation:
+```jinja2
+{# ADL section (line 194) #}
+{% if exercise.get("items") and exercise.get("items").strip() %}
+
+{# VCG section (line 238) #}
+{% if exercise.items and exercise.items.strip() %}
+```
+
+Both checks now ensure the items field:
+1. Exists (not null/undefined)
+2. Contains actual content (not just whitespace)
+
+This prevents displaying empty "Items Needed" sections.
+
 ### Known Issues & Solutions
 
 **Issue 1: "jsPDF is not a constructor" error**
@@ -692,7 +730,7 @@ previewDiv.style.overflowY = originalOverflow;
 
 ---
 
-**Issue 2.2: Download filename not applied (RESOLVED)**
+**Issue 2.2: Download filename not applied (RESOLVED ✅)**
 
 **Symptom:** Downloaded PDF file has UUID name (e.g., `bbbdb7af-f5da-4688-b279-6a67d637f115.pdf`) instead of friendly name.
 
@@ -738,11 +776,31 @@ response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name
 
 ---
 
+### Summary of Fixes Applied
+
+| Issue | Status | Details |
+|-------|--------|---------|
+| jsPDF constructor error | ✅ Fixed | Handles multiple UMD export patterns (camelCase, lowercase, nested) |
+| Items field not displaying | ✅ Fixed | Template now checks for non-empty strings using `.strip()` |
+| Event not found on upload | ✅ Fixed | Changed order: mark complete first, then upload attachment |
+| PDF content cut off | ✅ Fixed | Temporarily remove height constraints before html2canvas capture |
+| Download filename (UUID) | ✅ Fixed | Use `_PRINTOUT_PDF_FILES` constant for clean filenames (prescription_d01.pdf) |
+| Content-Disposition header | ✅ Fixed | Set header directly in response for maximum browser compatibility |
+
+**Current implementation:**
+- ✅ Multi-language support (6 languages across 3 sites)
+- ✅ Live preview with language selector
+- ✅ Client-side PDF generation (html2canvas + jsPDF)
+- ✅ Meaningful download filenames
+- ✅ Full exercise details with QR codes
+- ✅ Proper error handling and logging
+
 ### Future Enhancements
 
 - Add "Print" button for browser print dialog (if users prefer that over PDF download)
 - Customizable pamphlet sections (e.g., hide/show items needed)
 - Batch PDF generation for multiple patients
+- Server-side caching of generated PDFs
 
 
 
