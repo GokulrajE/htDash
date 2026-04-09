@@ -469,4 +469,83 @@ All labels translated to 6 languages (English, Tamil, Telugu, Kannada, Hindi, Pu
 - `routes/user_management.py`: Line 4937 defines `_get_field_labels()` with 6 language dictionaries
 - `templates/prescription_pamphlet.html`: Uses `{{ labels.* }}` variables for all text
 
+### Language Selection Design
 
+**Updated:** Language selector changed from dropdown to pill buttons
+
+**Features:**
+- Pill-style buttons displayed horizontally
+- Native language names: தமிழ் (Tamil), తెలుగు (Telugu), ಕನ್ನಡ (Kannada), हिंदी (Hindi), ਪੰਜਾਬੀ (Punjabi)
+- Visual feedback: selected button highlighted in blue, others in gray
+- Smooth transitions on hover
+- Automatically loads preview when language is selected
+
+**Files Updated:**
+- `templates/patient_detail.html`: Replaced `<select>` with button container
+- `static/js/app/patient_detail.js`:
+  - Added `LANGUAGE_NAMES` mapping for native script display (lines 3009-3015)
+  - Updated `openPrescriptionPrintoutModal()` to create pill buttons (lines 3027-3056)
+  - New `selectPrescriptionLanguage()` function for button click handling (lines 3058-3070)
+  - Updated `_loadPrescriptionPamphlet()` to remove select element references
+
+### Print Button
+
+**Added:** Print button to therapy prescription printout modal
+
+**Features:**
+- Opens browser print dialog for immediate printing
+- Prints the previewed pamphlet with all formatting and fonts
+- Maintains page breaks for individual exercises
+- Supports all 6 languages with proper Google Fonts rendering
+- Validates pamphlet is loaded before allowing print
+- Shows error message if no language is selected
+
+**Files Updated:**
+- `templates/patient_detail.html`:
+  - Added print button (gray) between cancel and save PDF buttons
+  - Print button uses `fas fa-print` icon
+  
+- `static/js/app/patient_detail.js`:
+  - New `printPrescriptionPamphlet()` function
+  - Uses modern Blob/URL approach (no deprecated document.write)
+  - Validates preview is loaded and has content
+  - Includes error handling for pop-up blockers
+  - Includes print-optimized CSS (page-break rules, fonts, spacing)
+
+**User Flow:**
+1. Select language (pills auto-load preview)
+2. Review pamphlet in preview pane
+3. Click "Print" → opens print dialog in new window
+4. Therapist can see exact output before printing
+5. Click "Save PDF" to save as attachment, or cancel to go back
+
+---
+
+### Issues Resolved ✅
+
+**Issue 1: Prescribed Date Shows N/A**
+- **Fix:** API uses `completion_date` OR `scheduled_date[0]` as fallback (line 5051)
+- **Result:** Shows actual date even for incomplete events
+- **Code:** `prescribed_date = entry.get('completion_date') or (entry.get('scheduled_date', ['', ''])[0] if entry.get('scheduled_date') else '')`
+
+**Issue 2: Items Field Showing Dict Method**
+- **Fix:** Removed dict method resolution by using explicit key access
+  - Changed `{{ labels.items }}` to `{{ labels['items'] }}`
+  - Changed `exercise.get("items")` assignment in template (lines 228, 272)
+- **Result:** Labels and items display correctly in all 6 languages without `<built-in method items>` error
+- **Code:** All label references now use bracket notation: `{{ labels['description'] }}`, `{{ labels['dosage'] }}`, `{{ labels['items'] }}`, `{{ labels['scan_video'] }}`, `{{ labels['video_instruction'] }}`
+
+**Issue 3: Each Exercise on Separate Page**
+- **Fix:** CSS page-break handling in print mode
+  - `.exercise-card` has `page-break-before: always;`
+  - `.exercise-card.first-exercise` has `page-break-before: auto;`
+  - Template loop applies class: `{% if loop.first %}first-exercise{% endif %}`
+- **Result:** First exercise with section title on page 1, subsequent exercises on separate pages
+
+**Issue 4: Exercise Field Label Styling Breaking Non-Latin Scripts**
+- **Fix:** Removed problematic CSS properties (lines 114-121)
+  - Removed `text-transform: uppercase;` (breaks Tamil, Telugu, Kannada, Hindi, Punjabi)
+  - Removed `letter-spacing: 0.3px;` (causes rendering issues)
+  - Increased font-size from 9px to 10px
+  - Increased margin-bottom from 2px to 4px
+- **Result:** Labels display correctly in all languages without uppercase transformation issues

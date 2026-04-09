@@ -93,7 +93,6 @@
             margin-bottom: 12px;
             page-break-inside: avoid;
             page-break-before: always;
-            min-height: 250px;
         }
 
         .exercise-card.first-exercise {
@@ -118,12 +117,10 @@
         }
 
         .exercise-field-label {
-            font-size: 9px;
+            font-size: 10px;
             font-weight: 600;
-            text-transform: uppercase;
             color: #6b7280;
-            margin-bottom: 2px;
-            letter-spacing: 0.3px;
+            margin-bottom: 4px;
         }
 
         .exercise-field-value {
@@ -221,23 +218,22 @@
 
                 {% if exercise.description %}
                 <div class="exercise-field">
-                    <div class="exercise-field-label">{{ labels.description }}</div>
+                    <div class="exercise-field-label">{{ labels['description'] }}</div>
                     <div class="exercise-field-value">{{ exercise.description }}</div>
                 </div>
                 {% endif %}
 
                 {% if exercise.dosage and exercise.dosage.strip() %}
                 <div class="exercise-field">
-                    <div class="exercise-field-label">{{ labels.dosage }}</div>
+                    <div class="exercise-field-label">{{ labels['dosage'] }}</div>
                     <div class="exercise-field-value">{{ exercise.dosage }}</div>
                 </div>
                 {% endif %}
 
-                {% set items_value = exercise.get("items", "") %}
-                {% if items_value and items_value|string|trim %}
+                {% if exercise.get("items") and exercise.get("items").strip() %}
                 <div class="exercise-field">
-                    <div class="exercise-field-label">{{ labels.items }}</div>
-                    <div class="exercise-field-value">{{ items_value|string }}</div>
+                    <div class="exercise-field-label">{{ labels['items'] }}</div>
+                    <div class="exercise-field-value">{{ exercise.get("items") }}</div>
                 </div>
                 {% endif %}
 
@@ -247,8 +243,8 @@
                         <img src="data:image/png;base64,{{ exercise.qr_code }}" alt="YouTube QR Code">
                     </div>
                     <div class="qr-code-text">
-                        <strong>{{ labels.scan_video }}</strong>
-                        {{ labels.video_instruction }}
+                        <strong>{{ labels['scan_video'] }}</strong>
+                        {{ labels['video_instruction'] }}
                     </div>
                 </div>
                 {% endif %}
@@ -266,23 +262,22 @@
 
                 {% if exercise.description %}
                 <div class="exercise-field">
-                    <div class="exercise-field-label">{{ labels.description }}</div>
+                    <div class="exercise-field-label">{{ labels['description'] }}</div>
                     <div class="exercise-field-value">{{ exercise.description }}</div>
                 </div>
                 {% endif %}
 
                 {% if exercise.dosage and exercise.dosage.strip() %}
                 <div class="exercise-field">
-                    <div class="exercise-field-label">{{ labels.dosage }}</div>
+                    <div class="exercise-field-label">{{ labels['dosage'] }}</div>
                     <div class="exercise-field-value">{{ exercise.dosage }}</div>
                 </div>
                 {% endif %}
 
-                {% set items_value = exercise.get("items", "") %}
-                {% if items_value and items_value|string|trim %}
+                {% if exercise.get("items") and exercise.get("items").strip() %}
                 <div class="exercise-field">
-                    <div class="exercise-field-label">{{ labels.items }}</div>
-                    <div class="exercise-field-value">{{ items_value|string }}</div>
+                    <div class="exercise-field-label">{{ labels['items'] }}</div>
+                    <div class="exercise-field-value">{{ exercise.get("items") }}</div>
                 </div>
                 {% endif %}
 
@@ -292,8 +287,8 @@
                         <img src="data:image/png;base64,{{ exercise.qr_code }}" alt="YouTube QR Code">
                     </div>
                     <div class="qr-code-text">
-                        <strong>{{ labels.scan_video }}</strong>
-                        {{ labels.video_instruction }}
+                        <strong>{{ labels['scan_video'] }}</strong>
+                        {{ labels['video_instruction'] }}
                     </div>
                 </div>
                 {% endif %}
