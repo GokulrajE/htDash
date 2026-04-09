@@ -691,6 +691,27 @@ previewDiv.style.overflowY = originalOverflow;
 
 ---
 
+**Issue 2.2: Download filename not applied (RESOLVED)**
+
+**Symptom:** Downloaded PDF file has UUID name (e.g., `bbbdb7af-f5da-4688-b279-6a67d637f115.pdf`) instead of friendly name.
+
+**Root Cause:** Flask's `send_file()` `download_name` parameter doesn't reliably apply the filename across all browsers. The friendl filename was being generated and stored correctly but not used for downloads.
+
+**Solution:** Set `Content-Disposition` HTTP header directly using RFC 6266 format. This is the standard approach and works reliably across all browsers.
+
+**Code Change:**
+```python
+# ✅ Correct approach (sets header directly):
+from flask import make_response
+response = make_response(send_file(str(attachment_path), mimetype='application/pdf'))
+response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
+return response
+```
+
+**Result:** ✅ Downloaded files now use friendly filenames like `Exercise_Prescription_d01_Tamil.pdf`
+
+---
+
 **Issue 2.1: Filename generation debugging (comprehensive tracing)**
 
 **Purpose:** To help identify filename generation and retrieval issues if they occur.
@@ -742,8 +763,13 @@ The system now includes detailed console logging at every step of filename gener
   - Day: `d01` or `d15` (extracted from `protocol_event_id`)
   - Language: Capitalized first letter (e.g., "english" → "English", "tamil" → "Tamil")
 - Stored in event metadata as `attachment_filename` field
-- Uses Flask 3.1.2 `send_file()` with `download_name` parameter
+- Sets `Content-Disposition` header directly for maximum browser compatibility
 - Falls back to default filename if metadata not found
+
+**Header Format (RFC 6266):**
+```
+Content-Disposition: attachment; filename="Exercise_Prescription_d01_Tamil.pdf"
+```
 
 ---
 
