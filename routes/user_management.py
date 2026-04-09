@@ -2710,7 +2710,9 @@ def api_upload_attachment(homer_id):
 
     # Use predefined filename based on protocol_event_id
     protocol_event_id = entry.get('protocol_event_id', '')
-    friendly_filename = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+    pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+    # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
+    friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
     print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
 
     # Stamp fields on the entry
@@ -2751,7 +2753,9 @@ def api_download_attachment(homer_id, event_id):
         for entry in events_data.get('complete', []):
             if entry.get('id') == event_id:
                 protocol_event_id = entry.get('protocol_event_id', '')
-                friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                # Extract just the filename from the path
+                friendly_name = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
                 print(f'[DOWNLOAD DEBUG] Found in complete, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                 break
         # Search in free events if not found
@@ -2761,7 +2765,9 @@ def api_download_attachment(homer_id, event_id):
                     for entry in val:
                         if entry.get('id') == event_id:
                             protocol_event_id = entry.get('protocol_event_id', '')
-                            friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                            pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                            # Extract just the filename from the path
+                            friendly_name = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
                             print(f'[DOWNLOAD DEBUG] Found in free, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                             break
 
