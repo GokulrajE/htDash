@@ -2701,22 +2701,24 @@ def api_upload_attachment(homer_id):
                     break
     if not entry:
         return jsonify({'error': 'Event not found'}), 404
-
-    # Save PDF as attachments/<event_id>.pdf
-    attachment_rel  = f'attachments/{event_id}.pdf'
-    attachment_path = get_patients_path(folder) / homer_id / attachment_rel
-    attachment_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_file.save(str(attachment_path))
-
+    
     # Use predefined filename based on protocol_event_id
     protocol_event_id = entry.get('protocol_event_id', '')
     pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+
+    # Save PDF as attachments/<event_id>.pdf
+    
+    attachment_path = get_patients_path(folder) / homer_id / pdf_path_mapping
+    attachment_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_file.save(str(attachment_path))
+
+  
     # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
     friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
     print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
 
     # Stamp fields on the entry
-    entry['attachment']         = attachment_rel
+    entry['attachment']         = pdf_path_mapping
     entry['attachment_caption'] = caption
 
     from utils.protocol_events import write_protocol_events
@@ -2753,9 +2755,7 @@ def api_download_attachment(homer_id, event_id):
         for entry in events_data.get('complete', []):
             if entry.get('id') == event_id:
                 protocol_event_id = entry.get('protocol_event_id', '')
-                pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
-                # Extract just the filename from the path
-                friendly_name = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
+                friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
                 print(f'[DOWNLOAD DEBUG] Found in complete, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                 break
         # Search in free events if not found
@@ -2765,9 +2765,7 @@ def api_download_attachment(homer_id, event_id):
                     for entry in val:
                         if entry.get('id') == event_id:
                             protocol_event_id = entry.get('protocol_event_id', '')
-                            pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
-                            # Extract just the filename from the path
-                            friendly_name = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
+                            friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
                             print(f'[DOWNLOAD DEBUG] Found in free, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                             break
 
@@ -4936,6 +4934,67 @@ def _make_qr_b64(url: str) -> str:
         return ''
 
 
+def _get_field_labels(language: str) -> dict:
+    """Get translated labels for exercise fields."""
+    labels = {
+        'english': {
+            'description': 'Description',
+            'dosage': 'Dosage',
+            'items': 'Items Needed',
+            'adl_section': 'Activities of Daily Living (ADL)',
+            'vcg_section': 'Virtual Center of Gravity (VCG)',
+            'scan_video': 'Scan for Video',
+            'video_instruction': 'Watch the exercise video using your smartphone camera',
+        },
+        'tamil': {
+            'description': 'விளக்கம்',
+            'dosage': 'தீவிரம்',
+            'items': 'தேவையான பொருட்கள்',
+            'adl_section': 'நாளாந்த வாழ்க்கை நடவடிக்கைகள் (ADL)',
+            'vcg_section': 'மெய்ம் ஈர்ப்பு மையம் (VCG)',
+            'scan_video': 'வீடியோவுக்கு ஸ்கேன் செய்யவும்',
+            'video_instruction': 'உங்கள் ஸ்மார்ட்ஃபோன் கேமிரா ஐப் பயன்படுத்தி பயிற்சி வீடியோவைப் பாருங்கள்',
+        },
+        'telugu': {
+            'description': 'వివరణ',
+            'dosage': 'మోతాదు',
+            'items': 'అవసరమైన వస్తువులు',
+            'adl_section': 'రోజువారీ జీవన కార్యకలాపాలు (ADL)',
+            'vcg_section': 'వర్చువల్ గురుత్వాకర్షణ కేంద్రం (VCG)',
+            'scan_video': 'వీడియో కోసం స్కాన్ చేయండి',
+            'video_instruction': 'మీ స్మార్ట్‌ఫోన్ కెమెరా ఉపయోగించి వ్యాయామ వీడియోను చూడండి',
+        },
+        'kannada': {
+            'description': 'ವಿವರಣೆ',
+            'dosage': 'ಮಾತ್ರೆ',
+            'items': 'ಬೇಕಾದ ವಸ್ತುಗಳು',
+            'adl_section': 'ದೈನಂದಿನ ಜೀವನ ಚಟುವಟಿಕೆಗಳು (ADL)',
+            'vcg_section': 'ವರ್ಚುವಲ್ ಗುರುತ್ವಾಕರ್ಷಣ ಕೇಂದ್ರ (VCG)',
+            'scan_video': 'ವೀಡಿಯೋಗಾಗಿ ಸ್ಕ್ಯಾನ್ ಮಾಡಿ',
+            'video_instruction': 'ನಿಮ್ಮ ಸ್ಮಾರ್ಟ್‌ಫೋನ್ ಕ್ಯಾಮೆರಾವನ್ನು ಬಳಸಿ ವ್ಯಾಯಾಮ ವೀಡಿಯೋವನ್ನು ವೀಕ್ಷಿಸಿ',
+        },
+        'hindi': {
+            'description': 'विवरण',
+            'dosage': 'खुराक',
+            'items': 'आवश्यक वस्तुएं',
+            'adl_section': 'दैनिक जीवन कार्यकलाप (ADL)',
+            'vcg_section': 'वर्चुअल गुरुत्व केंद्र (VCG)',
+            'scan_video': 'वीडियो के लिए स्कैन करें',
+            'video_instruction': 'अपने स्मार्टफोन कैमरे का उपयोग करके व्यायाम वीडियो देखें',
+        },
+        'punjabi': {
+            'description': 'ਵਰਣਨ',
+            'dosage': 'ਖੁਰਾਕ',
+            'items': 'ਲੋੜੀਂਦੀਆਂ ਵਸਤੂਆਂ',
+            'adl_section': 'ਰੋਜ਼ਾਨਾ ਜੀਵਨ ਦੀਆਂ ਗਤੀਵਿਧੀਆਂ (ADL)',
+            'vcg_section': 'ਵਰਚੁਅਲ ਗੁਰੁਤਾ ਕੇਂਦਰ (VCG)',
+            'scan_video': 'ਵੀਡੀਓ ਲਈ ਸਕੈਨ ਕਰੋ',
+            'video_instruction': 'ਆਪਣੇ ਸਮਾਰਟ ਫੋਨ ਕੈਮਰੇ ਦੀ ਵਰਤੋਂ ਕਰਕੇ ਅਭਿਆਸ ਵੀਡੀਓ ਦੇਖੋ',
+        },
+    }
+    return labels.get(language, labels['english'])
+
+
 def _get_exercise_text(exercise: dict, language: str) -> dict:
     """Extract exercise text in the requested language, with English fallback."""
     if language == 'english' or language not in exercise:
@@ -4979,6 +5038,7 @@ def api_prescription_pamphlet(homer_id):
         return jsonify({'error': 'Protocol events not found'}), 404
 
     day_match = None
+    prescribed_date = None
     for section in ['incomplete', 'complete']:
         for entry in events_data.get(section, []):
             if entry.get('id') == event_id:
@@ -4987,6 +5047,8 @@ def api_prescription_pamphlet(homer_id):
                     day_match = 'd15'
                 else:
                     day_match = 'd01'
+                # Get the date when the prescription was completed
+                prescribed_date = entry.get('completion_date', '')
                 break
         if day_match:
             break
@@ -5036,11 +5098,16 @@ def api_prescription_pamphlet(homer_id):
                     'qr_code': qr,
                 })
 
+    labels = _get_field_labels(language)
+
     return render_template(
         'prescription_pamphlet.html',
+        patient_id=homer_id,
+        prescribed_date=prescribed_date,
         adl_exercises=adl_exercises_list,
         vcg_exercises=vcg_exercises_list,
-        language=language
+        language=language,
+        labels=labels
     )
 
 
