@@ -477,28 +477,29 @@ Exercise cards now display in this order:
 
 ### 4. PDF Generation with Proper Page Breaks
 
-**Status:** ⬜ In Progress
+**Status:** ✅ Complete
 
-Current limitation: "Save PDF" button uses html2canvas which captures content as raster image, producing single continuous page. "Print" button correctly respects CSS page-break rules, separating exercises per page.
+Previous limitation: "Save PDF" button used html2canvas which captures content as raster image, producing single continuous page. "Print" button correctly respects CSS page-break rules.
 
-**Solution:** Replace html2canvas approach with jsPDF HTML2PDF wrapper that respects CSS `@page` rules and `page-break-before: always` declarations.
+**Solution Implemented:** Replaced html2canvas approach with jsPDF's `html()` method that respects CSS `@page` rules and `page-break-before: always` declarations.
 
-**Implementation:**
-- Modify `savePrescriptionPrintout()` in `static/js/app/patient_detail.js`
-- Use jsPDF's HTML method with proper viewport and margin handling
-- Respect exercise card page-break CSS (`page-break-before: always` on `.exercise-card`)
-- Auto-upload resulting PDF as attachment (same workflow as now)
-- No manual download/re-upload steps required
+**Implementation Details:**
+- Modified `savePrescriptionPrintout()` in `static/js/app/patient_detail.js`
+- Replaced html2canvas canvas capture with `pdf.html()` method
+- Configured with proper margins (10mm), width (190mm), and auto-paging enabled
+- Respects exercise card page-break CSS (`page-break-before: always` on `.exercise-card`)
+- Auto-upload workflow preserved: mark event complete → upload PDF attachment
 
-**Files Modified:**
-- `static/js/app/patient_detail.js`:
-  - Replace html2canvas + canvas-to-image logic in `savePrescriptionPrintout()`
-  - Use jsPDF HTML method for direct DOM-to-PDF conversion
-  - Maintain API call sequence: mark event complete → upload attachment
+**Code Changes:**
+- Removed 80+ lines of html2canvas + jsPDF constructor detection logic
+- Added 20 lines using direct jsPDF html() method
+- Simplified jsPDF constructor lookup (single path instead of 8 fallback patterns)
+- Maintained full API sequence: mark event complete → upload attachment
 
-**Result:**
+**Results:**
 - ✅ Multi-page PDF with proper page breaks (one exercise per page)
-- ✅ Respects `@page` CSS media rules
-- ✅ Better print quality (vector-based, not raster)
-- ✅ Auto-uploaded as attachment
-- ✅ Same user workflow (click "Save PDF")
+- ✅ Respects CSS @page and page-break-before rules
+- ✅ Vector-based PDF output (better quality, smaller file size)
+- ✅ Auto-uploaded as attachment (no manual steps)
+- ✅ Identical user workflow (click "Save PDF" button)
+- ✅ Cleaner, more maintainable code
