@@ -401,7 +401,10 @@ Therapists can generate multi-language exercise pamphlets after ADL and VCG pres
 
 ## Known Limitations
 
-**PDF Page Breaks:** Print button correctly separates exercises on different pages (respects CSS @media print rules). Save PDF button produces single continuous page because html2canvas captures visible content as image, not render layout. Use Print button for multi-page output.
+**PDF Multi-Page Output:** 
+- **Print button** — Respects CSS `@page` and `page-break-before` rules; generates professional multi-page output with proper page breaks
+- **Save PDF button** — Uses html2canvas to capture DOM as image, then splits into A4 pages; results in continuous image layout rather than optimized page breaks
+- **Recommendation:** Use Print button for final multi-page PDFs; Save PDF for quick archival
 
 ---
 
@@ -475,76 +478,38 @@ Exercise cards now display in this order:
 
 **Example flow:** Click `prescription_printout_d01` → select language → preview renders with screenshots → Print or Save PDF
 
-### 4. Server-Side PDF Generation with Puppeteer
+### 4. Client-Side PDF Generation (html2canvas + jsPDF)
 
 **Status:** ✅ Complete
 
-**Goal:** Generate professional multi-page PDFs with proper CSS page-break handling using server-side Puppeteer rendering, eliminating client-side limitations (browser cache issues, canvas rendering problems, html2canvas scale issues).
-
-**Why Puppeteer (Server-Side)?**
-- ✅ Proper CSS page-break support — each exercise renders on a separate page automatically
-- ✅ No browser cache issues — rendering happens on server, always fresh
-- ✅ Consistent output — same HTML rendering across all users and browsers
-- ✅ No client-side library dependencies — removes jsPDF, html2canvas complexity
-- ✅ Professional quality — Chromium rendering engine matches browser quality
-- ✅ Simple user workflow — "Save PDF" button immediately generates and uploads
+**Goal:** Generate multi-language exercise PDFs with proper text rendering for all 6 languages (English, Tamil, Telugu, Kannada, Hindi, Punjabi).
 
 **Implementation:**
 
-**Backend Changes** (`routes/user_management.py`):
-1. **New endpoint:** `POST /api/patients/<homer_id>/generate-prescription-pdf`
-   - Accepts: `event_id`, `protocol_event_id`, `language`
-   - Internally renders pamphlet HTML (same as preview)
-   - Calls `_generate_pdf_with_puppeteer()` helper
-   - Marks event complete and uploads attachment
-   - Returns: `{success, message, filename}`
+**Frontend Flow** (`static/js/app/patient_detail.js` — `savePrescriptionPrintout()`):
+1. Retrieves the preview div containing the rendered pamphlet
+2. Uses `html2canvas` to capture the DOM as an image (supports all fonts rendered by browser)
+3. Splits the image into A4-sized pages using `jsPDF`
+4. Marks the event complete via `api_complete_prescription_printout()` endpoint
+5. Uploads the PDF blob as an attachment via `/api/patients/<homer_id>/upload-attachment`
+6. Closes modal and refreshes events
 
-2. **Helper function:** `_generate_pdf_with_puppeteer(html_content, filename)`
-   - Writes HTML to temp file
-   - Creates Node.js script that uses Puppeteer to render
-   - Launches Chromium via Puppeteer (headless mode)
-   - Sets viewport: 1024x1280 for consistent rendering
-   - Calls `page.pdf()` with:
-     - Format: A4
-     - Page breaks: `preferCSSPageSize: true` (respects CSS `page-break-before`)
-     - Background: `printBackground: true` (colors and images)
-     - Margins: none (template handles padding)
-   - Returns PDF buffer as bytes
+**Why Client-Side?**
+- ✅ Browser already has all fonts (Google Noto Sans imported in HTML)
+- ✅ No server-side rendering complexity (no Puppeteer/Chromium needed)
+- ✅ Works on Windows dev machines (no GTK/Pango system libraries required)
+- ✅ Fonts render identically to preview (WYSIWYG)
+- ✅ Lower memory footprint on production servers (t2.micro)
 
-3. **Helper function:** `_upload_prescription_pdf_attachment(folder, homer_id, event_id, pdf_buffer, filename, caption)`
-   - Saves PDF to `data/<site>/patients/<homer_id>/attachments/<event_id>.pdf`
-   - Updates protocol_events.json with `attachment` field
-   - Sets `attachment_caption` for display in Timeline tab
-
-**Frontend Changes** (`static/js/app/patient_detail.js`):
-- **Updated function:** `savePrescriptionPrintout()`
-  - Removed: html2canvas, jsPDF, canvas manipulation code
-  - Now: Single API call to `/api/patients/<homer_id>/generate-prescription-pdf`
-  - Passes: event_id, protocol_event_id, language
-  - On success: closes modal and refreshes events
-  - On error: displays error message via `setError()`
-
-**Template Changes** (`templates/patient_detail.html`):
-- **Removed:** Custom PDF dialog modal (`prescription-pdf-dialog-modal`) — no longer needed
-- **Reverted:** "Save PDF" button onclick from `openPrescriptionPdfDialog()` back to `savePrescriptionPrintout()`
-- **Removed:** All modal HTML, CSS, and settings controls for page size/scale/margins
-
-**CSS Already in Place** (`templates/prescription_pamphlet.html`):
-```css
-.exercise-card {
-  page-break-before: always;
-}
-.exercise-card.first-exercise {
-  page-break-before: auto;
-}
-```
-Puppeteer respects these CSS rules, so each exercise renders on a separate page automatically.
+**Known Limitation:**
+- Multi-page PDF rendering via html2canvas produces a single-column continuous image split across pages
+- For optimized multi-page layout, use the **Print** button instead (opens browser print dialog with proper CSS page-break handling)
+- Use **Save PDF** for quick one-off saves; use **Print** for professional multi-page output
 
 **Dependencies:**
-- ✅ Puppeteer (npm package): `npm install puppeteer` — installs Chromium automatically
-- ✅ Node.js: Already available (used for Puppeteer rendering)
-- ✅ Subprocess: Python's `subprocess` module (already imported)
-- ✅ Tempfile: Python's `tempfile` module for temporary file handling
+- ✅ jsPDF (cdn): Client-side PDF generation
+- ✅ html2canvas (cdn): DOM to canvas capture
+- ✅ Google Fonts: Noto Sans (all 6 language variants) imported in HTML
 
 **User Workflow:**
 1. Complete ADL + VCG prescriptions
