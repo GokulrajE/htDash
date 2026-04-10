@@ -135,7 +135,8 @@ def validate_login():
             login_place=user_data["place"],
             privilege=user_data.get("privilege", "user")
         )
-        flask_session['loginid'] = loginid
+        flask_session['loginid']   = loginid
+        flask_session['privilege'] = user_data.get('privilege', 'user')
         session_id = -1
         try:
             from utils.data_access import open_session, get_hospital_folder

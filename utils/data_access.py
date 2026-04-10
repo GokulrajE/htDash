@@ -332,9 +332,60 @@ def read_device_assignments(hospital_folder: str, device_type: str) -> list:
 def write_device_assignments(hospital_folder: str, device_type: str, assignments: list) -> None:
     """Atomically overwrite assignments/<device_type>.json."""
     path = _devices_path(hospital_folder) / 'assignments' / f'{device_type}.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp')
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump({'assignments': assignments}, f, indent=2)
+    os.replace(tmp, path)
+
+
+def write_device_inventory(hospital_folder: str, device_type: str, data: dict) -> None:
+    """Atomically overwrite inventory/<device_type>.json."""
+    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    tmp = path.with_suffix('.tmp')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+
+def read_sims(hospital_folder: str) -> list:
+    """Return all SIM cards from devices/sims.json."""
+    path = _devices_path(hospital_folder) / 'sims.json'
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f).get('sims', [])
+    except Exception:
+        return []
+
+
+def write_sims(hospital_folder: str, sims: list) -> None:
+    """Atomically overwrite devices/sims.json."""
+    path = _devices_path(hospital_folder) / 'sims.json'
+    tmp = path.with_suffix('.tmp')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'sims': sims}, f, indent=2)
+    os.replace(tmp, path)
+
+
+def read_device_history(hospital_folder: str) -> list:
+    """Return device replacement history from devices/device_history.json."""
+    path = _devices_path(hospital_folder) / 'device_history.json'
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f).get('history', [])
+    except Exception:
+        return []
+
+
+def write_device_history(hospital_folder: str, history: list) -> None:
+    """Atomically overwrite devices/device_history.json."""
+    path = _devices_path(hospital_folder) / 'device_history.json'
+    tmp = path.with_suffix('.tmp')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'history': history}, f, indent=2)
     os.replace(tmp, path)
 
 
@@ -349,6 +400,7 @@ def get_available_devices(hospital_folder: str, device_type: str) -> list:
         and d.get('lost_date') is None
         and not d.get('clinic_only', False)
         and not d.get('faulty', False)
+        and not d.get('has_issue', False)
         and d['id'] not in assigned_ids
     ]
 
