@@ -3175,7 +3175,7 @@ async function savePrescriptionPrintout() {
 
     console.log('Capturing print window content...');
     const canvas = await html2canvas(printWindow.document.body, {
-      scale: 2,
+      scale: 1,
       useCORS: true,
       logging: false,
       allowTaint: true,
