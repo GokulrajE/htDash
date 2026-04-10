@@ -475,88 +475,104 @@ Exercise cards now display in this order:
 
 **Example flow:** Click `prescription_printout_d01` → select language → preview renders with screenshots → Print or Save PDF
 
-### 4. Custom Print Dialog Modal for PDF Generation
+### 4. Server-Side PDF Generation with Puppeteer
 
 **Status:** ✅ Complete
 
-**Goal:** Create custom modal that mimics browser native print dialog, giving users control over PDF generation with live preview.
+**Goal:** Generate professional multi-page PDFs with proper CSS page-break handling using server-side Puppeteer rendering, eliminating client-side limitations (browser cache issues, canvas rendering problems, html2canvas scale issues).
 
-**Implementation Plan:**
+**Why Puppeteer (Server-Side)?**
+- ✅ Proper CSS page-break support — each exercise renders on a separate page automatically
+- ✅ No browser cache issues — rendering happens on server, always fresh
+- ✅ Consistent output — same HTML rendering across all users and browsers
+- ✅ No client-side library dependencies — removes jsPDF, html2canvas complexity
+- ✅ Professional quality — Chromium rendering engine matches browser quality
+- ✅ Simple user workflow — "Save PDF" button immediately generates and uploads
 
-1. **Modal HTML Structure** (`templates/patient_detail.html`)
-   - Modal: `prescription-pdf-dialog-modal`
-   - Settings panel with options:
-     - Page Size selector (A4, Letter, A3)
-     - Scale/Zoom input (50%-200%)
-     - Margin input (0-20mm)
-   - Live preview area (scrollable)
-   - Action buttons: Cancel, Save PDF
+**Implementation:**
 
-2. **CSS Styling** (`templates/patient_detail.html`)
-   - Modal layout: 2-column (left: settings, right: preview)
-   - Preview pane with scrollbar
-   - Settings input controls
-   - Responsive design
+**Backend Changes** (`routes/user_management.py`):
+1. **New endpoint:** `POST /api/patients/<homer_id>/generate-prescription-pdf`
+   - Accepts: `event_id`, `protocol_event_id`, `language`
+   - Internally renders pamphlet HTML (same as preview)
+   - Calls `_generate_pdf_with_puppeteer()` helper
+   - Marks event complete and uploads attachment
+   - Returns: `{success, message, filename}`
 
-3. **JavaScript Logic** (`static/js/app/patient_detail.js`)
-   - New function: `openPrescriptionPdfDialog()`
-     - Show modal with current language preview
-     - Populate default settings (A4, 100%, 10mm)
-   - Event listeners for setting changes
-   - Live preview update as settings change
-   - `savePrescriptionPdfFromDialog()` function:
-     - Read user-selected settings
-     - Capture preview with html2canvas (respecting settings)
-     - Generate PDF with jsPDF using settings
-     - Mark event complete + upload attachment
+2. **Helper function:** `_generate_pdf_with_puppeteer(html_content, filename)`
+   - Writes HTML to temp file
+   - Creates Node.js script that uses Puppeteer to render
+   - Launches Chromium via Puppeteer (headless mode)
+   - Sets viewport: 1024x1280 for consistent rendering
+   - Calls `page.pdf()` with:
+     - Format: A4
+     - Page breaks: `preferCSSPageSize: true` (respects CSS `page-break-before`)
+     - Background: `printBackground: true` (colors and images)
+     - Margins: none (template handles padding)
+   - Returns PDF buffer as bytes
 
-4. **PDF Generation with User Settings**
-   - Page size: A4 (210x297mm), Letter (216x279mm), A3 (297x420mm)
-   - Scale: 50%-200% affects canvas capture
-   - Margins: Applied when creating PDF (0-20mm)
-   - Auto-pagination: Split canvas into pages based on A4 height
+3. **Helper function:** `_upload_prescription_pdf_attachment(folder, homer_id, event_id, pdf_buffer, filename, caption)`
+   - Saves PDF to `data/<site>/patients/<homer_id>/attachments/<event_id>.pdf`
+   - Updates protocol_events.json with `attachment` field
+   - Sets `attachment_caption` for display in Timeline tab
 
-5. **Workflow**
-   - User clicks "Save PDF" button (prescription_printout_modal)
-   - Opens custom PDF dialog modal
-   - Adjusts settings and sees live preview
-   - Clicks "Save PDF" in dialog
-   - Generates PDF with chosen settings
-   - Auto-uploads as attachment
-   - Closes dialog, refreshes events
+**Frontend Changes** (`static/js/app/patient_detail.js`):
+- **Updated function:** `savePrescriptionPrintout()`
+  - Removed: html2canvas, jsPDF, canvas manipulation code
+  - Now: Single API call to `/api/patients/<homer_id>/generate-prescription-pdf`
+  - Passes: event_id, protocol_event_id, language
+  - On success: closes modal and refreshes events
+  - On error: displays error message via `setError()`
 
-**Implementation Complete:**
+**Template Changes** (`templates/patient_detail.html`):
+- **Removed:** Custom PDF dialog modal (`prescription-pdf-dialog-modal`) — no longer needed
+- **Reverted:** "Save PDF" button onclick from `openPrescriptionPdfDialog()` back to `savePrescriptionPrintout()`
+- **Removed:** All modal HTML, CSS, and settings controls for page size/scale/margins
 
-**Files Modified:**
-- `templates/patient_detail.html`:
-  - Added `prescription-pdf-dialog-modal` with 2-column layout
-  - Settings panel: Page size (A4/Letter/A3), scale slider (50-200%), margins (0-20mm)
-  - Live preview pane that updates as settings change
-  - Changed "Save PDF" button onclick to `openPrescriptionPdfDialog()`
+**CSS Already in Place** (`templates/prescription_pamphlet.html`):
+```css
+.exercise-card {
+  page-break-before: always;
+}
+.exercise-card.first-exercise {
+  page-break-before: auto;
+}
+```
+Puppeteer respects these CSS rules, so each exercise renders on a separate page automatically.
 
-- `static/js/app/patient_detail.js`:
-  - `openPrescriptionPdfDialog()`: Opens modal, initializes settings UI, sets up event listeners
-  - `updatePdfPreview()`: Updates preview in real-time as user adjusts settings (scale, page size)
-  - `savePrescriptionPdfFromDialog()`: Generates PDF with user-chosen settings, uploads as attachment
-  - Settings object: `_pdfDialogSettings` (pageSize, scale, margins)
-
-**Key Features:**
-- ✅ Professional modal UI mimicking browser print dialog
-- ✅ Real-time preview updates as user adjusts settings
-- ✅ Page size options: A4 (210x297mm), Letter (216x279mm), A3 (297x420mm)
-- ✅ Scale control: 50%-200% zoom
-- ✅ Margin control: 0-20mm
-- ✅ Automatic PDF pagination based on selected page size
-- ✅ Auto-upload workflow preserved (mark event complete → upload attachment)
-- ✅ Clean, professional user experience
-- ✅ Full control over PDF output without browser print dialog
+**Dependencies:**
+- ✅ Puppeteer (npm package): `npm install puppeteer` — installs Chromium automatically
+- ✅ Node.js: Already available (used for Puppeteer rendering)
+- ✅ Subprocess: Python's `subprocess` module (already imported)
+- ✅ Tempfile: Python's `tempfile` module for temporary file handling
 
 **User Workflow:**
-1. Select language in prescription printout modal
-2. Click "Save PDF" button
-3. Custom PDF dialog opens with settings and live preview
-4. Adjust page size, scale, margins as needed (preview updates live)
-5. Click "Save PDF" in dialog
-6. PDF generated with chosen settings
-7. Automatically marked as complete + uploaded as attachment
-8. Modal closes, timeline refreshes
+1. Complete ADL + VCG prescriptions
+2. Click `prescription_printout_d01` or `prescription_printout_d15`
+3. Select language using pill buttons
+4. Preview renders on client
+5. Click **"Save PDF"** button
+6. Server renders HTML with Puppeteer → generates PDF → uploads as attachment
+7. Event marked complete, modal closes, timeline refreshes
+8. PDF appears in Timeline tab with download link
+
+**Key Advantages:**
+- ✅ No more "Print Dialog" modal complexity
+- ✅ No browser cache issues (rendering happens server-side)
+- ✅ Professional multi-page PDF with proper page breaks
+- ✅ Works reliably across all users and browsers
+- ✅ Simple, clean user experience
+- ✅ Server generates, client only waits for completion
+- ✅ CSS page-breaks work perfectly (Chromium respects them)
+- ✅ No client-side library dependencies (jsPDF, html2canvas removed)
+
+**Testing Checklist:**
+1. ✅ Puppeteer installed via npm
+2. ✅ Backend endpoint created and tested
+3. ✅ PDF generated with correct page breaks (each exercise separate page)
+4. ✅ Attachment uploaded and stored correctly
+5. ✅ Event marked complete in protocol_events.json
+6. ✅ "Save PDF" button flow works end-to-end
+7. ✅ All 6 languages render correctly in PDFs
+8. ✅ Screenshots display in PDF pages
+9. ✅ QR codes generate for all exercises
