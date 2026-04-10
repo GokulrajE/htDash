@@ -3133,56 +3133,31 @@ async function savePrescriptionPrintout() {
       throw new Error('jsPDF library not loaded. Please refresh the page and try again.');
     }
 
-    console.log('Generating PDF with proper page breaks...');
+    console.log('Capturing full preview content...');
 
-    // Use print window approach for consistent multi-page PDF
-    // This respects CSS page-break rules properly
-    const printWindow = window.open('', '', 'height=800,width=1000');
-    if (!printWindow) {
-      throw new Error('Pop-up window was blocked. Please allow pop-ups for this site.');
-    }
+    // Temporarily remove height constraints to capture all content
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
 
-    const htmlContent = previewDiv.innerHTML;
-    const printHtml = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Exercise Prescription Pamphlet</title>
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+Devanagari:wght@400;500;600&family=Noto+Sans+Tamil:wght@400;500;600&family=Noto+Sans+Telugu:wght@400;500;600&family=Noto+Sans+Kannada:wght@400;500;600&family=Noto+Sans+Gurmukhi:wght@400;500;600&display=swap');
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
 
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: 'Noto Sans', sans-serif; line-height: 1.5; color: #333; }
-          @media print {
-            body { padding: 0; }
-            .exercise-card { page-break-inside: avoid; page-break-before: always; }
-            .exercise-card.first-exercise { page-break-before: auto; }
-          }
-        </style>
-      </head>
-      <body>${htmlContent}</body>
-      </html>
-    `;
-
-    // @ts-ignore - document.write is deprecated but necessary for reliable print window population
-    printWindow.document.write(printHtml);
-    printWindow.document.close();
-
-    // Wait for content to render, then capture with html2canvas
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    console.log('Capturing print window content...');
-    const canvas = await html2canvas(printWindow.document.body, {
-      scale: 1,
+    // Capture with html2canvas
+    const canvas = await html2canvas(previewDiv, {
+      scale: 1.5,
       useCORS: true,
       logging: false,
       allowTaint: true,
-      backgroundColor: '#ffffff'
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
     });
 
-    printWindow.close();
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
 
     console.log('Content captured, creating PDF with page breaks...');
 
