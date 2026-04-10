@@ -3247,6 +3247,199 @@ async function savePrescriptionPrintout() {
   }
 }
 
+// ── Custom PDF Dialog Modal ────────────────────────────────────────
+
+let _pdfDialogSettings = {
+  pageSize: 'a4',
+  scale: 100,
+  margins: 10
+};
+
+function openPrescriptionPdfDialog() {
+  if (!_prescPrintoutLanguage) {
+    setError('prescription-printout-error', 'Please select a language first');
+    return;
+  }
+
+  console.log('Opening PDF dialog...');
+
+  // Reset settings to defaults
+  _pdfDialogSettings = {
+    pageSize: 'a4',
+    scale: 100,
+    margins: 10
+  };
+
+  // Update UI
+  document.getElementById('pdf-page-size').value = 'a4';
+  document.getElementById('pdf-scale').value = 100;
+  document.getElementById('pdf-scale-value').textContent = '100%';
+  document.getElementById('pdf-margins').value = 10;
+
+  // Show preview
+  updatePdfPreview();
+
+  // Setup event listeners
+  document.getElementById('pdf-page-size').addEventListener('change', (e) => {
+    _pdfDialogSettings.pageSize = e.target.value;
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-scale').addEventListener('input', (e) => {
+    _pdfDialogSettings.scale = parseInt(e.target.value);
+    document.getElementById('pdf-scale-value').textContent = _pdfDialogSettings.scale + '%';
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-margins').addEventListener('change', (e) => {
+    _pdfDialogSettings.margins = parseInt(e.target.value) || 10;
+  });
+
+  // Show modal
+  showModal('prescription-pdf-dialog-modal');
+}
+
+function updatePdfPreview() {
+  const previewDiv = document.getElementById('presc-printout-preview');
+  const previewPane = document.getElementById('pdf-preview-pane');
+
+  if (!previewDiv) return;
+
+  // Clone preview content with current scale
+  const clone = previewDiv.cloneNode(true);
+  clone.style.transform = `scale(${_pdfDialogSettings.scale / 100})`;
+  clone.style.transformOrigin = 'top left';
+  clone.style.width = `${100 / (_pdfDialogSettings.scale / 100)}%`;
+
+  previewPane.innerHTML = '';
+  previewPane.appendChild(clone);
+}
+
+async function savePrescriptionPdfFromDialog() {
+  setLoading('prescription-pdf-save-dialog', true);
+
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor
+    let jsPDFConstructor = null;
+    if (window.jsPDF && typeof window.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF;
+    } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF.jsPDF;
+    } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
+      jsPDFConstructor = window.jspdf.jsPDF;
+    }
+
+    if (!jsPDFConstructor) {
+      throw new Error('jsPDF library not loaded. Please refresh and try again.');
+    }
+
+    console.log('Generating PDF with user settings...');
+
+    // Prepare element for capture
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
+
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
+
+    // Capture with html2canvas using user's scale setting
+    const canvas = await html2canvas(previewDiv, {
+      scale: _pdfDialogSettings.scale / 100,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
+    });
+
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
+
+    console.log('Canvas created, creating PDF...');
+
+    // Get page dimensions based on user settings
+    const pageSizes = {
+      a4: { width: 210, height: 297 },
+      letter: { width: 216, height: 279 },
+      a3: { width: 297, height: 420 }
+    };
+    const pageSize = pageSizes[_pdfDialogSettings.pageSize];
+    const margins = _pdfDialogSettings.margins;
+    const contentWidth = pageSize.width - (margins * 2);
+
+    // Create PDF
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDFConstructor('p', 'mm', _pdfDialogSettings.pageSize);
+
+    const imgHeight = (canvas.height * contentWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = margins;
+
+    pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+    heightLeft -= (pageSize.height - (margins * 2));
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+      heightLeft -= (pageSize.height - (margins * 2));
+    }
+
+    const pdfBlob = pdf.output('blob');
+    console.log('PDF created, size:', pdfBlob.size, 'bytes');
+
+    // Mark event complete
+    console.log('Marking event as complete...');
+    const { ok: completeOk, data: completeData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+      }
+    );
+
+    if (!completeOk) {
+      throw new Error(completeData.error || 'Failed to mark event complete');
+    }
+
+    console.log('Event marked complete, uploading PDF...');
+
+    // Upload attachment
+    const formData = new FormData();
+    formData.append('event_id', _prescPrintoutEventId);
+    formData.append('caption', `Exercise Prescription Printout (${_prescPrintoutLanguage})`);
+    formData.append('file', pdfBlob, `prescription_${_prescPrintoutLanguage}.pdf`);
+
+    const uploadRes = await fetch(`/api/patients/${PATIENT_HOMER_ID}/upload-attachment`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error('Failed to upload PDF');
+    }
+
+    console.log('PDF uploaded successfully');
+
+    // Success
+    hideModal('prescription-pdf-dialog-modal');
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to save PDF');
+  } finally {
+    setLoading('prescription-pdf-save-dialog', false);
+  }
+}
+
 function printPrescriptionPamphlet() {
   const previewDiv = document.getElementById('presc-printout-preview');
 

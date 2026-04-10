@@ -630,7 +630,85 @@
         <i class="fas fa-print text-sm"></i> Print
       </button>
       <button type="button" id="prescription-printout-save" data-label="Save PDF"
-              onclick="savePrescriptionPrintout()"
+              onclick="openPrescriptionPdfDialog()"
+              class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
+        <i class="fas fa-download text-sm"></i> Save PDF
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Custom PDF Generation Dialog Modal -->
+<div id="prescription-pdf-dialog-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+    <!-- Header -->
+    <div class="flex items-center justify-between p-6 border-b border-slate-200">
+      <h2 class="text-2xl font-bold text-slate-800">Save Exercise Prescription as PDF</h2>
+      <button onclick="hideModal('prescription-pdf-dialog-modal')" class="text-slate-400 hover:text-slate-600">
+        <i class="fas fa-times text-lg"></i>
+      </button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex flex-1 overflow-hidden">
+      <!-- Settings Panel (Left) -->
+      <div class="w-64 border-r border-slate-200 p-6 overflow-y-auto bg-slate-50">
+        <h3 class="text-lg font-semibold text-slate-800 mb-4">PDF Settings</h3>
+
+        <!-- Page Size -->
+        <div class="mb-5">
+          <label class="block text-sm font-medium text-slate-700 mb-2">Page Size</label>
+          <select id="pdf-page-size" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">
+            <option value="a4">A4 (210 x 297 mm)</option>
+            <option value="letter">Letter (216 x 279 mm)</option>
+            <option value="a3">A3 (297 x 420 mm)</option>
+          </select>
+        </div>
+
+        <!-- Scale -->
+        <div class="mb-5">
+          <label class="block text-sm font-medium text-slate-700 mb-2">Scale</label>
+          <div class="flex items-center gap-2">
+            <input type="range" id="pdf-scale" min="50" max="200" value="100" class="flex-1">
+            <span id="pdf-scale-value" class="text-sm font-medium text-slate-700 w-12">100%</span>
+          </div>
+        </div>
+
+        <!-- Margins -->
+        <div class="mb-5">
+          <label class="block text-sm font-medium text-slate-700 mb-2">Margins (mm)</label>
+          <input type="number" id="pdf-margins" min="0" max="20" value="10" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">
+        </div>
+
+        <!-- Info -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+          <i class="fas fa-info-circle mr-2"></i>
+          Adjust settings to preview changes
+        </div>
+      </div>
+
+      <!-- Preview Panel (Right) -->
+      <div class="flex-1 overflow-hidden flex flex-col">
+        <div class="p-4 bg-slate-100 border-b border-slate-200">
+          <h4 class="text-sm font-medium text-slate-700">Preview</h4>
+        </div>
+        <div id="pdf-preview-pane" class="flex-1 overflow-y-auto p-4 bg-white">
+          <div class="text-center text-slate-500 py-8">
+            <i class="fas fa-file-pdf text-4xl mb-3 block"></i>
+            <p>PDF preview will appear here</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="flex gap-3 p-6 border-t border-slate-200 bg-slate-50">
+      <button type="button" onclick="hideModal('prescription-pdf-dialog-modal')"
+              class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">
+        Cancel
+      </button>
+      <button type="button" id="prescription-pdf-save-dialog" data-label="Save PDF"
+              onclick="savePrescriptionPdfFromDialog()"
               class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
         <i class="fas fa-download text-sm"></i> Save PDF
       </button>

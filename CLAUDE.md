@@ -475,31 +475,63 @@ Exercise cards now display in this order:
 
 **Example flow:** Click `prescription_printout_d01` → select language → preview renders with screenshots → Print or Save PDF
 
-### 4. PDF Generation with Proper Page Breaks
+### 4. Custom Print Dialog Modal for PDF Generation
 
-**Status:** ✅ Complete
+**Status:** ⬜ In Development
 
-Previous limitation: "Save PDF" button used html2canvas which captures content as raster image, producing single continuous page. "Print" button correctly respects CSS page-break rules.
+**Goal:** Create custom modal that mimics browser native print dialog, giving users control over PDF generation with live preview.
 
-**Solution Implemented:** Replaced html2canvas approach with jsPDF's `html()` method that respects CSS `@page` rules and `page-break-before: always` declarations.
+**Implementation Plan:**
 
-**Implementation Details:**
-- Modified `savePrescriptionPrintout()` in `static/js/app/patient_detail.js`
-- Replaced html2canvas canvas capture with `pdf.html()` method
-- Configured with proper margins (10mm), width (190mm), and auto-paging enabled
-- Respects exercise card page-break CSS (`page-break-before: always` on `.exercise-card`)
-- Auto-upload workflow preserved: mark event complete → upload PDF attachment
+1. **Modal HTML Structure** (`templates/patient_detail.html`)
+   - Modal: `prescription-pdf-dialog-modal`
+   - Settings panel with options:
+     - Page Size selector (A4, Letter, A3)
+     - Scale/Zoom input (50%-200%)
+     - Margin input (0-20mm)
+   - Live preview area (scrollable)
+   - Action buttons: Cancel, Save PDF
 
-**Code Changes:**
-- Removed 80+ lines of html2canvas + jsPDF constructor detection logic
-- Added 20 lines using direct jsPDF html() method
-- Simplified jsPDF constructor lookup (single path instead of 8 fallback patterns)
-- Maintained full API sequence: mark event complete → upload attachment
+2. **CSS Styling** (`templates/patient_detail.html`)
+   - Modal layout: 2-column (left: settings, right: preview)
+   - Preview pane with scrollbar
+   - Settings input controls
+   - Responsive design
 
-**Results:**
-- ✅ Multi-page PDF with proper page breaks (one exercise per page)
-- ✅ Respects CSS @page and page-break-before rules
-- ✅ Vector-based PDF output (better quality, smaller file size)
-- ✅ Auto-uploaded as attachment (no manual steps)
-- ✅ Identical user workflow (click "Save PDF" button)
-- ✅ Cleaner, more maintainable code
+3. **JavaScript Logic** (`static/js/app/patient_detail.js`)
+   - New function: `openPrescriptionPdfDialog()`
+     - Show modal with current language preview
+     - Populate default settings (A4, 100%, 10mm)
+   - Event listeners for setting changes
+   - Live preview update as settings change
+   - `savePrescriptionPdfFromDialog()` function:
+     - Read user-selected settings
+     - Capture preview with html2canvas (respecting settings)
+     - Generate PDF with jsPDF using settings
+     - Mark event complete + upload attachment
+
+4. **PDF Generation with User Settings**
+   - Page size: A4 (210x297mm), Letter (216x279mm), A3 (297x420mm)
+   - Scale: 50%-200% affects canvas capture
+   - Margins: Applied when creating PDF (0-20mm)
+   - Auto-pagination: Split canvas into pages based on A4 height
+
+5. **Workflow**
+   - User clicks "Save PDF" button (prescription_printout_modal)
+   - Opens custom PDF dialog modal
+   - Adjusts settings and sees live preview
+   - Clicks "Save PDF" in dialog
+   - Generates PDF with chosen settings
+   - Auto-uploads as attachment
+   - Closes dialog, refreshes events
+
+**Files to Modify:**
+- `templates/patient_detail.html`: Add modal HTML + CSS
+- `static/js/app/patient_detail.js`: Add dialog logic + PDF generation
+
+**Result:**
+- ✅ Professional print dialog experience
+- ✅ User control over PDF settings
+- ✅ Live preview before save
+- ✅ Auto-upload workflow preserved
+- ✅ No dependency on browser print dialog
