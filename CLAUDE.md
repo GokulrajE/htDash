@@ -365,187 +365,112 @@ When modifying any pause-related logic, verify ALL of the following are kept in 
 | `static/js/app/patient_detail.js` — `renderPauseHistoryTable` | Renders pause history table from `p.pauseHistory` |
 | `static/js/app/patient_detail.js` — `_deriveTransitions` | Builds `Map<event_id, badge>` for timeline transition badges; must be updated if new state-changing events are added |
 
-## Exercise Prescription Printout
+### Exercise Prescription Printout
 
 **Status:** ✅ Implemented
 
-Therapists can generate multi-language exercise pamphlets after ADL and VCG prescriptions are saved. Supports 6 languages across 3 sites (Ranipet: English/Tamil/Telugu, Manipal: English/Kannada/Hindi, Ludhiana: English/Punjabi/Hindi).
-
-### How It Works
-
-1. Click `prescription_printout_d01` or `prescription_printout_d15` event
-2. Modal shows language selector (filtered by site)
-3. Select language → HTML preview renders
-4. Click "Save PDF" → html2canvas captures preview → jsPDF generates PDF → uploads as attachment
-5. Event marked complete, PDF downloads as `prescription_d01.pdf` or `prescription_d15.pdf`
-
-### Architecture
-
-**Why HTML→PDF (not reportlab):** Browser rendering handles all Unicode scripts perfectly via Google Fonts Noto Sans; reportlab requires manual font registration.
-
-**Key Files:**
-- `templates/prescription_pamphlet.html` — Exercise cards with conditionals for empty fields
-- `routes/user_management.py` — `api_prescription_pamphlet`, `api_complete_prescription_printout`, `api_upload_attachment`, `api_download_attachment`
-- `templates/patient_detail.html` — Modal with language selector and preview pane
-- `static/js/app/patient_detail.js` — `openPrescriptionPrintoutModal()`, `_loadPrescriptionPamphlet()`, `savePrescriptionPrintout()`
-
-**API Flow:**
-1. `GET /api/patients/<id>/prescription-pamphlet?event_id=<id>&language=<lang>` → Returns rendered HTML
-2. `POST /api/patients/<id>/complete-event/prescription-printout` → Moves event to complete (FIRST)
-3. `POST /api/patients/<id>/upload-attachment` → Uploads PDF blob (SECOND)
-4. `GET /api/patients/<id>/download-attachment/<event_id>` → Returns PDF with friendly filename
-
-### All Issues Fixed
-
-| Issue | Status | Fix |
-|-------|--------|-----|
-| jsPDF not found | ✅ | Check all export patterns (camelCase, lowercase, nested, ES6) |
-| Items field blank | ✅ | Template checks `exercise.items and exercise.items.strip()` |
-| Event not found | ✅ | Mark event complete BEFORE uploading attachment |
-| PDF content cut off | ✅ | Temporarily remove height constraints before html2canvas capture |
-| Download filename (UUID) | ✅ | Use `_PRINTOUT_PDF_FILES` mapping: `prescription_d01.pdf`, `prescription_d15.pdf` |
-| Content-Disposition | ✅ | Set header directly: `attachment; filename="prescription_d01.pdf"` |
-
-### Implementation Details
-
-**`api_complete_prescription_printout()`** (`routes/user_management.py:733-784`)
-- Validates protocol_event_id in `_PRINTOUT_PDF_FILES`
-- Finds event in `incomplete` array
-- Moves to `complete` with timestamps
-- Logs action
-
-**`prescription_pamphlet.html`** (`templates/prescription_pamphlet.html`)
-- ADL (line 194): `{% if exercise.get("items") and exercise.get("items").strip() %}`
-- VCG (line 238):`{% if exercise.get("items") and exercise.get("items").strip() %}`
-- Prevents empty "Items Needed" sections
-
-### Testing
-
-1. Log in as therapist
-2. Complete ADL + VCG prescriptions
-3. Click `prescription_printout_d01`
-4. Select language → preview renders
-5. Click "Save PDF" → PDF generates and uploads
-6. Check Timeline → download PDF as `prescription_d01.pdf`
-
-### Future Enhancements
-
-- Print button for browser print dialog
-- Customizable sections (show/hide items, etc.)
-- Batch PDF generation
-- Server-side caching
-
-### Pamphlet Design (Updated)
-
-**Layout:**
-- **Info Bar** (top): Patient ID and Prescribed Date (formatted YYYY-MM-DD)
-- **Exercise Type Headers**: "ACTIVITIES OF DAILY LIVING (ADL)" and "VIRTUAL CENTER OF GRAVITY (VCG)" with translations
-- **Exercise Cards**: Name, description, dosage, items, QR code
-
-**Font Sizes (Optimized):**
-- Info labels: 10px | Info values: 13px
-- Section title: 14px | Exercise name: 13px
-- Field labels: 9px | Field values: 12px
-- QR text: 10px
-
-**Styling:**
-- Max width: 900px | Padding: 20px | Card padding: 12px
-- Word-break: break-word (prevents text cutoff)
-- QR size: 70x70px | Card background: #f9fafb
-- Print-friendly: page-break-inside: avoid
-
-**Multi-Language Support (✅ Implemented):**
-All labels translated to 6 languages (English, Tamil, Telugu, Kannada, Hindi, Punjabi):
-- Field names: Description, Dosage, Items Needed
-- Section headers: ADL, VCG exercise types
-- QR code text: "Scan for Video" + instructions
-- **NO language mixing**: Only selected language displayed in entire pamphlet
-
-**API Changes:**
-- `_get_field_labels(language)`: Returns dict with translated labels for selected language
-- Template receives: `patient_id`, `prescribed_date`, `labels` (all translations for that language)
-
-**Implementation:**
-- `routes/user_management.py`: Line 4937 defines `_get_field_labels()` with 6 language dictionaries
-- `templates/prescription_pamphlet.html`: Uses `{{ labels.* }}` variables for all text
-
-### Language Selection Design
-
-**Updated:** Language selector changed from dropdown to pill buttons
-
-**Features:**
-- Pill-style buttons displayed horizontally
-- Native language names: தமிழ் (Tamil), తెలుగు (Telugu), ಕನ್ನಡ (Kannada), हिंदी (Hindi), ਪੰਜਾਬੀ (Punjabi)
-- Visual feedback: selected button highlighted in blue, others in gray
-- Smooth transitions on hover
-- Automatically loads preview when language is selected
-
-**Files Updated:**
-- `templates/patient_detail.html`: Replaced `<select>` with button container
-- `static/js/app/patient_detail.js`:
-  - Added `LANGUAGE_NAMES` mapping for native script display (lines 3009-3015)
-  - Updated `openPrescriptionPrintoutModal()` to create pill buttons (lines 3027-3056)
-  - New `selectPrescriptionLanguage()` function for button click handling (lines 3058-3070)
-  - Updated `_loadPrescriptionPamphlet()` to remove select element references
-
-### Print Button
-
-**Added:** Print button to therapy prescription printout modal
-
-**Features:**
-- Opens browser print dialog for immediate printing
-- Prints the previewed pamphlet with all formatting and fonts
-- Maintains page breaks for individual exercises
-- Supports all 6 languages with proper Google Fonts rendering
-- Validates pamphlet is loaded before allowing print
-- Shows error message if no language is selected
-
-**Files Updated:**
-- `templates/patient_detail.html`:
-  - Added print button (gray) between cancel and save PDF buttons
-  - Print button uses `fas fa-print` icon
-  
-- `static/js/app/patient_detail.js`:
-  - New `printPrescriptionPamphlet()` function
-  - Uses modern Blob/URL approach (no deprecated document.write)
-  - Validates preview is loaded and has content
-  - Includes error handling for pop-up blockers
-  - Includes print-optimized CSS (page-break rules, fonts, spacing)
+Therapists can generate multi-language exercise pamphlets after ADL and VCG prescriptions. Supports 6 languages across 3 sites (Ranipet: English/Tamil/Telugu, Manipal: English/Kannada/Hindi, Ludhiana: English/Punjabi/Hindi).
 
 **User Flow:**
-1. Select language (pills auto-load preview)
-2. Review pamphlet in preview pane
-3. Click "Print" → opens print dialog in new window
-4. Therapist can see exact output before printing
-5. Click "Save PDF" to save as attachment, or cancel to go back
+1. Complete ADL + VCG prescriptions
+2. Click `prescription_printout_d01` or `prescription_printout_d15` event
+3. Select language using pill buttons (தமிழ், తెలుగు, ಕನ್ನಡ, हिंदी, ਪੰਜਾਬੀ)
+4. Preview renders automatically with all translations
+5. **Print** — Opens print dialog for immediate printing
+6. **Save PDF** — Generates and uploads as attachment
+
+**Key Files:**
+- `routes/user_management.py` — API endpoints: `api_prescription_pamphlet()`, `api_complete_prescription_printout()`
+- `templates/prescription_pamphlet.html` — Exercise cards with translated labels
+- `templates/patient_detail.html` — Modal with language buttons, preview pane, Print/Save PDF actions
+- `static/js/app/patient_detail.js` — `openPrescriptionPrintoutModal()`, `selectPrescriptionLanguage()`, `printPrescriptionPamphlet()`, `savePrescriptionPrintout()`
+
+**Pamphlet Layout:**
+- Info bar: Patient ID and Prescribed Date
+- Exercise cards: Name, description, dosage, items, QR code
+- Page breaks: Each exercise on separate page (except first)
+- Fonts: Google Noto Sans family (supports all 6 languages)
+
+**Issues Resolved:**
+| Issue | Fix |
+|-------|-----|
+| Prescribed date N/A | Use `completion_date` or `scheduled_date[0]` fallback |
+| Items field dict error | Use bracket notation: `{{ labels['items'] }}` instead of `{{ labels.items }}` |
+| Each exercise same page | CSS: `.exercise-card { page-break-before: always; }` + `.exercise-card.first-exercise { page-break-before: auto; }` |
+| Non-Latin scripts breaking | Remove `text-transform: uppercase;` and `letter-spacing: 0.3px;` from labels |.
+
+## Known Limitations
+
+**PDF Page Breaks:** Print button correctly separates exercises on different pages (respects CSS @media print rules). Save PDF button produces single continuous page because html2canvas captures visible content as image, not render layout. Use Print button for multi-page output.
 
 ---
 
-### Issues Resolved ✅
+## Enhancements Implemented ✅
 
-**Issue 1: Prescribed Date Shows N/A**
-- **Fix:** API uses `completion_date` OR `scheduled_date[0]` as fallback (line 5051)
-- **Result:** Shows actual date even for incomplete events
-- **Code:** `prescribed_date = entry.get('completion_date') or (entry.get('scheduled_date', ['', ''])[0] if entry.get('scheduled_date') else '')`
+### 1. YouTube URLs for All Exercises
 
-**Issue 2: Items Field Showing Dict Method**
-- **Fix:** Removed dict method resolution by using explicit key access
-  - Changed `{{ labels.items }}` to `{{ labels['items'] }}`
-  - Changed `exercise.get("items")` assignment in template (lines 228, 272)
-- **Result:** Labels and items display correctly in all 6 languages without `<built-in method items>` error
-- **Code:** All label references now use bracket notation: `{{ labels['description'] }}`, `{{ labels['dosage'] }}`, `{{ labels['items'] }}`, `{{ labels['scan_video'] }}`, `{{ labels['video_instruction'] }}`
+**Status:** ✅ Complete
 
-**Issue 3: Each Exercise on Separate Page**
-- **Fix:** CSS page-break handling in print mode
-  - `.exercise-card` has `page-break-before: always;`
-  - `.exercise-card.first-exercise` has `page-break-before: auto;`
-  - Template loop applies class: `{% if loop.first %}first-exercise{% endif %}`
-- **Result:** First exercise with section title on page 1, subsequent exercises on separate pages
+All 75 exercises now have YouTube URLs. Previously only `adl_1` had a URL; all others were empty.
 
-**Issue 4: Exercise Field Label Styling Breaking Non-Latin Scripts**
-- **Fix:** Removed problematic CSS properties (lines 114-121)
-  - Removed `text-transform: uppercase;` (breaks Tamil, Telugu, Kannada, Hindi, Punjabi)
-  - Removed `letter-spacing: 0.3px;` (causes rendering issues)
-  - Increased font-size from 9px to 10px
-  - Increased margin-bottom from 2px to 4px
-- **Result:** Labels display correctly in all languages without uppercase transformation issues
+**Implementation:**
+- Filled `youtube_url` field in `config/homer_exercises.json` with `https://youtu.be/Ccaz3yJhaVA?si=I0Y1kbCluhiZBuAH`
+- QR codes now generate for all 75 exercises in the pamphlet
+
+### 2. Exercise Screenshots in Pamphlet
+
+**Status:** ✅ Complete
+
+Exercise screenshots from `EXERCISE_SS/` folder now display in each exercise card before the YouTube QR code.
+
+**Files Modified:**
+- `routes/user_management.py`:
+  - Added `_EXERCISE_SS_PATH` constant pointing to `EXERCISE_SS/` folder
+  - Added `_SCREENSHOT_MAP` dict: 75-entry mapping of exercise IDs → screenshot filenames
+  - Added `_make_screenshot_b64(exercise_id)` function to read images and return base64 encoded
+  - Updated `api_prescription_pamphlet()` to add `screenshot` field to each exercise dict (both ADL and VCG)
+
+- `templates/prescription_pamphlet.html`:
+  - Added `.exercise-screenshot` CSS: max-width 220px, auto height, 4px border-radius (reduced, convenient viewing)
+  - Added screenshot display block before QR code in both ADL and VCG exercise cards
+
+**Screenshot Filename Mapping:**
+- ADL (8): `ADL_1.png` – `ADL_8.png`
+- VCG2 Unilateral (8): `VCG2_Unilateral_task_1.png` – `VCG2_Unilateral_task_8.png`
+- VCG2 Bilateral (10): `VCG2_Bilateral_task_1.png` – `VCG2_Bilateral_task_10.png`
+- VCG3 Unilateral (10): `VCG3-Uni-task_1.png` – `VCG3-Uni-task_10.png`
+- VCG3 Bilateral (12): `VCG3-Bi-task_1.png` – `VCG3-Bi-task_12.png`
+- VCG4-5 Unilateral (8): `VCG4-5-Uni-task_1.png` – `VCG4-5-Uni-task_8.png` (except task_4 is lowercase `uni`)
+- VCG4-5 Bilateral (19): `VCG4-5-Bi-task_1.png` – `VCG4-5-Bi-task_19.png`
+
+### 3. Complete Translations
+
+**Status:** ✅ Fully Translated
+
+All 75 exercises have complete translations for 5 languages (Tamil, Telugu, Kannada, Hindi, Punjabi). Each language block contains fully translated: `name`, `description`, `dosage`, `items`.
+
+**Files Modified:**
+- `config/homer_exercises.json`: 
+  - Translated 105 dosage fields from English to native languages
+  - All "reps" → "மறுநிகழ்வுகள்" (Tamil), "పూనుకోవటాలు" (Telugu), etc.
+  - All "sets" → "தொகுப்புகள்" (Tamil), "సెట్లు" (Telugu), etc.
+  - Translation mapping:
+    - Tamil: reps → மறுநிகழ்வுகள், sets → தொகுப்புகள்
+    - Telugu: reps → పూనుకోవటాలు, sets → సెట్లు
+    - Kannada: reps → ಪುನರಾವರ್ತನೆಗಳು, sets → ಸೆಟ್‌ಗಳು
+    - Hindi: reps → दोहराव, sets → सेट
+    - Punjabi: reps → ਦੋਹਾਸ, sets → ਸੈਟ
+
+---
+
+## Pamphlet Card Layout (Updated)
+
+Exercise cards now display in this order:
+1. Exercise name (translated)
+2. Description (translated)
+3. Dosage (translated)
+4. Items needed (translated)
+5. **Screenshot image** (220px max width) ← NEW
+6. YouTube QR code (if youtube_url exists)
+
+**Example flow:** Click `prescription_printout_d01` → select language → preview renders with screenshots → Print or Save PDF

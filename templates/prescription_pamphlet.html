@@ -130,6 +130,15 @@
             word-break: break-word;
         }
 
+        .exercise-screenshot {
+            width: 100%;
+            max-width: 220px;
+            height: auto;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            display: block;
+        }
+
         .qr-code-container {
             display: flex;
             align-items: center;
@@ -237,6 +246,13 @@
                 </div>
                 {% endif %}
 
+                {% if exercise.screenshot %}
+                <div class="exercise-field">
+                    <img src="data:image/png;base64,{{ exercise.screenshot }}"
+                         class="exercise-screenshot" alt="{{ exercise.name }}">
+                </div>
+                {% endif %}
+
                 {% if exercise.qr_code %}
                 <div class="qr-code-container">
                     <div>
@@ -278,6 +294,13 @@
                 <div class="exercise-field">
                     <div class="exercise-field-label">{{ labels['items'] }}</div>
                     <div class="exercise-field-value">{{ exercise.get("items") }}</div>
+                </div>
+                {% endif %}
+
+                {% if exercise.screenshot %}
+                <div class="exercise-field">
+                    <img src="data:image/png;base64,{{ exercise.screenshot }}"
+                         class="exercise-screenshot" alt="{{ exercise.name }}">
                 </div>
                 {% endif %}
 

@@ -4834,7 +4834,56 @@ def auto_activate_experimental_api(patient_id):
 # ── Exercise catalogue ─────────────────────────────────────────────────────────
 
 _EXERCISES_PATH = Path(__file__).parent.parent / 'config' / 'homer_exercises.json'
+_EXERCISE_SS_PATH = Path(__file__).parent.parent / 'EXERCISE_SS'
 _exercises_cache: dict = {}
+
+# Screenshot mapping: exercise_id → relative path from EXERCISE_SS/
+_SCREENSHOT_MAP = {
+    # ADL exercises
+    'adl_1': 'ADL_SS/ADL_1.png', 'adl_2': 'ADL_SS/ADL_2.png', 'adl_3': 'ADL_SS/ADL_3.png',
+    'adl_4': 'ADL_SS/ADL_4.png', 'adl_5': 'ADL_SS/ADL_5.png', 'adl_6': 'ADL_SS/ADL_6.png',
+    'adl_7': 'ADL_SS/ADL_7.png', 'adl_8': 'ADL_SS/ADL_8.png',
+    # VCG2 - Unilateral
+    'vcg2_uni_1': 'VCG2_SS/VCG2_Unilateral_task_1.png', 'vcg2_uni_2': 'VCG2_SS/VCG2_Unilateral_task_2.png',
+    'vcg2_uni_3': 'VCG2_SS/VCG2_Unilateral_task_3.png', 'vcg2_uni_4': 'VCG2_SS/VCG2_Unilateral_task_4.png',
+    'vcg2_uni_5': 'VCG2_SS/VCG2_Unilateral_task_5.png', 'vcg2_uni_6': 'VCG2_SS/VCG2_Unilateral_task_6.png',
+    'vcg2_uni_7': 'VCG2_SS/VCG2_Unilateral_task_7.png', 'vcg2_uni_8': 'VCG2_SS/VCG2_Unilateral_task_8.png',
+    # VCG2 - Bilateral (IDs 9-18, but screenshots are task_1-10)
+    'vcg2_bil_9': 'VCG2_SS/VCG2_Bilateral_task_1.png', 'vcg2_bil_10': 'VCG2_SS/VCG2_Bilateral_task_2.png',
+    'vcg2_bil_11': 'VCG2_SS/VCG2_Bilateral_task_3.png', 'vcg2_bil_12': 'VCG2_SS/VCG2_Bilateral_task_4.png',
+    'vcg2_bil_13': 'VCG2_SS/VCG2_Bilateral_task_5.png', 'vcg2_bil_14': 'VCG2_SS/VCG2_Bilateral_task_6.png',
+    'vcg2_bil_15': 'VCG2_SS/VCG2_Bilateral_task_7.png', 'vcg2_bil_16': 'VCG2_SS/VCG2_Bilateral_task_8.png',
+    'vcg2_bil_17': 'VCG2_SS/VCG2_Bilateral_task_9.png', 'vcg2_bil_18': 'VCG2_SS/VCG2_Bilateral_task_10.png',
+    # VCG3 - Unilateral
+    'vcg3_uni_1': 'VCG3_SS/VCG3-Uni-task_1.png', 'vcg3_uni_2': 'VCG3_SS/VCG3-Uni-task_2.png',
+    'vcg3_uni_3': 'VCG3_SS/VCG3-Uni-task_3.png', 'vcg3_uni_4': 'VCG3_SS/VCG3-Uni-task_4.png',
+    'vcg3_uni_5': 'VCG3_SS/VCG3-Uni-task_5.png', 'vcg3_uni_6': 'VCG3_SS/VCG3-Uni-task_6.png',
+    'vcg3_uni_7': 'VCG3_SS/VCG3-Uni-task_7.png', 'vcg3_uni_8': 'VCG3_SS/VCG3-Uni-task_8.png',
+    'vcg3_uni_9': 'VCG3_SS/VCG3-Uni-task_9.png', 'vcg3_uni_10': 'VCG3_SS/VCG3-Uni-task_10.png',
+    # VCG3 - Bilateral
+    'vcg3_bil_1': 'VCG3_SS/VCG3-Bi-task_1.png', 'vcg3_bil_2': 'VCG3_SS/VCG3-Bi-task_2.png',
+    'vcg3_bil_3': 'VCG3_SS/VCG3-Bi-task_3.png', 'vcg3_bil_4': 'VCG3_SS/VCG3-Bi-task_4.png',
+    'vcg3_bil_5': 'VCG3_SS/VCG3-Bi-task_5.png', 'vcg3_bil_6': 'VCG3_SS/VCG3-Bi-task_6.png',
+    'vcg3_bil_7': 'VCG3_SS/VCG3-Bi-task_7.png', 'vcg3_bil_8': 'VCG3_SS/VCG3-Bi-task_8.png',
+    'vcg3_bil_9': 'VCG3_SS/VCG3-Bi-task_9.png', 'vcg3_bil_10': 'VCG3_SS/VCG3-Bi-task_10.png',
+    'vcg3_bil_11': 'VCG3_SS/VCG3-Bi-task_11.png', 'vcg3_bil_12': 'VCG3_SS/VCG3-Bi-task_12.png',
+    # VCG4-5 - Unilateral
+    'vcg45_uni_1': 'VCG4-5_SS/VCG4-5-Uni-task_1.png', 'vcg45_uni_2': 'VCG4-5_SS/VCG4-5-Uni-task_2.png',
+    'vcg45_uni_3': 'VCG4-5_SS/VCG4-5-Uni-task_3.png', 'vcg45_uni_4': 'VCG4-5_SS/VCG4-5-uni-task_4.png',
+    'vcg45_uni_5': 'VCG4-5_SS/VCG4-5-Uni-task_5.png', 'vcg45_uni_6': 'VCG4-5_SS/VCG4-5-Uni-task_6.png',
+    'vcg45_uni_7': 'VCG4-5_SS/VCG4-5-Uni-task_7.png', 'vcg45_uni_8': 'VCG4-5_SS/VCG4-5-Uni-task_8.png',
+    # VCG4-5 - Bilateral
+    'vcg45_bil_1': 'VCG4-5_SS/VCG4-5-Bi-task_1.png', 'vcg45_bil_2': 'VCG4-5_SS/VCG4-5-Bi-task_2.png',
+    'vcg45_bil_3': 'VCG4-5_SS/VCG4-5-Bi-task_3.png', 'vcg45_bil_4': 'VCG4-5_SS/VCG4-5-Bi-task_4.png',
+    'vcg45_bil_5': 'VCG4-5_SS/VCG4-5-Bi-task_5.png', 'vcg45_bil_6': 'VCG4-5_SS/VCG4-5-Bi-task_6.png',
+    'vcg45_bil_7': 'VCG4-5_SS/VCG4-5-Bi-task_7.png', 'vcg45_bil_8': 'VCG4-5_SS/VCG4-5-Bi-task_8.png',
+    'vcg45_bil_9': 'VCG4-5_SS/VCG4-5-Bi-task_9.png', 'vcg45_bil_10': 'VCG4-5_SS/VCG4-5-Bi-task_10.png',
+    'vcg45_bil_11': 'VCG4-5_SS/VCG4-5-Bi-task_11.png', 'vcg45_bil_12': 'VCG4-5_SS/VCG4-5-Bi-task_12.png',
+    'vcg45_bil_13': 'VCG4-5_SS/VCG4-5-Bi-task_13.png', 'vcg45_bil_14': 'VCG4-5_SS/VCG4-5-Bi-task_14.png',
+    'vcg45_bil_15': 'VCG4-5_SS/VCG4-5-Bi-task_15.png', 'vcg45_bil_16': 'VCG4-5_SS/VCG4-5-Bi-task_16.png',
+    'vcg45_bil_17': 'VCG4-5_SS/VCG4-5-Bi-task_17.png', 'vcg45_bil_18': 'VCG4-5_SS/VCG4-5-Bi-task_18.png',
+    'vcg45_bil_19': 'VCG4-5_SS/VCG4-5-Bi-task_19.png',
+}
 
 
 def _load_exercises() -> dict:
@@ -4930,6 +4979,20 @@ def _make_qr_b64(url: str) -> str:
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ''
+
+
+def _make_screenshot_b64(exercise_id: str) -> str:
+    """Read exercise screenshot and return as base64 data URI."""
+    rel = _SCREENSHOT_MAP.get(exercise_id)
+    if not rel:
+        return ''
+    path = _EXERCISE_SS_PATH / rel
+    if not path.exists():
+        return ''
+    try:
+        return base64.b64encode(path.read_bytes()).decode()
     except Exception:
         return ''
 
@@ -5068,11 +5131,13 @@ def api_prescription_pamphlet(homer_id):
             if ex:
                 text = _get_exercise_text(ex, language)
                 qr = _make_qr_b64(ex.get('youtube_url', ''))
+                screenshot = _make_screenshot_b64(ex_id)
                 adl_exercises_list.append({
                     'name': text['name'],
                     'description': text['description'],
                     'dosage': text['dosage'],
                     'items': text['items'],
+                    'screenshot': screenshot,
                     'qr_code': qr,
                 })
 
@@ -5090,11 +5155,13 @@ def api_prescription_pamphlet(homer_id):
             if ex:
                 text = _get_exercise_text(ex, language)
                 qr = _make_qr_b64(ex.get('youtube_url', ''))
+                screenshot = _make_screenshot_b64(ex_id)
                 vcg_exercises_list.append({
                     'name': text['name'],
                     'description': text['description'],
                     'dosage': text['dosage'],
                     'items': text['items'],
+                    'screenshot': screenshot,
                     'qr_code': qr,
                 })
 
