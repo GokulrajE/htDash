@@ -3134,25 +3134,75 @@ async function savePrescriptionPrintout() {
     }
 
     console.log('Generating PDF with proper page breaks...');
-    const pdf = new jsPDFConstructor('p', 'mm', 'a4');
 
-    // Use jsPDF HTML method to respect CSS layout and page breaks
-    await pdf.html(previewDiv, {
-      x: 10,
-      y: 10,
-      width: 190,  // A4 width (210mm) minus 10mm margins on each side
-      margin: [10, 10, 10, 10],
-      windowHeight: previewDiv.scrollHeight,
+    // Use print window approach for consistent multi-page PDF
+    // This respects CSS page-break rules properly
+    const printWindow = window.open('', '', 'height=800,width=1000');
+    if (!printWindow) {
+      throw new Error('Pop-up window was blocked. Please allow pop-ups for this site.');
+    }
+
+    const htmlContent = previewDiv.innerHTML;
+    const printHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Exercise Prescription Pamphlet</title>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+Devanagari:wght@400;500;600&family=Noto+Sans+Tamil:wght@400;500;600&family=Noto+Sans+Telugu:wght@400;500;600&family=Noto+Sans+Kannada:wght@400;500;600&family=Noto+Sans+Gurmukhi:wght@400;500;600&display=swap');
+
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Noto Sans', sans-serif; line-height: 1.5; color: #333; }
+          @media print {
+            body { padding: 0; }
+            .exercise-card { page-break-inside: avoid; page-break-before: always; }
+            .exercise-card.first-exercise { page-break-before: auto; }
+          }
+        </style>
+      </head>
+      <body>${htmlContent}</body>
+      </html>
+    `;
+
+    // @ts-ignore - document.write is deprecated but necessary for reliable print window population
+    printWindow.document.write(printHtml);
+    printWindow.document.close();
+
+    // Wait for content to render, then capture with html2canvas
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    console.log('Capturing print window content...');
+    const canvas = await html2canvas(printWindow.document.body, {
+      scale: 2,
       useCORS: true,
       logging: false,
       allowTaint: true,
-      autoPaging: true,
-      repeat: {
-        count: 100  // Allow up to 100 pages
-      }
+      backgroundColor: '#ffffff'
     });
 
-    console.log('PDF generated with proper page breaks');
+    printWindow.close();
+
+    console.log('Content captured, creating PDF with page breaks...');
+
+    // Create PDF from canvas
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDFConstructor('p', 'mm', 'a4');
+    const imgWidth = 210;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+    heightLeft -= 297;
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= 297;
+    }
 
     // Convert PDF to blob
     const pdfBlob = pdf.output('blob');
