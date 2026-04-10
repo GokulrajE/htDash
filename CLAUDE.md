@@ -474,3 +474,31 @@ Exercise cards now display in this order:
 6. YouTube QR code (if youtube_url exists)
 
 **Example flow:** Click `prescription_printout_d01` → select language → preview renders with screenshots → Print or Save PDF
+
+### 4. PDF Generation with Proper Page Breaks
+
+**Status:** ⬜ In Progress
+
+Current limitation: "Save PDF" button uses html2canvas which captures content as raster image, producing single continuous page. "Print" button correctly respects CSS page-break rules, separating exercises per page.
+
+**Solution:** Replace html2canvas approach with jsPDF HTML2PDF wrapper that respects CSS `@page` rules and `page-break-before: always` declarations.
+
+**Implementation:**
+- Modify `savePrescriptionPrintout()` in `static/js/app/patient_detail.js`
+- Use jsPDF's HTML method with proper viewport and margin handling
+- Respect exercise card page-break CSS (`page-break-before: always` on `.exercise-card`)
+- Auto-upload resulting PDF as attachment (same workflow as now)
+- No manual download/re-upload steps required
+
+**Files Modified:**
+- `static/js/app/patient_detail.js`:
+  - Replace html2canvas + canvas-to-image logic in `savePrescriptionPrintout()`
+  - Use jsPDF HTML method for direct DOM-to-PDF conversion
+  - Maintain API call sequence: mark event complete → upload attachment
+
+**Result:**
+- ✅ Multi-page PDF with proper page breaks (one exercise per page)
+- ✅ Respects `@page` CSS media rules
+- ✅ Better print quality (vector-based, not raster)
+- ✅ Auto-uploaded as attachment
+- ✅ Same user workflow (click "Save PDF")

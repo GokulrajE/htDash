@@ -3111,112 +3111,48 @@ async function savePrescriptionPrintout() {
   setLoading('prescription-printout-save', true);
 
   try {
-    // Capture preview as canvas using html2canvas
     const previewDiv = document.getElementById('presc-printout-preview');
 
-    // Temporarily remove height constraints to capture full content
-    const originalMaxHeight = previewDiv.style.maxHeight;
-    const originalOverflow = previewDiv.style.overflowY;
-    const originalHeight = previewDiv.style.height;
-
-    previewDiv.style.maxHeight = 'none';
-    previewDiv.style.overflowY = 'visible';
-    previewDiv.style.height = 'auto';
-
-    console.log('Capturing full preview content...');
-    const canvas = await html2canvas(previewDiv, {
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      allowTaint: true,
-      backgroundColor: '#ffffff'
-    });
-
-    // Restore original styles
-    previewDiv.style.maxHeight = originalMaxHeight;
-    previewDiv.style.overflowY = originalOverflow;
-    previewDiv.style.height = originalHeight;
-
-    console.log('✓ Full content captured, canvas size:', canvas.width, 'x', canvas.height);
-
-    // Create PDF from canvas using jsPDF
-    const imgData = canvas.toDataURL('image/png');
-
-    // Handle different jsPDF UMD export formats with detailed debugging
+    // Get jsPDF constructor
     let jsPDFConstructor = null;
-
-    // Log what's available for debugging (check both cases: jsPDF and jspdf)
-    console.log('jsPDF availability check:', {
-      'window.jsPDF': typeof window.jsPDF,
-      'window.jspdf': typeof window.jspdf,
-      'window.jsPDF.jsPDF': window.jsPDF ? typeof window.jsPDF.jsPDF : 'N/A',
-      'window.jsPDF.default': window.jsPDF ? typeof window.jsPDF.default : 'N/A',
-      'window.jspdf.jsPDF': window.jspdf ? typeof window.jspdf.jsPDF : 'N/A'
-    });
-
-    // Try different export patterns (check both jsPDF and jspdf cases)
     if (window.jsPDF && typeof window.jsPDF === 'function') {
       jsPDFConstructor = window.jsPDF;
-      console.log('✓ Using window.jsPDF (direct constructor)');
     } else if (window.jspdf && typeof window.jspdf === 'function') {
       jsPDFConstructor = window.jspdf;
-      console.log('✓ Using window.jspdf (lowercase direct constructor)');
     } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
       jsPDFConstructor = window.jsPDF.jsPDF;
-      console.log('✓ Using window.jsPDF.jsPDF (nested export)');
     } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
       jsPDFConstructor = window.jspdf.jsPDF;
-      console.log('✓ Using window.jspdf.jsPDF (lowercase nested export)');
     } else if (window.jsPDF && window.jsPDF.default && typeof window.jsPDF.default === 'function') {
       jsPDFConstructor = window.jsPDF.default;
-      console.log('✓ Using window.jsPDF.default (ES6 export)');
     } else if (window.jspdf && window.jspdf.default && typeof window.jspdf.default === 'function') {
       jsPDFConstructor = window.jspdf.default;
-      console.log('✓ Using window.jspdf.default (lowercase ES6 export)');
-    } else if (window.jsPDF && typeof window.jsPDF === 'object') {
-      // Try to find jsPDF in the object
-      const keys = Object.keys(window.jsPDF || {});
-      console.log('Available keys in window.jsPDF:', keys);
-      for (const key of keys) {
-        if (typeof window.jsPDF[key] === 'function') {
-          jsPDFConstructor = window.jsPDF[key];
-          console.log(`✓ Using window.jsPDF.${key}`);
-          break;
-        }
-      }
-    } else if (window.jspdf && typeof window.jspdf === 'object') {
-      // Try to find jspdf in the object (lowercase)
-      const keys = Object.keys(window.jspdf || {});
-      console.log('Available keys in window.jspdf:', keys);
-      for (const key of keys) {
-        if (typeof window.jspdf[key] === 'function') {
-          jsPDFConstructor = window.jspdf[key];
-          console.log(`✓ Using window.jspdf.${key}`);
-          break;
-        }
-      }
     }
 
     if (!jsPDFConstructor) {
-      console.error('jsPDF not found. window.jsPDF:', window.jsPDF, 'window.jspdf:', window.jspdf);
-      throw new Error('jsPDF library not loaded. Please refresh the page and try again. If the issue persists, check browser console (F12) for details.');
+      throw new Error('jsPDF library not loaded. Please refresh the page and try again.');
     }
 
+    console.log('Generating PDF with proper page breaks...');
     const pdf = new jsPDFConstructor('p', 'mm', 'a4');
-    const imgWidth = 210; // A4 width in mm
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-    let position = 0;
 
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= 297; // A4 height in mm
+    // Use jsPDF HTML method to respect CSS layout and page breaks
+    await pdf.html(previewDiv, {
+      x: 10,
+      y: 10,
+      width: 190,  // A4 width (210mm) minus 10mm margins on each side
+      margin: [10, 10, 10, 10],
+      windowHeight: previewDiv.scrollHeight,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      autoPaging: true,
+      repeat: {
+        count: 100  // Allow up to 100 pages
+      }
+    });
 
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= 297;
-    }
+    console.log('PDF generated with proper page breaks');
 
     // Convert PDF to blob
     const pdfBlob = pdf.output('blob');
