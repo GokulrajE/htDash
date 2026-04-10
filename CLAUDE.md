@@ -477,7 +477,7 @@ Exercise cards now display in this order:
 
 ### 4. Custom Print Dialog Modal for PDF Generation
 
-**Status:** ⬜ In Development
+**Status:** ✅ Complete
 
 **Goal:** Create custom modal that mimics browser native print dialog, giving users control over PDF generation with live preview.
 
@@ -525,13 +525,38 @@ Exercise cards now display in this order:
    - Auto-uploads as attachment
    - Closes dialog, refreshes events
 
-**Files to Modify:**
-- `templates/patient_detail.html`: Add modal HTML + CSS
-- `static/js/app/patient_detail.js`: Add dialog logic + PDF generation
+**Implementation Complete:**
 
-**Result:**
-- ✅ Professional print dialog experience
-- ✅ User control over PDF settings
-- ✅ Live preview before save
-- ✅ Auto-upload workflow preserved
-- ✅ No dependency on browser print dialog
+**Files Modified:**
+- `templates/patient_detail.html`:
+  - Added `prescription-pdf-dialog-modal` with 2-column layout
+  - Settings panel: Page size (A4/Letter/A3), scale slider (50-200%), margins (0-20mm)
+  - Live preview pane that updates as settings change
+  - Changed "Save PDF" button onclick to `openPrescriptionPdfDialog()`
+
+- `static/js/app/patient_detail.js`:
+  - `openPrescriptionPdfDialog()`: Opens modal, initializes settings UI, sets up event listeners
+  - `updatePdfPreview()`: Updates preview in real-time as user adjusts settings (scale, page size)
+  - `savePrescriptionPdfFromDialog()`: Generates PDF with user-chosen settings, uploads as attachment
+  - Settings object: `_pdfDialogSettings` (pageSize, scale, margins)
+
+**Key Features:**
+- ✅ Professional modal UI mimicking browser print dialog
+- ✅ Real-time preview updates as user adjusts settings
+- ✅ Page size options: A4 (210x297mm), Letter (216x279mm), A3 (297x420mm)
+- ✅ Scale control: 50%-200% zoom
+- ✅ Margin control: 0-20mm
+- ✅ Automatic PDF pagination based on selected page size
+- ✅ Auto-upload workflow preserved (mark event complete → upload attachment)
+- ✅ Clean, professional user experience
+- ✅ Full control over PDF output without browser print dialog
+
+**User Workflow:**
+1. Select language in prescription printout modal
+2. Click "Save PDF" button
+3. Custom PDF dialog opens with settings and live preview
+4. Adjust page size, scale, margins as needed (preview updates live)
+5. Click "Save PDF" in dialog
+6. PDF generated with chosen settings
+7. Automatically marked as complete + uploaded as attachment
+8. Modal closes, timeline refreshes
