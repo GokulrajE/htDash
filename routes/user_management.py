@@ -2740,7 +2740,7 @@ def api_upload_attachment(homer_id):
 #     pdf_file.save(str(attachment_path))
     
    ##js
-    attachment_rel = f'attachments/{protocol_event_id}.pdf'
+    attachment_rel = pdf_path_mapping  # e.g., "attachments/prescription_d01.pdf"
     if Config.USE_S3:
         from utils.s3_store import s3_upload_file
         import tempfile, os as _os
