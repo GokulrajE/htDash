@@ -541,3 +541,35 @@ Exercise cards now display in this order:
 7. ✅ All 6 languages render correctly in PDFs
 8. ✅ Screenshots display in PDF pages
 9. ✅ QR codes generate for all exercises
+
+### 5. S3-Compatible Device Config Date Validation
+
+**Status:** ✅ Complete
+
+**Issue:** When patient data is synced from AWS S3 cloud storage, the device config validation warning (checking if device `configdata.csv` StartDate matches patient `activationDate`) was not appearing, even though it worked correctly for locally-stored data.
+
+**Root Cause:** The `api_config_start_date()` endpoint in `routes/user_management.py` only checked the local filesystem using `Path.exists()`. When `Config.USE_S3` is True, the configdata.csv files are stored in S3 and not available on the local filesystem.
+
+**Implementation:**
+
+**File Modified:** `routes/user_management.py`
+
+**Changes:**
+- Updated `api_config_start_date()` endpoint to detect `Config.USE_S3` flag
+- When `USE_S3` is True, reads configdata.csv from S3 using `s3_read_text()` function
+- Constructs S3 key path: `{hospital_folder}/patients/{homer_id}/{device_dir}/configdata.csv`
+- Parses CSV content using `io.StringIO` (since S3 returns text, not file object)
+- Maintains backward compatibility with local filesystem access when `USE_S3` is False
+
+**How It Works:**
+1. Frontend calls `GET /api/patients/{homer_id}/config-start-date` on page load
+2. API endpoint checks `Config.USE_S3` flag
+3. If True: reads from S3 bucket; if False: reads from local data folder
+4. Returns `{config_start_date: "YYYY-MM-DD"}` or `{config_start_date: null}`
+5. JavaScript compares with patient's `activationDate` and shows warning if mismatch
+
+**Testing:**
+- ✅ Local filesystem access: Works as before
+- ✅ S3 cloud access: Now reads configdata.csv from S3 when data is synced
+- ✅ Handles missing files gracefully: Returns null instead of error
+- ✅ Works with both Pluto and Mars device folders
