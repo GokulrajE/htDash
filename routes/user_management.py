@@ -49,6 +49,57 @@ def patient_detail_page(homer_id):
     return render_template('patient_detail.html', homer_id=homer_id, place=flask_session.get('login_place'), active_page='patients')
 
 
+@bp.route('/api/patients/<homer_id>/config-start-date', methods=['GET'])
+def api_config_start_date(homer_id):
+    """Get the StartDate from device config CSV (configdata.csv)."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    try:
+        config_start_date = None
+
+        if Config.USE_S3:
+            # Read from S3
+            from utils.s3_store import s3_read_text
+            for device_dir in ['Pluto', 'Mars']:
+                s3_key = f"{folder}/patients/{homer_id}/{device_dir}/configdata.csv"
+                csv_content = s3_read_text(s3_key)
+                if csv_content:
+                    reader = csv.DictReader(io.StringIO(csv_content))
+                    rows = list(reader)
+                    if rows:
+                        # Get first row's StartDate
+                        start_date = rows[0].get('StartDate', '')
+                        if start_date:
+                            config_start_date = start_date
+                            break
+        else:
+            # Read from local filesystem
+            patients_path = get_patients_path(folder)
+            patient_folder = patients_path / homer_id
+
+            for device_dir in ['Pluto', 'Mars']:
+                config_path = patient_folder / device_dir / 'configdata.csv'
+                if config_path.exists():
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        rows = list(reader)
+                        if rows:
+                            # Get first row's StartDate
+                            start_date = rows[0].get('StartDate', '')
+                            if start_date:
+                                config_start_date = start_date
+                                break
+
+        return jsonify({'config_start_date': config_start_date})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @bp.route('/api/patients/<homer_id>', methods=['GET'])
 def api_patient_detail(homer_id):
     if not flask_session.get('login_place'):
