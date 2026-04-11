@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Optional
 from config import Config
 
+if Config.USE_S3:
+    from utils.s3_store import s3_read_json, s3_write_json
+
 _PROTOCOL_PATH = Path(__file__).parent.parent / 'config' / 'study_protocol.json'
 
 
@@ -30,6 +33,8 @@ def _events_path(hospital_folder: str, homer_id: str) -> Path:
 
 
 def read_protocol_events(hospital_folder: str, homer_id: str) -> Optional[dict]:
+    if Config.USE_S3:
+        return s3_read_json(f"{hospital_folder}/patients/{homer_id}/protocol_events.json")
     path = _events_path(hospital_folder, homer_id)
     if not path.exists():
         return None
@@ -41,6 +46,9 @@ def read_protocol_events(hospital_folder: str, homer_id: str) -> Optional[dict]:
 
 
 def write_protocol_events(hospital_folder: str, homer_id: str, data: dict) -> None:
+    if Config.USE_S3:
+        s3_write_json(f"{hospital_folder}/patients/{homer_id}/protocol_events.json", data)
+        return
     path = _events_path(hospital_folder, homer_id)
     tmp = path.with_suffix('.tmp')
     with open(tmp, 'w', encoding='utf-8') as f:

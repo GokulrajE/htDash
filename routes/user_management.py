@@ -762,6 +762,20 @@ def api_complete_prescription_printout(homer_id):
         return jsonify({'error': 'Event not found in incomplete list.'}), 404
 
     # Mark event complete (attachment will be added separately via upload-attachment endpoint)
+    # Generate and save the PDF
+    rel_path = _PRINTOUT_PDF_FILES[protocol_event_id]
+    title = ('Revised Therapy Prescription Printout'
+             if protocol_event_id == 'prescription_printout_d15'
+             else 'Therapy Prescription Printout')
+    pdf_bytes = _generate_placeholder_pdf(homer_id, title)
+    if Config.USE_S3:
+        from utils.s3_store import s3_upload_bytes
+        s3_upload_bytes(f"{folder}/patients/{homer_id}/{rel_path}", pdf_bytes, content_type='application/pdf')
+    else:
+        pdf_path = get_patients_path(folder) / homer_id / rel_path
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(pdf_bytes)
+
     now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     complete_entry = {
         **entry,
@@ -787,15 +801,24 @@ def api_complete_prescription_printout(homer_id):
 @bp.route('/api/patients/<homer_id>/attachment/<path:rel_path>', methods=['GET'])
 def api_get_attachment(homer_id, rel_path):
     """Serve a file from the patient's attachments folder."""
+    from flask import send_file
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+    if Config.USE_S3:
+        from utils.s3_store import s3_get_bytes
+        import io, posixpath
+        key = f"{folder}/patients/{homer_id}/{rel_path}"
+        data = s3_get_bytes(key)
+        if data is None:
+            return jsonify({'error': 'File not found'}), 404
+        filename = posixpath.basename(rel_path)
+        return send_file(io.BytesIO(data), as_attachment=True, download_name=filename)
     file_path = get_patients_path(folder) / homer_id / rel_path
     if not file_path.exists() or not file_path.is_file():
         return jsonify({'error': 'File not found'}), 404
-    from flask import send_file
     return send_file(file_path, as_attachment=True, download_name=file_path.name)
 
 
@@ -2611,8 +2634,6 @@ def api_complete_agwatch_timing(homer_id):
 
     # Write the timing file
     timing_rel = cfg['timing_file']
-    timing_path = get_patients_path(folder) / homer_id / timing_rel
-    timing_path.parent.mkdir(parents=True, exist_ok=True)
     filed_at  = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     loginid   = flask_session.get('loginid', 'unknown')
     timing_content = {
@@ -2629,10 +2650,16 @@ def api_complete_agwatch_timing(homer_id):
         ],
         'notes': notes,
     }
-    tmp = timing_path.with_suffix('.tmp')
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(timing_content, f, indent=2)
-    os.replace(tmp, timing_path)
+    if Config.USE_S3:
+        from utils.s3_store import s3_write_json
+        s3_write_json(f"{folder}/patients/{homer_id}/{timing_rel}", timing_content)
+    else:
+        timing_path = get_patients_path(folder) / homer_id / timing_rel
+        timing_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = timing_path.with_suffix('.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(timing_content, f, indent=2)
+        os.replace(tmp, timing_path)
 
     # Mark event complete
     complete_entry = {
@@ -2706,11 +2733,29 @@ def api_upload_attachment(homer_id):
     protocol_event_id = entry.get('protocol_event_id', '')
     pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
 
-    # Save PDF as attachments/<event_id>.pdf
+#     # Save PDF as attachments/<event_id>.pdf
+#     #save file name using predeifned
+#     attachment_path = get_patients_path(folder) / homer_id / pdf_path_mapping
+#     attachment_path.parent.mkdir(parents=True, exist_ok=True)
+#     pdf_file.save(str(attachment_path))
     
-    attachment_path = get_patients_path(folder) / homer_id / pdf_path_mapping
-    attachment_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_file.save(str(attachment_path))
+   ##js
+    attachment_rel = f'attachments/{protocol_event_id}.pdf'
+    if Config.USE_S3:
+        from utils.s3_store import s3_upload_file
+        import tempfile, os as _os
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+            pdf_file.save(tmp.name)
+            tmp_path = tmp.name
+        try:
+            s3_upload_file(tmp_path, f"{folder}/patients/{homer_id}/{attachment_rel}",
+                           content_type='application/pdf')
+        finally:
+            _os.unlink(tmp_path)
+    else:
+        attachment_path = get_patients_path(folder) / homer_id / attachment_rel
+        attachment_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_file.save(str(attachment_path))
 
   
     # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
@@ -2741,7 +2786,40 @@ def api_download_attachment(homer_id, event_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    attachment_path = get_patients_path(folder) / homer_id / 'attachments' / f'{event_id}.pdf'
+    # Look up the actual attachment path stored on the event
+    events_data = read_protocol_events(folder, homer_id)
+    attachment_rel = None
+    if events_data:
+        entry = next((e for e in events_data.get('complete', []) if e.get('id') == event_id), None)
+        if not entry:
+            for val in events_data.get('free', {}).values():
+                if isinstance(val, list):
+                    entry = next((e for e in val if e.get('id') == event_id), None)
+                    if entry:
+                        break
+        if entry:
+            attachment_rel = entry.get('attachment')
+    # Fall back to legacy path
+    if not attachment_rel:
+        attachment_rel = f'attachments/{event_id}.pdf'
+
+    if Config.USE_S3:
+        from utils.s3_store import s3_get_bytes
+        import io
+        key = f"{folder}/patients/{homer_id}/{attachment_rel}"
+        data = s3_get_bytes(key)
+        if data is None:
+            return jsonify({'error': 'Attachment not found'}), 404
+        import posixpath
+        filename = posixpath.basename(attachment_rel)
+        return send_file(
+            io.BytesIO(data),
+            mimetype='application/pdf',
+            as_attachment=False,
+            download_name=filename,
+        )
+
+    attachment_path = get_patients_path(folder) / homer_id / attachment_rel
     if not attachment_path.exists():
         return jsonify({'error': 'Attachment not found'}), 404
 
@@ -2795,6 +2873,9 @@ def api_download_attachment(homer_id, event_id):
     print(f'  Content-Disposition: attachment; filename="{friendly_name}"')
 
     return response
+#     return send_file(str(attachment_path), mimetype='application/pdf',
+#                      as_attachment=False,
+#                      download_name=attachment_path.name)
 
 
 @bp.route('/api/patients/<homer_id>/log-patient-call', methods=['POST'])
@@ -4929,6 +5010,10 @@ _PRESCRIPTION_FILES = {
 
 
 def _write_prescription(folder: str, homer_id: str, rel_path: str, content: dict) -> None:
+    if Config.USE_S3:
+        from utils.s3_store import s3_write_json
+        s3_write_json(f"{folder}/patients/{homer_id}/{rel_path}", content)
+        return
     path = get_patients_path(folder) / homer_id / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp')
@@ -4938,6 +5023,9 @@ def _write_prescription(folder: str, homer_id: str, rel_path: str, content: dict
 
 
 def _read_prescription(folder: str, homer_id: str, rel_path: str):
+    if Config.USE_S3:
+        from utils.s3_store import s3_read_json
+        return s3_read_json(f"{folder}/patients/{homer_id}/{rel_path}")
     path = get_patients_path(folder) / homer_id / rel_path
     if not path.exists():
         return None
@@ -5189,6 +5277,12 @@ def api_get_agwatch_timing(homer_id, protocol_event_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+    if Config.USE_S3:
+        from utils.s3_store import s3_read_json
+        data = s3_read_json(f"{folder}/patients/{homer_id}/{cfg['timing_file']}")
+        if data is None:
+            return jsonify({'error': 'Timing file not found'}), 404
+        return jsonify(data)
     path = get_patients_path(folder) / homer_id / cfg['timing_file']
     if not path.exists():
         return jsonify({'error': 'Timing file not found'}), 404
