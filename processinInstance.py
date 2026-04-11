@@ -653,6 +653,53 @@ def process_single_user(user: str, place: str, devices: List[str]) -> Dict[str, 
 
     return result
 
+# ------------------- Single-patient entry point (called by Flask) -------------------
+
+def process_single_patient(homer_id: str, place: str) -> Dict[str, Any]:
+    """
+    Download S3 files and process data for one patient.
+    Called on-demand from the patient detail Devices tab.
+    Returns {"ok": True} or {"ok": False, "error": "..."}.
+    """
+    try:
+        devices = get_user_devices(homer_id, place)
+        if not devices:
+            # Patient has no devices on S3 yet — still attempt local processing
+            logger.info(f"No S3 devices found for {place}/{homer_id}")
+        else:
+            for device in devices:
+                try:
+                    download_required_files(place, homer_id, device)
+                except Exception:
+                    logger.exception(f"Error downloading {place}/{homer_id}/{device}")
+            try:
+                _auto_activate_on_download(place, homer_id, devices)
+            except Exception as e:
+                logger.warning(f"Auto-activation failed for {place}/{homer_id}: {e}")
+
+        # Process local files (extdata + Dates/) whether or not we just downloaded
+        any_local = False
+        for device in (devices or ["PLUTO", "MARS"]):
+            device_dir = "Pluto" if device == "PLUTO" else "Mars"
+            config_local  = os.path.join(local_base, place, homer_id, device_dir, "configdata.csv")
+            session_local = os.path.join(local_base, place, homer_id, device_dir, "sessions", "sessions.csv")
+            if os.path.exists(config_local) and os.path.exists(session_local):
+                any_local = True
+                mechanism_key = "Mechanism" if device == "PLUTO" else "Movement"
+                extdata_file = os.path.join(local_base, place, homer_id, device_dir, "sessions", "extdata.csv")
+                date_folder  = os.path.join(local_base, place, homer_id, device_dir, "Dates")
+                session_durations = compute_session_durations(session_local, mechanism_key)
+                process_sessions_and_write(session_local, date_folder, extdata_file, mechanism_key, session_durations)
+
+        if not any_local:
+            return {"ok": False, "error": "No device data available for this patient yet."}
+
+        return {"ok": True}
+    except Exception as e:
+        logger.exception(f"process_single_patient failed for {place}/{homer_id}: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 # ------------------- Main -------------------
 
 def main():

@@ -203,6 +203,63 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 
 ---
 
+### `GET /devices`
+
+Device Management page. Shows all devices for the current site grouped by type. All users can view; admins can add devices, toggle clinic status, and link SIMs; engineers/admins can report and resolve issues.
+
+#### Page elements
+
+- **Location badge** — current site name in the page header.
+- **SIM expiry banner** — amber alert strip shown when any SIM has `daysUntilExpiry ≤ 5`.
+- Six device sections rendered as cards:
+
+| Section | Device type | Notes |
+|---------|-------------|-------|
+| Pluto Devices | `pluto` | Robot devices; experimental patients only |
+| Mars Devices | `mars` | Robot devices; experimental patients only |
+| Actigraph Watches | `agwatch` | Split into Right Watch / Left Watch sub-tables |
+| Modems | `modems` | Shows linked SIM info |
+| SIM Cards | `sims` | Shows expiry badge with countdown |
+| Laptops | `laptops` | Assignable to patients |
+
+Each device row (Pluto/Mars/Agwatch/Laptops) shows:
+- Device ID, Serial, Status badge, Assigned Patient (link to patient detail)
+- **Actions column** (admin or engineer): Report Issue / Resolve Issue toggle; clinic toggle (admin only)
+
+Status badges: **Available** (green) · **Assigned** (blue) · **Clinic Only** (slate) · **Issue** (red) · **Lost** (slate, agwatch only)
+
+SIM row columns: Phone number, Network, Linked Modem, Recharge Date, Expiry Status badge.
+SIM expiry badge: **Active** (green) · **Expires in Xd** amber (≤5d) · **Expires in Xd** red (≤3d) · **Expired** (red).
+
+Agwatch section header has **Right Watch** and **Left Watch** add buttons (admin only).
+
+#### Data sources
+
+- `GET /devices/api/inventory` — returns full inventory with assignment info for all device types:
+  ```json
+  {
+    "pluto":   [{ "id", "serial", "clinic_only", "faulty", "assigned_to": {"homerID","hospitalID"}|null }],
+    "mars":    [...],
+    "agwatch": [{ ..., "has_issue", "lost", "assigned_to": {..., "limb"}|null }],
+    "modems":  [{ "id", "serial", "clinic_only", "sim_id", "sim_info": {"id","phoneNumber","network"}|null }],
+    "laptops": [{ "id", "serial", "clinic_only", "assigned_to": {...}|null }],
+    "sims":    [{ "id", "phoneNumber", "network", "rechargeDate", "expiryDate", "daysUntilExpiry", "isExpired", "modem_id" }]
+  }
+  ```
+
+#### Actions
+
+- **Add Device** (Pluto/Mars) — admin only. Modal: device type selector, ID, serial. `POST /devices/api/add`
+- **Add Watch** — admin only. Separate "Right Watch" / "Left Watch" buttons. Modal: ID, serial, limb pre-filled (read-only). `POST /devices/api/add` with `device_type: agwatch`.
+- **Add Modem** — admin only. Modal: ID, serial, optional SIM dropdown (unlinked SIMs only). `POST /devices/api/add` with `device_type: modem`.
+- **Add SIM** — admin only. Modal: phone number, network, recharge date, expiry date, reminder days. `POST /devices/api/add` with `device_type: sim`.
+- **Add Laptop** — admin only. Modal: ID, serial. `POST /devices/api/add` with `device_type: laptop`.
+- **Link SIM** — admin only. Per-modem button. Dropdown of available SIMs (unlinked or currently linked). `POST /devices/api/link-sim`.
+- **Toggle Clinic** — admin only. Switches `clinic_only` between true/false. Clinic-only devices do not appear in patient assignment dropdowns. `POST /devices/api/toggle-clinic`.
+- **Report Issue / Resolve Issue** — admin or engineer. Sets/clears `faulty` (Pluto/Mars) or `has_issue` (Agwatch). Devices with active issues excluded from `get_available_devices()`. `POST /devices/api/toggle-issue`.
+
+---
+
 ## Actions
 
 Each action is defined once here. Pages above reference which actions apply to them.

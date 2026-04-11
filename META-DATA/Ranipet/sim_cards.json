@@ -1,18 +1,30 @@
 {
   "sims": [
     {
-      "id": "b0834d21-4559-45bc-9eb0-cde5723211c1",
-      "phoneNumber": "9077745633",
-      "network": "Jio",
-      "modemSerial": "67",
-      "rechargeDate": "2026-02-09",
-      "expiryDate": "2026-03-09",
-      "rechargeAmount": "399",
-      "dataPlan": "28",
-      "reminderDays": 3,
+      "id": "8920949d-84a4-485f-aee0-9db217db1b00",
+      "phoneNumber": "9090909090",
+      "network": "jio",
+      "rechargeDate": "2026-04-07",
+      "expiryDate": "2026-05-07",
+      "rechargeAmount": null,
+      "dataPlan": null,
+      "reminderDays": 5,
       "status": "active",
       "notes": "",
-      "createdAt": "2026-03-13T09:33:06.902251"
+      "createdAt": "2026-04-08T12:02:29.865076"
+    },
+    {
+      "id": "d31dcf1e-d620-4bd4-a63f-6b0e685e34b7",
+      "phoneNumber": "12222222222",
+      "network": "jio",
+      "rechargeDate": "2026-04-24",
+      "expiryDate": "2026-05-22",
+      "rechargeAmount": null,
+      "dataPlan": "28",
+      "reminderDays": 5,
+      "status": "active",
+      "notes": "",
+      "createdAt": "2026-04-08T12:49:05.452161"
     }
   ]
 }

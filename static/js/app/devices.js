@@ -1,721 +1,1076 @@
 /* ============================================================
-   devices.js — Device, ActiGraph Watch, and SIM Management
-   Location-based config, per-patient dropdowns, swap logging
+   devices.js — Device Management Page
    ============================================================ */
 
 // ── State ─────────────────────────────────────────────────────
-let _devConfig    = {};
-let _devAssign    = { deviceSets: [], watches: [] };
-let _simData      = [];
-let _currentPlace = '';
+let _inventory  = null;
+let _isAdmin    = false;
+let _canManage  = false;   // admin or engineer
 
 // ── Bootstrap ─────────────────────────────────────────────────
+function initPage() {
+  if (currentUser) {
+    _isAdmin   = currentUser.privilege === 'admin';
+    _canManage = currentUser.privilege !== 'user';
+    const label = document.getElementById('devices-location-label');
+    if (label) label.textContent = currentUser.place || '—';
+  }
+  loadDevicesPage();
+}
+
 async function loadDevicesPage() {
-  _currentPlace = currentUser?.place || currentUser?.loginPlace || '';
-
+  _showLoading(true);
   try {
-    const r = await fetch('/get_userId', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `search_term=Pluto&LoginId=${currentUser.loginId}&PRIVILEGE=${currentUser.privilege}`
-    });
-    const d = await r.json();
-    if (d.hospital_info) allPatients = d.hospital_info;
-  } catch(e) { console.error('patients', e); }
-
-  if (droppedOutPatients.size === 0) await loadDroppedOutPatients();
-  await Promise.all([_fetchAssignments(), _fetchConfig(), _fetchSims()]);
-  _updateStats();
-  _renderDevicesCard();
-  _renderWatchesCard();
-  _renderSimCard();
+    const r = await fetch('/devices/api/inventory');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    _inventory = await r.json();
+    _renderAll();
+    _checkSimExpiry(_inventory.sims || []);
+    _showButtonVisibility();
+    _showLoading(false);
+  } catch (e) {
+    _showError('Failed to load device data. ' + e.message);
+  }
 }
 
-async function _fetchAssignments() {
+// Silent refresh after mutations — no loading overlay flicker
+async function _refreshInventory() {
   try {
-    const r = await fetch('/devices/');
-    const d = await r.json();
-    _devAssign = d.devices || { deviceSets: [], watches: [] };
-  } catch(e) { _devAssign = { deviceSets: [], watches: [] }; }
+    const r = await fetch('/devices/api/inventory');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    _inventory = await r.json();
+    _renderAll();
+    _checkSimExpiry(_inventory.sims || []);
+  } catch (e) {
+    showToast('Failed to refresh device data.', 'error');
+  }
 }
 
-async function _fetchConfig() {
-  try {
-    const r = await fetch(`/devices/config/${encodeURIComponent(_currentPlace)}`);
-    const d = await r.json();
-    _devConfig = {};
-    (d.deviceSets || []).forEach(s => { _devConfig[s.setId] = s; });
-  } catch(e) { _devConfig = {}; }
-}
+function _showButtonVisibility() {
+  // Admin-only add buttons
+  const adminButtons = [
+    'add-pluto-btn','add-mars-btn','add-watch-right-btn','add-watch-left-btn',
+    'add-modem-btn','add-sim-btn','add-laptop-btn',
+  ];
+  adminButtons.forEach(id => {
+    if (_isAdmin) document.getElementById(id)?.classList.remove('hidden');
+  });
 
-async function _fetchSims() {
-  try {
-    const r = await fetch('/sim_cards/');
-    const d = await r.json();
-    _simData = d.sims || [];
-  } catch(e) { _simData = []; }
-}
+  // Clinic toggle — admin only (pluto/mars only)
+  ['clinic-pluto-btn','clinic-mars-btn'].forEach(id => {
+    if (_isAdmin) document.getElementById(id)?.classList.remove('hidden');
+  });
 
-// ── Patient filters ───────────────────────────────────────────
-function _activeExperimental() {
-  return allPatients.filter(p => {
-    if ((p.role || '').toLowerCase() !== 'experimental') return false;
-    if (droppedOutPatients.has(p.HospitalID) || trialCompletedPatients.has(p.HospitalID) || p.discontinued) return false;
-    const s = p.Status;
-    return p.activated === true || (typeof s === 'object' && s && (s.pluto === 'active' || s.mars === 'active'));
+  // Issue report — admin or engineer
+  ['issue-pluto-btn','issue-mars-btn','issue-agwatch-btn'].forEach(id => {
+    if (_canManage) document.getElementById(id)?.classList.remove('hidden');
   });
 }
 
-function _activeAll() {
-  return allPatients.filter(p => {
-    const role = (p.role || '').toLowerCase();
-    if (!['experimental','control'].includes(role)) return false;
-    if (droppedOutPatients.has(p.HospitalID) || trialCompletedPatients.has(p.HospitalID) || p.discontinued) return false;
-    if (role === 'control') return p.activated === true || (p.vcgType || '').trim() !== '';
-    const s = p.Status;
-    return p.activated === true || (typeof s === 'object' && s && (s.pluto === 'active' || s.mars === 'active'));
-  });
+// ── Render all sections ───────────────────────────────────────
+
+function _renderAll() {
+  _renderSection('pluto',  _inventory.pluto   || []);
+  _renderSection('mars',   _inventory.mars    || []);
+  _renderAgwatches(_inventory.agwatch || []);
+  _renderModems(_inventory.modems   || []);
+  _renderSims(_inventory.sims      || []);
+  _renderLaptops(_inventory.laptops  || []);
+  document.getElementById('devices-sections').classList.remove('hidden');
 }
 
-// ── Availability helpers ──────────────────────────────────────
-function _assignedDevSets() {
-  const m = {};
-  (_devAssign.deviceSets || []).forEach(ds => {
-    if (ds.assignedPatientId && ds.status === 'assigned') m[ds.assignedPatientId] = ds;
-  });
-  return m;
+// ── Pluto / Mars ──────────────────────────────────────────────
+
+function _renderSection(type, devices) {
+  const container = document.getElementById(`table-${type}`);
+  if (!container) return;
+
+  const total    = devices.length;
+  const assigned = devices.filter(d => d.assigned_to).length;
+  const avail    = devices.filter(d => !d.assigned_to && !d.faulty && !d.clinic_only).length;
+  document.getElementById(`badge-${type}`).textContent =
+    `${total} total · ${avail} available · ${assigned} assigned`;
+
+  if (total === 0) { container.innerHTML = _emptyRow('No devices in inventory'); return; }
+
+  container.innerHTML = `
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-100 text-left">
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-32">Device ID</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Serial</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-32">Status</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Assigned Patient</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-50">
+        ${devices.map(d => `
+          <tr class="hover:bg-slate-50 transition-colors">
+            <td class="px-6 py-3.5 font-mono font-medium text-slate-800">${_esc(d.id)}</td>
+            <td class="px-6 py-3.5 text-slate-600">${_esc(d.serial) || '—'}</td>
+            <td class="px-6 py-3.5">${_statusBadge(d)}</td>
+            <td class="px-6 py-3.5">${_assignedCell(d.assigned_to)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
 }
 
-function _assignedWatches() {
-  const m = {};
-  (_devAssign.watches || []).forEach(w => {
-    if (w.assignedPatientId && w.status === 'assigned') m[w.assignedPatientId] = w;
-  });
-  return m;
+// ── Agwatch ───────────────────────────────────────────────────
+
+function _renderAgwatches(devices) {
+  const total    = devices.length;
+  const assigned = devices.filter(d => d.assigned_to).length;
+  const avail    = devices.filter(d => !d.assigned_to && !d.lost && !d.has_issue && !d.clinic_only).length;
+  document.getElementById('badge-agwatch').textContent =
+    `${total} total · ${avail} available · ${assigned} assigned`;
+
+  const right = devices.filter(d => (d.assigned_to?.limb || d.limb_default || '').toLowerCase() === 'right');
+  const left  = devices.filter(d => (d.assigned_to?.limb || d.limb_default || '').toLowerCase() === 'left');
+  _renderWatchSubTable('right', right);
+  _renderWatchSubTable('left',  left);
 }
 
-function _assignedSimNums() {
-  const s = new Set();
-  (_devAssign.deviceSets || []).forEach(ds => {
-    if (ds.assignedPatientId && ds.simNumber) s.add(ds.simNumber);
-  });
-  _simData.forEach(sim => { if (sim.assignedPatientId) s.add(sim.phoneNumber); });
-  return s;
+function _renderWatchSubTable(side, devices) {
+  const container = document.getElementById(`table-agwatch-${side}`);
+  if (!container) return;
+
+  if (devices.length === 0) { container.innerHTML = _emptyRow('No watches in inventory'); return; }
+
+  // Build a map: homerID → paired watch on the other limb
+  const allWatches = _inventory?.agwatch || [];
+  const otherLimb  = side === 'right' ? 'left' : 'right';
+
+  container.innerHTML = `
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-100 text-left">
+          <th class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Device ID</th>
+          <th class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Serial</th>
+          <th class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-28">Status</th>
+          <th class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Assigned Patient</th>
+          <th class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">${otherLimb.charAt(0).toUpperCase() + otherLimb.slice(1)} Pair</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-50">
+        ${devices.map(d => {
+          // Find the paired watch: same patient, other limb
+          const homerID = d.assigned_to?.homerID;
+          const pair = homerID
+            ? allWatches.find(w => w.assigned_to?.homerID === homerID && (w.assigned_to?.limb || w.limb_default || '').toLowerCase() === otherLimb)
+            : null;
+          const pairCell = pair
+            ? `<span class="font-mono text-xs text-slate-700">${_esc(pair.id)}</span>`
+            : '<span class="text-xs text-slate-400 italic">None</span>';
+          return `
+          <tr class="hover:bg-slate-50 transition-colors">
+            <td class="px-5 py-3.5 font-mono font-medium text-slate-800">${_esc(d.id)}</td>
+            <td class="px-5 py-3.5 text-slate-600">${_esc(d.serial) || '—'}</td>
+            <td class="px-5 py-3.5">${_watchStatusBadge(d)}</td>
+            <td class="px-5 py-3.5">${_assignedCell(d.assigned_to)}</td>
+            <td class="px-5 py-3.5">${pairCell}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
 }
 
-function _availableConfigSets() {
-  const used = new Set(
-    (_devAssign.deviceSets || [])
-      .filter(ds => ds.status === 'assigned')
-      .map(ds => ds.assignedDeviceSetId || ds.setNumber)
-      .filter(Boolean)
+// ── Modems ────────────────────────────────────────────────────
+
+function _renderModems(devices) {
+  const container = document.getElementById('table-modems');
+  if (!container) return;
+  const assigned = devices.filter(d => d.assigned_to).length;
+  const avail    = devices.filter(d => !d.assigned_to).length;
+  document.getElementById('badge-modems').textContent =
+    `${devices.length} total · ${avail} available · ${assigned} assigned`;
+
+  if (devices.length === 0) { container.innerHTML = _emptyRow('No modems in inventory'); return; }
+
+  const actionsCol = _isAdmin ? '<th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-40">Actions</th>' : '';
+
+  container.innerHTML = `
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-100 text-left">
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-32">Modem ID</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Serial</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">SIM Card</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-28">Status</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Assigned Patient</th>
+          ${actionsCol}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-50">
+        ${devices.map(d => {
+          const simCell = d.sim_info
+            ? `<span class="font-medium text-slate-700">${_esc(d.sim_info.network || '—')}</span>
+               <span class="text-xs text-slate-400 ml-1">${_esc(d.sim_info.phoneNumber || '')}</span>`
+            : '<span class="text-slate-400 italic text-xs">Not linked</span>';
+          const statusBadge = d.assigned_to
+            ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>'
+            : '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
+          const actions = _isAdmin ? (() => {
+            const linkBtn = `<button onclick="openLinkSimModal('${_esc(d.id)}')"
+                class="px-2.5 py-1 text-xs font-medium bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-colors">
+                <i class="fas fa-link mr-1"></i>SIM</button>`;
+            const assignBtn = !d.assigned_to
+              ? `<button onclick="openAssignModal('modem','${_esc(d.id)}')"
+                   class="px-2.5 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors">
+                   <i class="fas fa-user-plus mr-1"></i>Assign</button>`
+              : `<button onclick="unassignDevice('modem','${_esc(d.id)}')"
+                   class="px-2.5 py-1 text-xs font-medium bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                   <i class="fas fa-user-minus mr-1"></i>Unassign</button>`;
+            return `<div class="flex gap-1.5">${linkBtn}${assignBtn}</div>`;
+          })() : '';
+          return `
+            <tr class="hover:bg-slate-50 transition-colors">
+              <td class="px-6 py-3.5 font-mono font-medium text-slate-800">${_esc(d.id)}</td>
+              <td class="px-6 py-3.5 text-slate-600">${_esc(d.serial) || '—'}</td>
+              <td class="px-6 py-3.5">${simCell}</td>
+              <td class="px-6 py-3.5">${statusBadge}</td>
+              <td class="px-6 py-3.5">${_assignedCell(d.assigned_to)}</td>
+              ${_isAdmin ? `<td class="px-6 py-3.5">${actions}</td>` : ''}
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── SIM Cards ─────────────────────────────────────────────────
+
+function _renderSims(sims) {
+  const container = document.getElementById('table-sims');
+  if (!container) return;
+
+  const expired = sims.filter(s => s.isExpired).length;
+  document.getElementById('badge-sims').textContent =
+    expired > 0 ? `${sims.length} total · ${expired} expired` : `${sims.length} total`;
+
+  if (sims.length === 0) { container.innerHTML = _emptyRow('No SIM cards recorded'); return; }
+
+  container.innerHTML = `
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-100 text-left">
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Phone</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Network</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Plan</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Modem</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Recharge Date</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-44">Expiry Status</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-50">
+        ${sims.map(s => {
+          const modemLabel = s.modem_id
+            ? `<span class="font-mono text-xs text-slate-700">${_esc(s.modem_id)}</span>`
+            : '<span class="text-slate-400 italic text-xs">Not linked</span>';
+          const planLabel = s.dataPlan ? `${_esc(s.dataPlan)}d` : '—';
+          return `
+            <tr class="hover:bg-slate-50 transition-colors">
+              <td class="px-6 py-3.5 font-mono text-slate-800">${_esc(s.phoneNumber || '—')}</td>
+              <td class="px-6 py-3.5 text-slate-600">${_esc(s.network || '—')}</td>
+              <td class="px-6 py-3.5 text-slate-600">${planLabel}</td>
+              <td class="px-6 py-3.5">${modemLabel}</td>
+              <td class="px-6 py-3.5 text-slate-600">${_esc(s.rechargeDate || '—')}</td>
+              <td class="px-6 py-3.5">${_simExpiryBadge(s)}</td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+function _simExpiryBadge(s) {
+  if (!s.expiryDate) return '<span class="text-slate-400 italic text-xs">No expiry set</span>';
+  if (s.isExpired)
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700"><i class="fas fa-times-circle"></i>Expired</span>`;
+  const d = s.daysUntilExpiry;
+  if (d <= 3)
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700"><i class="fas fa-exclamation-circle"></i>Expires in ${d}d</span>`;
+  if (d <= 5)
+    return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"><i class="fas fa-exclamation-triangle"></i>Expires in ${d}d</span>`;
+  return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>${_esc(s.expiryDate)}</span>`;
+}
+
+// ── Laptops ───────────────────────────────────────────────────
+
+function _renderLaptops(devices) {
+  const container = document.getElementById('table-laptops');
+  if (!container) return;
+
+  const assigned = devices.filter(d => d.assigned_to).length;
+  const avail    = devices.filter(d => !d.assigned_to).length;
+  document.getElementById('badge-laptops').textContent =
+    `${devices.length} total · ${avail} available · ${assigned} assigned`;
+
+  if (devices.length === 0) { container.innerHTML = _emptyRow('No laptops in inventory'); return; }
+
+  const actionsCol = _isAdmin ? '<th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-32">Actions</th>' : '';
+
+  container.innerHTML = `
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-100 text-left">
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-32">Laptop ID</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Serial</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide w-32">Status</th>
+          <th class="px-6 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Assigned Patient</th>
+          ${actionsCol}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-50">
+        ${devices.map(d => {
+          const statusBadge = d.assigned_to
+            ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>'
+            : '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
+          const actions = _isAdmin
+            ? (d.assigned_to
+                ? `<button onclick="unassignDevice('laptop','${_esc(d.id)}')"
+                     class="px-2.5 py-1 text-xs font-medium bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors">
+                     <i class="fas fa-user-minus mr-1"></i>Unassign</button>`
+                : `<button onclick="openAssignModal('laptop','${_esc(d.id)}')"
+                     class="px-2.5 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors">
+                     <i class="fas fa-user-plus mr-1"></i>Assign</button>`)
+            : '';
+          return `
+            <tr class="hover:bg-slate-50 transition-colors">
+              <td class="px-6 py-3.5 font-mono font-medium text-slate-800">${_esc(d.id)}</td>
+              <td class="px-6 py-3.5 text-slate-600">${_esc(d.serial) || '—'}</td>
+              <td class="px-6 py-3.5">${statusBadge}</td>
+              <td class="px-6 py-3.5">${_assignedCell(d.assigned_to)}</td>
+              ${_isAdmin ? `<td class="px-6 py-3.5">${actions}</td>` : ''}
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── Cell helpers ──────────────────────────────────────────────
+
+function _statusBadge(d) {
+  if (d.faulty)      return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700"><i class="fas fa-exclamation-circle"></i>Issue</span>';
+  if (d.clinic_only) return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500"><i class="fas fa-hospital"></i>Clinic Only</span>';
+  if (d.assigned_to) return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>';
+  return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
+}
+
+function _watchStatusBadge(d) {
+  if (d.has_issue)   return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700"><i class="fas fa-exclamation-circle"></i>Issue</span>';
+  if (d.lost)        return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500"><i class="fas fa-times-circle"></i>Lost</span>';
+  if (d.clinic_only) return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500"><i class="fas fa-hospital"></i>Clinic Only</span>';
+  if (d.assigned_to) return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>';
+  return '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
+}
+
+function _assignedCell(assigned_to) {
+  if (!assigned_to) return '<span class="text-slate-400 italic text-xs">Not Assigned</span>';
+  const homer    = _esc(assigned_to.homerID    || '—');
+  const hospital = _esc(assigned_to.hospitalID || '—');
+  return `<a href="/patients/${_esc(assigned_to.homerID)}" class="inline-flex items-center gap-2 group">
+    <span class="font-medium text-blue-600 group-hover:text-blue-800 group-hover:underline">${homer}</span>
+    <span class="text-xs text-slate-400">${hospital}</span>
+  </a>`;
+}
+
+function _emptyRow(msg) {
+  return `<div class="px-6 py-8 text-center text-sm text-slate-400 italic">${msg}</div>`;
+}
+
+// ── SIM expiry notification ───────────────────────────────────
+
+function _checkSimExpiry(sims) {
+  const warnings = sims.filter(s => s.daysUntilExpiry !== undefined && s.daysUntilExpiry <= 5);
+  if (!warnings.length) return;
+  const expired  = warnings.filter(s => s.isExpired);
+  const expiring = warnings.filter(s => !s.isExpired);
+  const parts    = [];
+  if (expired.length)  parts.push(`${expired.length} SIM${expired.length > 1 ? 's' : ''} expired`);
+  if (expiring.length) parts.push(`${expiring.length} SIM${expiring.length > 1 ? 's' : ''} expiring in ≤5 days`);
+  const msg = parts.join(', ');
+  document.getElementById('sim-expiry-msg').textContent = msg;
+  document.getElementById('sim-expiry-banner')?.classList.remove('hidden');
+  showToast(msg, expired.length ? 'error' : 'info');
+}
+
+// ── Clinic Toggle Modal ───────────────────────────────────────
+
+let _clinicType = null;
+
+function openClinicModal(type) {
+  _clinicType = type;
+  const labels = { pluto: 'Pluto', mars: 'Mars' };
+  document.getElementById('clinic-modal-title').textContent = `Toggle Clinic — ${labels[type] || type}`;
+  _setError('clinic-modal-error', '');
+  document.getElementById('clinic-current-status').textContent = '';
+
+  const sel = document.getElementById('clinic-device-select');
+  sel.innerHTML = '<option value="">Select device…</option>';
+
+  const allDevices = _inventory?.[type] || [];
+  // Eligible for clinic toggle:
+  //   - Currently clinic (can be cleared): no restrictions
+  //   - Currently available (can be set to clinic): not assigned, not faulty/issue
+  // Exclude: assigned devices, devices with issues (Issue overrides all)
+  const devices = allDevices.filter(d =>
+    d.clinic_only ||                                      // already clinic → can clear it
+    (!d.assigned_to && !d.faulty && !d.has_issue)         // available → can set to clinic
   );
-  return Object.values(_devConfig).filter(c => !used.has(c.setId));
-}
 
-function _availableWatches() {
-  return (_devAssign.watches || []).filter(w => w.status === 'available');
-}
-
-function _availableSims() {
-  const used = _assignedSimNums();
-  return _simData.filter(s => !used.has(s.phoneNumber));
-}
-
-function _isAutoReturnDue(ds) {
-  if (!ds.assignmentDate) return false;
-  return (new Date() - new Date(ds.assignmentDate)) / 86400000 >= 28;
-}
-
-// ── Stats ─────────────────────────────────────────────────────
-function _updateStats() {
-  const ds = _devAssign.deviceSets || [];
-  const ws = _devAssign.watches || [];
-  const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-  set('stat-sets-available',   _availableConfigSets().length);
-  set('stat-sets-inuse',       ds.filter(d => d.status === 'assigned').length);
-  set('stat-watches-available', ws.filter(w => w.status === 'available').length);
-  set('stat-watches-inuse',    ws.filter(w => w.status === 'assigned').length);
-}
-
-// ── CARD 1: Devices ───────────────────────────────────────────
-function _renderDevicesCard() {
-  const container = document.getElementById('device-assignment-table');
-  if (!container) return;
-
-  const patients  = _activeExperimental();
-  const assignedDS = _assignedDevSets();
-  const availSets = _availableConfigSets();
-  const availSims = _availableSims();
-
-  if (patients.length === 0) {
-    container.innerHTML = `<div class="text-center py-10 text-slate-400"><i class="fas fa-users text-3xl mb-2 block opacity-30"></i>No active experimental patients</div>`;
-    return;
+  if (!devices.length) {
+    _setError('clinic-modal-error', 'No eligible devices. Devices must be Available (not assigned, not issue) to change clinic status.');
   }
 
-  const setOpts = availSets.map(s => `<option value="${s.setId}">${s.setId} — P:${s.pluto} M:${s.mars}</option>`).join('');
-  const simOpts = availSims.map(s => `<option value="${s.phoneNumber}">${s.phoneNumber} (${s.network || '—'})</option>`).join('');
+  devices.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    const label = d.clinic_only ? `${d.id} — Clinic Only` : `${d.id} — Available`;
+    opt.textContent = label;
+    sel.appendChild(opt);
+  });
 
-  container.innerHTML = patients.map(p => {
-    const cur = assignedDS[p.HospitalID];
-    if (cur) {
-      const due = _isAutoReturnDue(cur);
-      return `
-        <div class="border border-slate-100 rounded-xl p-4 bg-white" id="dev-row-${p.HospitalID}">
-          <div class="flex items-center justify-between gap-3 flex-wrap">
-            <div class="flex items-center gap-3">
-              <div class="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center shrink-0">
-                <span class="text-blue-700 font-bold text-xs">${p.HospitalID.slice(0,2)}</span>
-              </div>
-              <div>
-                <p class="font-semibold text-slate-800 text-sm">${p.HospitalID}</p>
-                <p class="text-xs text-slate-400">${p.trainingSide || '—'} side</p>
-              </div>
-            </div>
-            <div class="flex flex-wrap gap-2 text-xs">
-              <span class="px-2 py-1 bg-blue-50 text-blue-700 rounded-lg font-mono">PLUTO: ${cur.plutoDeviceId || '—'}</span>
-              <span class="px-2 py-1 bg-violet-50 text-violet-700 rounded-lg font-mono">MARS: ${cur.marsDeviceId || '—'}</span>
-              <span class="px-2 py-1 bg-slate-50 text-slate-600 rounded-lg font-mono">Laptop: ${cur.laptopNumber || '—'}</span>
-              <span class="px-2 py-1 bg-slate-50 text-slate-600 rounded-lg font-mono">Modem: ${cur.modemSerial || '—'}</span>
-              <span class="px-2 py-1 bg-green-50 text-green-700 rounded-lg font-mono">SIM: ${cur.simNumber || '—'}</span>
-              ${due ? `<span class="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg"><i class="fas fa-clock mr-1"></i>Return due</span>` : ''}
-            </div>
-            <div class="flex gap-2">
-              <button onclick="_showDeviceSwapModal('${p.HospitalID}')" class="px-3 py-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 font-medium"><i class="fas fa-sync-alt mr-1"></i>Swap</button>
-              <button onclick="_returnDeviceSet('${p.HospitalID}')" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 font-medium"><i class="fas fa-undo mr-1"></i>Return</button>
-            </div>
-          </div>
-        </div>`;
+  sel.onchange = () => {
+    const d = devices.find(x => x.id === sel.value);
+    const info = document.getElementById('clinic-current-status');
+    if (d) {
+      info.textContent = d.clinic_only
+        ? 'Currently: Clinic Only → will become Available'
+        : 'Currently: Available → will become Clinic Only (replaces any existing clinic device)';
+      const btn = document.getElementById('clinic-save-btn');
+      btn.textContent = d.clinic_only ? 'Mark Available' : 'Mark Clinic Only';
+    } else {
+      info.textContent = '';
     }
-    return `
-      <div class="border border-dashed border-slate-200 rounded-xl p-4 bg-slate-50" id="dev-row-${p.HospitalID}">
-        <div class="flex items-center gap-3 mb-3">
-          <div class="w-10 h-10 rounded-xl bg-slate-200 flex items-center justify-center shrink-0">
-            <span class="text-slate-500 font-bold text-xs">${p.HospitalID.slice(0,2)}</span>
-          </div>
-          <div>
-            <p class="font-semibold text-slate-700 text-sm">${p.HospitalID}</p>
-            <p class="text-xs text-slate-400">${p.trainingSide || '—'} side · No device assigned</p>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-          <div>
-            <label class="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">Device Set (Pluto + Mars + Laptop + Modem)</label>
-            <select id="ds-sel-${p.HospitalID}" class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-blue-400">
-              <option value="">— select device set —</option>
-              ${setOpts || '<option disabled>No sets available</option>'}
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wide">SIM Card</label>
-            <select id="sim-sel-${p.HospitalID}" class="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-green-400">
-              <option value="">— select SIM —</option>
-              ${simOpts || '<option disabled>No SIMs available</option>'}
-            </select>
-          </div>
-        </div>
-        <button onclick="_assignDeviceSet('${p.HospitalID}')" class="px-4 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold"><i class="fas fa-link mr-1.5"></i>Assign Device Set</button>
-      </div>`;
-  }).join('');
-}
-
-async function _assignDeviceSet(patientId) {
-  const setId  = document.getElementById(`ds-sel-${patientId}`)?.value;
-  const simNum = document.getElementById(`sim-sel-${patientId}`)?.value;
-  if (!setId) { showToast('Please select a device set', 'error'); return; }
-
-  try {
-    const r = await fetch('/devices/assign_from_config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ place: _currentPlace, patientId, setId, simNumber: simNum || null })
-    });
-    const d = await r.json();
-    if (d.status !== 'success') { showToast(d.message || 'Failed', 'error'); return; }
-
-    if (simNum) {
-      const sim = _simData.find(s => s.phoneNumber === simNum);
-      if (sim) await fetch(`/sim_cards/${sim.id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assignedPatientId: patientId, status: 'assigned' })
-      });
-    }
-
-    showToast(`Device set ${setId} assigned to ${patientId}`);
-    if (typeof logActivity === 'function') logActivity('ASSIGNED_DEVICE_SET', { patientId, setId, simNumber: simNum });
-    await Promise.all([_fetchAssignments(), _fetchSims()]);
-    _updateStats(); _renderDevicesCard(); _renderSimCard();
-  } catch(e) { showToast('Network error', 'error'); }
-}
-
-async function _returnDeviceSet(patientId) {
-  if (!confirm(`Return device set assigned to ${patientId}?`)) return;
-  const ds = (_devAssign.deviceSets || []).find(d => d.assignedPatientId === patientId && d.status === 'assigned');
-  if (!ds) { showToast('No assigned device found', 'error'); return; }
-  try {
-    await fetch(`/devices/device_sets/${ds.id}/return`, { method: 'POST' });
-    if (ds.simNumber) {
-      const sim = _simData.find(s => s.phoneNumber === ds.simNumber);
-      if (sim) await fetch(`/sim_cards/${sim.id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assignedPatientId: null, status: 'active' })
-      });
-    }
-    showToast(`Device returned from ${patientId}`);
-    await Promise.all([_fetchAssignments(), _fetchSims()]);
-    _updateStats(); _renderDevicesCard(); _renderSimCard();
-  } catch(e) { showToast('Network error', 'error'); }
-}
-
-function _showDeviceSwapModal(patientId) {
-  const cur = _assignedDevSets()[patientId];
-  if (!cur) return;
-  const availSets = _availableConfigSets();
-  const availSims = _availableSims();
-  const setOpts = availSets.map(s => `<option value="${s.setId}">${s.setId} — P:${s.pluto} M:${s.mars}</option>`).join('');
-  const simOpts = availSims.map(s => `<option value="${s.phoneNumber}">${s.phoneNumber} (${s.network || '—'})</option>`).join('');
-
-  document.body.insertAdjacentHTML('beforeend', `
-    <div id="device-swap-modal" class="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6">
-        <div class="flex items-center justify-between mb-5">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center"><i class="fas fa-sync-alt text-amber-600"></i></div>
-            <div><h3 class="text-lg font-bold text-slate-800">Swap Device</h3><p class="text-xs text-slate-500">${patientId}</p></div>
-          </div>
-          <button onclick="document.getElementById('device-swap-modal').remove()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
-        </div>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">New Device Set</label>
-            <select id="swap-new-set" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-amber-400">
-              <option value="">— keep current set —</option>${setOpts}
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">New SIM Card</label>
-            <select id="swap-new-sim" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-amber-400">
-              <option value="">— keep current SIM (${cur.simNumber || 'none'}) —</option>${simOpts}
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Reason *</label>
-            <textarea id="swap-reason" rows="2" placeholder="e.g. Device malfunction..." class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-amber-400 resize-none"></textarea>
-          </div>
-          <div class="flex gap-3">
-            <button onclick="document.getElementById('device-swap-modal').remove()" class="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-slate-600 text-sm">Cancel</button>
-            <button onclick="_confirmDeviceSwap('${patientId}')" class="flex-1 px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold"><i class="fas fa-sync-alt mr-1.5"></i>Confirm Swap</button>
-          </div>
-        </div>
-      </div>
-    </div>`);
-}
-
-async function _confirmDeviceSwap(patientId) {
-  const newSetId  = document.getElementById('swap-new-set')?.value;
-  const newSimNum = document.getElementById('swap-new-sim')?.value;
-  const reason    = document.getElementById('swap-reason')?.value?.trim();
-  if (!reason) { showToast('Please enter a reason', 'error'); return; }
-
-  const cur = _assignedDevSets()[patientId];
-  if (!cur) { showToast('No current assignment found', 'error'); return; }
-
-  try {
-    await fetch(`/devices/device_sets/${cur.id}/return`, { method: 'POST' });
-
-    if (newSetId) {
-      await fetch('/devices/assign_from_config', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ place: _currentPlace, patientId, setId: newSetId, simNumber: newSimNum || cur.simNumber || null })
-      });
-
-      const oldCfg = _devConfig[cur.assignedDeviceSetId || cur.setNumber] || {};
-      const newCfg = _devConfig[newSetId] || {};
-      for (const [dt, ov, nv] of [['pluto',oldCfg.pluto,newCfg.pluto],['mars',oldCfg.mars,newCfg.mars],['laptop',oldCfg.laptop,newCfg.laptop],['modem',oldCfg.modem,newCfg.modem]]) {
-        if (ov !== nv) {
-          await fetch('/devices/swap', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ patientId, deviceType: dt, oldDeviceId: ov || '—', newDeviceId: nv || '—', reason, date: new Date().toISOString().split('T')[0] })
-          });
-        }
-      }
-    }
-
-    if (newSimNum && newSimNum !== cur.simNumber) {
-      if (cur.simNumber) {
-        const oldSim = _simData.find(s => s.phoneNumber === cur.simNumber);
-        if (oldSim) await fetch(`/sim_cards/${oldSim.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assignedPatientId: null, status: 'active' }) });
-      }
-      const newSim = _simData.find(s => s.phoneNumber === newSimNum);
-      if (newSim) await fetch(`/sim_cards/${newSim.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assignedPatientId: patientId, status: 'assigned' }) });
-      await fetch('/devices/swap', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patientId, deviceType: 'sim', oldDeviceId: cur.simNumber || '—', newDeviceId: newSimNum, reason, date: new Date().toISOString().split('T')[0] })
-      });
-    }
-
-    document.getElementById('device-swap-modal')?.remove();
-    showToast('Device swap recorded');
-    if (typeof logActivity === 'function') logActivity('DEVICE_SWAP', { patientId, newSetId, reason });
-    await Promise.all([_fetchAssignments(), _fetchSims()]);
-    _updateStats(); _renderDevicesCard(); _renderSimCard();
-  } catch(e) { showToast('Network error', 'error'); }
-}
-
-// ── CARD 2: Watches ───────────────────────────────────────────
-function _renderWatchesCard() {
-  const container = document.getElementById('watch-assignment-table');
-  if (!container) return;
-
-  const patients = _activeAll();
-  const assigned = _assignedWatches();
-  const avail    = _availableWatches();
-  const watchOpts = avail.map(w => `<option value="${w.id}">${w.name} — L:${w.leftSerial} R:${w.rightSerial}</option>`).join('');
-
-  if (patients.length === 0) {
-    container.innerHTML = `<div class="text-center py-10 text-slate-400"><i class="fas fa-users text-3xl mb-2 block opacity-30"></i>No active patients</div>`;
-    return;
-  }
-
-  const expPats  = patients.filter(p => p.role?.toLowerCase() === 'experimental');
-  const ctrlPats = patients.filter(p => p.role?.toLowerCase() === 'control');
-
-  const row = (p) => {
-    const w = assigned[p.HospitalID];
-    const rc = p.role?.toLowerCase() === 'experimental' ? 'blue' : 'violet';
-    if (w) return `
-      <div class="flex items-center justify-between gap-3 p-3 bg-white border border-slate-100 rounded-xl flex-wrap" id="watch-row-${p.HospitalID}">
-        <div class="flex items-center gap-2.5">
-          <div class="w-8 h-8 rounded-lg bg-${rc}-100 flex items-center justify-center shrink-0"><span class="text-${rc}-700 font-bold text-xs">${p.HospitalID.slice(0,2)}</span></div>
-          <div><p class="font-semibold text-slate-800 text-sm">${p.HospitalID}</p><p class="text-xs text-slate-400 capitalize">${p.role}</p></div>
-        </div>
-        <div class="flex gap-2 text-xs">
-          <span class="px-2 py-1 bg-purple-50 text-purple-700 rounded-lg font-mono">L: ${w.leftSerial}</span>
-          <span class="px-2 py-1 bg-purple-50 text-purple-700 rounded-lg font-mono">R: ${w.rightSerial}</span>
-        </div>
-        <div class="flex gap-2">
-          <button onclick="_showWatchSwapModal('${p.HospitalID}')" class="px-3 py-1.5 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 font-medium"><i class="fas fa-sync-alt mr-1"></i>Swap</button>
-          <button onclick="_returnWatch('${p.HospitalID}')" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100 font-medium"><i class="fas fa-undo mr-1"></i>Return</button>
-        </div>
-      </div>`;
-    return `
-      <div class="flex items-center justify-between gap-3 p-3 bg-slate-50 border border-dashed border-slate-200 rounded-xl flex-wrap" id="watch-row-${p.HospitalID}">
-        <div class="flex items-center gap-2.5">
-          <div class="w-8 h-8 rounded-lg bg-${rc}-50 flex items-center justify-center shrink-0"><span class="text-${rc}-400 font-bold text-xs">${p.HospitalID.slice(0,2)}</span></div>
-          <div><p class="font-semibold text-slate-600 text-sm">${p.HospitalID}</p><p class="text-xs text-slate-400 capitalize">${p.role} · No watch</p></div>
-        </div>
-        <div class="flex items-center gap-2">
-          <select id="watch-sel-${p.HospitalID}" class="px-2 py-1.5 text-sm border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-purple-400">
-            <option value="">— select watch pair —</option>${watchOpts || '<option disabled>No watches available</option>'}
-          </select>
-          <button onclick="_assignWatch('${p.HospitalID}')" class="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-semibold whitespace-nowrap"><i class="fas fa-link mr-1"></i>Assign</button>
-        </div>
-      </div>`;
   };
 
-  let html = '';
-  if (expPats.length) html += `<div class="mb-4"><div class="flex items-center gap-2 mb-2"><div class="h-px flex-1 bg-blue-100"></div><span class="text-xs font-bold text-blue-500 uppercase tracking-wider px-2"><i class="fas fa-robot mr-1"></i>Experimental (${expPats.length})</span><div class="h-px flex-1 bg-blue-100"></div></div><div class="space-y-2">${expPats.map(row).join('')}</div></div>`;
-  if (ctrlPats.length) html += `<div><div class="flex items-center gap-2 mb-2"><div class="h-px flex-1 bg-violet-100"></div><span class="text-xs font-bold text-violet-500 uppercase tracking-wider px-2"><i class="fas fa-user-check mr-1"></i>Control (${ctrlPats.length})</span><div class="h-px flex-1 bg-violet-100"></div></div><div class="space-y-2">${ctrlPats.map(row).join('')}</div></div>`;
-  container.innerHTML = html || `<div class="text-center py-6 text-slate-400">No active patients</div>`;
+  document.getElementById('clinic-modal').classList.remove('hidden');
 }
 
-async function _assignWatch(patientId) {
-  const watchId = document.getElementById(`watch-sel-${patientId}`)?.value;
-  if (!watchId) { showToast('Please select a watch pair', 'error'); return; }
+function closeClinicModal() {
+  document.getElementById('clinic-modal').classList.add('hidden');
+}
+
+async function saveClinicToggle() {
+  const device_id = document.getElementById('clinic-device-select').value;
+  if (!device_id) { _setError('clinic-modal-error', 'Please select a device.'); return; }
+
+  const devices = _inventory?.[_clinicType] || [];
+  const d = devices.find(x => x.id === device_id);
+  if (!d) return;
+
+  _setError('clinic-modal-error', '');
   try {
-    const r = await fetch(`/devices/watches/${watchId}/assign`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ patientId })
+    const r = await fetch('/devices/api/toggle-clinic', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: _clinicType, device_id }),
     });
-    const d = await r.json();
-    if (d.status !== 'success') { showToast(d.message || 'Failed', 'error'); return; }
-    showToast(`Watch assigned to ${patientId}`);
-    if (typeof logActivity === 'function') logActivity('ASSIGNED_WATCH', { patientId, watchId });
-    await _fetchAssignments(); _updateStats(); _renderWatchesCard();
-  } catch(e) { showToast('Network error', 'error'); }
+    const res = await r.json();
+    if (res.error) { _setError('clinic-modal-error', res.error); return; }
+    closeClinicModal();
+    showToast(res.clinic_only ? 'Marked as clinic-only' : 'Marked as available', 'success');
+    await _refreshInventory();
+  } catch (e) {
+    _setError('clinic-modal-error', 'Network error — please try again.');
+  }
 }
 
-async function _returnWatch(patientId) {
-  if (!confirm(`Return watch assigned to ${patientId}?`)) return;
-  const w = _assignedWatches()[patientId];
-  if (!w) { showToast('No assigned watch', 'error'); return; }
-  try {
-    await fetch(`/devices/watches/${w.id}/return`, { method: 'POST' });
-    showToast(`Watch returned from ${patientId}`);
-    await _fetchAssignments(); _updateStats(); _renderWatchesCard();
-  } catch(e) { showToast('Network error', 'error'); }
-}
+// ── Issue Report Modal ────────────────────────────────────────
 
-function _showWatchSwapModal(patientId) {
-  const cur = _assignedWatches()[patientId];
-  if (!cur) return;
-  const avail = _availableWatches();
-  const opts  = avail.map(w => `<option value="${w.id}">${w.name} — L:${w.leftSerial} R:${w.rightSerial}</option>`).join('');
-  document.body.insertAdjacentHTML('beforeend', `
-    <div id="watch-swap-modal" class="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-        <div class="flex items-center justify-between mb-5">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center"><i class="fas fa-sync-alt text-purple-600"></i></div>
-            <div><h3 class="text-lg font-bold text-slate-800">Swap Watch</h3><p class="text-xs text-slate-500">${patientId} · L:${cur.leftSerial} R:${cur.rightSerial}</p></div>
-          </div>
-          <button onclick="document.getElementById('watch-swap-modal').remove()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
-        </div>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">New Watch Pair *</label>
-            <select id="watch-swap-new" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-purple-400">
-              <option value="">— select new watch pair —</option>${opts || '<option disabled>No other watches</option>'}
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Swap Date</label>
-            <input type="date" id="watch-swap-date" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Reason *</label>
-            <textarea id="watch-swap-reason" rows="2" placeholder="e.g. Battery low, strap damaged..." class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm resize-none"></textarea>
-          </div>
-          <div class="flex gap-3">
-            <button onclick="document.getElementById('watch-swap-modal').remove()" class="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-slate-600 text-sm">Cancel</button>
-            <button onclick="_confirmWatchSwap('${patientId}')" class="flex-1 px-4 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-semibold"><i class="fas fa-sync-alt mr-1.5"></i>Confirm Swap</button>
-          </div>
-        </div>
-      </div>
-    </div>`);
-  document.getElementById('watch-swap-date').valueAsDate = new Date();
-}
+let _issueType = null;
 
-async function _confirmWatchSwap(patientId) {
-  const newWatchId = document.getElementById('watch-swap-new')?.value;
-  const swapDate   = document.getElementById('watch-swap-date')?.value;
-  const reason     = document.getElementById('watch-swap-reason')?.value?.trim();
-  if (!newWatchId) { showToast('Please select a new watch pair', 'error'); return; }
-  if (!reason)     { showToast('Please enter a reason', 'error'); return; }
-  const cur = _assignedWatches()[patientId];
-  if (!cur) { showToast('No current watch found', 'error'); return; }
-  try {
-    await fetch(`/devices/watches/${cur.id}/return`, { method: 'POST' });
-    await fetch(`/devices/watches/${newWatchId}/assign`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ patientId })
+function openIssueModal(type) {
+  _issueType = type;
+  const labels = { pluto: 'Pluto', mars: 'Mars', agwatch: 'Agwatch' };
+  document.getElementById('issue-modal-title').textContent = `Report / Resolve Issue — ${labels[type] || type}`;
+  _setError('issue-modal-error', '');
+  document.getElementById('issue-device-info').classList.add('hidden');
+  document.getElementById('issue-swap-section').classList.add('hidden');
+  document.getElementById('issue-notes').value = '';
+
+  const sel = document.getElementById('issue-device-select');
+  sel.innerHTML = '<option value="">Select device…</option>';
+
+  const devices = type === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[type] || []);
+  // Show ALL devices (not just those with issues) so we can also resolve
+  if (type === 'agwatch') {
+    // Split into Left / Right optgroups
+    [['Right', 'Right Watch'], ['Left', 'Left Watch']].forEach(([limb, label]) => {
+      const group = document.createElement('optgroup');
+      group.label = label;
+      devices.filter(d => !d.lost && (d.assigned_to?.limb || d.limb_default || '').toLowerCase() === limb.toLowerCase())
+        .forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.id;
+          const hasIssue = d.has_issue;
+          opt.textContent = hasIssue ? `${d.id} — Has Issue` : `${d.id} — OK`;
+          group.appendChild(opt);
+        });
+      if (group.children.length) sel.appendChild(group);
     });
-    await fetch('/add-swap-watch', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        homerID: patientId,
-        swapWatchRecord: {
-          date: swapDate || new Date().toISOString().split('T')[0],
-          reason,
-          previousWatchId: cur.id,
-          previousLeft: cur.leftSerial,
-          previousRight: cur.rightSerial,
-          newWatchId,
-          timestamp: new Date().toISOString()
-        }
-      })
+  } else {
+    devices.filter(d => !d.lost).forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      const hasIssue = d.faulty || d.has_issue;
+      opt.textContent = hasIssue ? `${d.id} — Has Issue` : `${d.id} — OK`;
+      sel.appendChild(opt);
     });
-    document.getElementById('watch-swap-modal')?.remove();
-    showToast('Watch swap recorded');
-    if (typeof logActivity === 'function') logActivity('WATCH_SWAP', { patientId, newWatchId, reason });
-    await _fetchAssignments(); _updateStats(); _renderWatchesCard();
-  } catch(e) { showToast('Network error', 'error'); }
+  }
+
+  document.getElementById('issue-modal').classList.remove('hidden');
 }
 
-// ── CARD 3: SIM Cards ─────────────────────────────────────────
-function _renderSimCard() {
-  const tbody = document.getElementById('sim-list-full');
-  if (!tbody) return;
-  if (!_simData.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="py-6 text-center text-slate-400">No SIM cards added yet</td></tr>';
+function closeIssueModal() {
+  document.getElementById('issue-modal').classList.add('hidden');
+}
+
+function onIssueDeviceChange() {
+  const type    = _issueType;
+  const sel     = document.getElementById('issue-device-select');
+  const devices = type === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[type] || []);
+  const d = devices.find(x => x.id === sel.value);
+
+  const infoEl  = document.getElementById('issue-device-info');
+  const swapEl  = document.getElementById('issue-swap-section');
+  const saveBtn = document.getElementById('issue-save-btn');
+
+  if (!d) {
+    infoEl.classList.add('hidden');
+    swapEl.classList.add('hidden');
     return;
   }
-  const today = new Date();
-  const patMap = {};
-  (_devAssign.deviceSets || []).forEach(ds => { if (ds.assignedPatientId && ds.simNumber) patMap[ds.simNumber] = ds.assignedPatientId; });
 
-  tbody.innerHTML = _simData.map(sim => {
-    const assignedTo = patMap[sim.phoneNumber] || sim.assignedPatientId || null;
-    let badge = '<span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700 font-medium">Available</span>';
-    if (assignedTo) {
-      badge = `<span class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 font-medium">Assigned · ${assignedTo}</span>`;
-    } else if (sim.expiryDate) {
-      const days = Math.ceil((new Date(sim.expiryDate) - today) / 86400000);
-      if (days < 0)       badge = '<span class="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-medium">Expired</span>';
-      else if (days <= 7) badge = '<span class="px-2 py-1 text-xs rounded-full bg-orange-100 text-orange-700 font-medium">Expiring Soon</span>';
-    }
-    return `<tr class="border-b border-slate-100 hover:bg-slate-50">
-      <td class="py-3 px-2 font-mono text-sm font-medium">${sim.phoneNumber || '—'}</td>
-      <td class="py-3 px-2 text-sm">${sim.network || '—'}</td>
-      <td class="py-3 px-2 text-sm text-slate-500">${assignedTo || '—'}</td>
-      <td class="py-3 px-2 text-sm">${sim.rechargeDate || '—'}</td>
-      <td class="py-3 px-2 text-sm">${sim.expiryDate || '—'}</td>
-      <td class="py-3 px-2">${badge}</td>
-      <td class="py-3 px-2">
-        <button onclick="showEditSimModal('${sim.id}')" class="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-medium mr-1"><i class="fas fa-edit mr-1"></i>Edit</button>
-        <button onclick="deleteSim('${sim.id}')" class="px-2 py-1 text-xs bg-red-50 text-red-700 rounded-lg hover:bg-red-100 font-medium"><i class="fas fa-trash"></i></button>
-      </td>
-    </tr>`;
-  }).join('');
-}
+  const hasIssue = d.faulty || d.has_issue;
 
-// ── Modals ────────────────────────────────────────────────────
-function showAddWatchModal() {
-  document.body.insertAdjacentHTML('beforeend', `
-    <div id="watch-modal" class="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-bold text-slate-800">Add ActiGraph Watch Pair</h3>
-          <button onclick="document.getElementById('watch-modal').remove()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
-        </div>
-        <form id="watch-form" class="space-y-4">
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Watch Name *</label><input type="text" id="watch-name" required class="w-full px-3 py-2 border border-slate-200 rounded-lg" placeholder="e.g., Watch 1"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Left Serial *</label><input type="text" id="watch-left-serial" required class="w-full px-3 py-2 border border-slate-200 rounded-lg"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Right Serial *</label><input type="text" id="watch-right-serial" required class="w-full px-3 py-2 border border-slate-200 rounded-lg"></div>
-          <div class="flex items-center gap-2"><input type="checkbox" id="watch-backup" class="w-4 h-4 accent-purple-600"><label for="watch-backup" class="text-sm text-slate-600">Is Backup Watch</label></div>
-          <div class="flex gap-3 pt-2">
-            <button type="button" onclick="document.getElementById('watch-modal').remove()" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50">Cancel</button>
-            <button type="submit" class="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">Save</button>
-          </div>
-        </form>
-      </div>
-    </div>`);
-}
+  // Show status info
+  infoEl.classList.remove('hidden');
+  infoEl.innerHTML = `
+    <div>Status: ${hasIssue ? '<strong class="text-red-600">Has Issue</strong>' : '<strong class="text-green-600">OK</strong>'}</div>
+    ${d.assigned_to ? `<div>Assigned to: <strong>${_esc(d.assigned_to.homerID)}</strong></div>` : '<div>Not assigned</div>'}`;
 
-function showAddSimModal() {
-  document.body.insertAdjacentHTML('beforeend', `
-    <div id="sim-modal" class="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-bold text-slate-800">Add SIM Card</h3>
-          <button onclick="document.getElementById('sim-modal').remove()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
-        </div>
-        <form id="sim-form" class="space-y-4">
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Phone Number *</label><input type="text" id="sim-phone" required class="w-full px-3 py-2 border border-slate-200 rounded-lg"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Network *</label>
-            <select id="sim-network" required class="w-full px-3 py-2 border border-slate-200 rounded-lg">
-              <option value="">Select network</option>
-              <option>Airtel</option><option>Jio</option><option>Vodafone Idea</option><option>BSNL</option>
-            </select>
-          </div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Recharge Date</label><input type="date" id="sim-recharge-date" class="w-full px-3 py-2 border border-slate-200 rounded-lg" onchange="calculateSimExpiry()"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Data Plan</label>
-            <select id="sim-data-plan" class="w-full px-3 py-2 border border-slate-200 rounded-lg" onchange="calculateSimExpiry()">
-              <option value="">Select plan</option><option value="28">28 Days</option><option value="56">56 Days</option><option value="84">84 Days</option><option value="365">365 Days</option>
-            </select>
-          </div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Expiry Date</label><input type="date" id="sim-expiry-date" class="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-50" readonly></div>
-          <div class="flex gap-3 pt-2">
-            <button type="button" onclick="document.getElementById('sim-modal').remove()" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600">Cancel</button>
-            <button type="submit" class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Save SIM</button>
-          </div>
-        </form>
-      </div>
-    </div>`);
-}
+  if (hasIssue) {
+    saveBtn.textContent = 'Resolve Issue';
+    saveBtn.className = 'px-5 py-2 text-sm font-semibold text-white bg-green-600 rounded-xl hover:bg-green-700 active:scale-95 transition-all';
+    swapEl.classList.add('hidden');
+  } else {
+    saveBtn.textContent = 'Report Issue';
+    saveBtn.className = 'px-5 py-2 text-sm font-semibold text-white bg-red-600 rounded-xl hover:bg-red-700 active:scale-95 transition-all';
 
-function calculateSimExpiry() {
-  const rd = document.getElementById('sim-recharge-date')?.value;
-  const pd = document.getElementById('sim-data-plan')?.value;
-  const ei = document.getElementById('sim-expiry-date');
-  if (rd && pd && ei) { const d = new Date(rd); d.setDate(d.getDate() + parseInt(pd)); ei.value = d.toISOString().split('T')[0]; }
-}
-
-async function showEditSimModal(simId) {
-  await _fetchSims();
-  const sim = _simData.find(s => s.id === simId);
-  if (!sim) { showToast('SIM not found', 'error'); return; }
-  document.body.insertAdjacentHTML('beforeend', `
-    <div id="edit-sim-modal" class="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-bold text-slate-800">Edit SIM Card</h3>
-          <button onclick="document.getElementById('edit-sim-modal').remove()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
-        </div>
-        <form id="edit-sim-form" class="space-y-4">
-          <input type="hidden" id="edit-sim-id" value="${sim.id}">
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Phone Number</label><input type="text" id="edit-sim-phone" value="${sim.phoneNumber || ''}" class="w-full px-3 py-2 border border-slate-200 rounded-lg"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Network</label>
-            <select id="edit-sim-network" class="w-full px-3 py-2 border border-slate-200 rounded-lg">
-              ${['Airtel','Jio','Vodafone Idea','BSNL'].map(n => `<option${sim.network===n?' selected':''}>${n}</option>`).join('')}
-            </select>
-          </div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Recharge Date</label><input type="date" id="edit-sim-recharge" value="${sim.rechargeDate || ''}" class="w-full px-3 py-2 border border-slate-200 rounded-lg"></div>
-          <div><label class="block text-sm font-medium text-slate-700 mb-1">Expiry Date</label><input type="date" id="edit-sim-expiry" value="${sim.expiryDate || ''}" class="w-full px-3 py-2 border border-slate-200 rounded-lg"></div>
-          <div class="flex gap-3 pt-2">
-            <button type="button" onclick="document.getElementById('edit-sim-modal').remove()" class="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-slate-600">Cancel</button>
-            <button type="submit" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save</button>
-          </div>
-        </form>
-      </div>
-    </div>`);
-}
-
-async function deleteSim(simId) {
-  if (!confirm('Delete this SIM card?')) return;
-  try {
-    const r = await fetch(`/sim_cards/${simId}`, { method: 'DELETE' });
-    const d = await r.json();
-    if (d.status === 'success') { showToast('SIM deleted'); await _fetchSims(); _renderSimCard(); }
-    else showToast(d.message || 'Failed', 'error');
-  } catch(e) { showToast('Network error', 'error'); }
-}
-
-// ── Form submissions ──────────────────────────────────────────
-document.addEventListener('submit', async function(e) {
-  if (e.target.id === 'watch-form') {
-    e.preventDefault();
-    const r = await fetch('/devices/watches', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: document.getElementById('watch-name').value, leftSerial: document.getElementById('watch-left-serial').value, rightSerial: document.getElementById('watch-right-serial').value, isBackup: document.getElementById('watch-backup').checked }) });
-    const d = await r.json();
-    if (d.status === 'success') { document.getElementById('watch-modal').remove(); showToast('Watch added'); await _fetchAssignments(); _updateStats(); _renderWatchesCard(); }
-    else showToast(d.message || 'Error', 'error');
-  }
-  if (e.target.id === 'sim-form') {
-    e.preventDefault();
-    const r = await fetch('/sim_cards/', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phoneNumber: document.getElementById('sim-phone').value, network: document.getElementById('sim-network').value, rechargeDate: document.getElementById('sim-recharge-date').value, expiryDate: document.getElementById('sim-expiry-date').value, dataPlan: document.getElementById('sim-data-plan').value }) });
-    const d = await r.json();
-    if (d.status === 'success') { document.getElementById('sim-modal').remove(); showToast('SIM added'); await _fetchSims(); _renderDevicesPage(); }
-    else showToast(d.message || 'Error', 'error');
-  }
-  if (e.target.id === 'edit-sim-form') {
-    e.preventDefault();
-    const simId = document.getElementById('edit-sim-id').value;
-    const r = await fetch(`/sim_cards/${simId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phoneNumber: document.getElementById('edit-sim-phone').value, network: document.getElementById('edit-sim-network').value, rechargeDate: document.getElementById('edit-sim-recharge').value, expiryDate: document.getElementById('edit-sim-expiry').value }) });
-    const d = await r.json();
-    if (d.status === 'success') { document.getElementById('edit-sim-modal').remove(); showToast('SIM updated'); await _fetchSims(); _renderSimCard(); }
-    else showToast(d.message || 'Error', 'error');
-  }
-});
-
-// ── Shared utilities ──────────────────────────────────────────
-async function loadDroppedOutPatients() {
-  try {
-    droppedOutPatients = new Set();
-    const r = await fetch('/patient_events/dropped_patients');
-    const d = await r.json();
-    if (d.status === 'success' && d.droppedPatients) {
-      d.droppedPatients.forEach(id => {
-        const pt = allPatients.find(p => p.HospitalID === id);
-        const role = (pt?.role || '').toLowerCase().trim();
-        if (!pt || (role !== '' && role !== 'unassigned')) droppedOutPatients.add(id);
+    // If device is assigned, offer swap (only show available devices)
+    if (d.assigned_to) {
+      swapEl.classList.remove('hidden');
+      const allDevices = type === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[type] || []);
+      const swapSel = document.getElementById('issue-swap-select');
+      swapSel.innerHTML = '<option value="">No swap — just mark as issue</option>';
+      allDevices.forEach(av => {
+        if (av.id === d.id) return;
+        if (av.assigned_to || av.faulty || av.has_issue || av.clinic_only || av.lost) return;
+        const opt = document.createElement('option');
+        opt.value = av.id;
+        opt.textContent = `${av.id} (${av.serial || 'no serial'})`;
+        swapSel.appendChild(opt);
       });
+    } else {
+      swapEl.classList.add('hidden');
     }
-    const el = document.getElementById('count-dropped');
-    if (el) el.textContent = droppedOutPatients.size;
-  } catch(e) {}
-  try {
-    trialCompletedPatients = new Set();
-    const r = await fetch('/patient_events/trial_completed_patients');
-    const d = await r.json();
-    if (d.status === 'success' && d.completedPatients) d.completedPatients.forEach(id => trialCompletedPatients.add(id));
-  } catch(e) {}
+  }
 }
 
-function loadDevices()  {}
-function loadSimCount() { fetch('/sim_cards/').then(r=>r.json()).then(d=>{ const e=document.getElementById('sim-total-count'); if(e) e.textContent=(d.sims||[]).length; }).catch(()=>{}); }
-function loadSimsPage() { _renderSimCard(); }
-function showAddDeviceSetModal() { showToast('Device sets load from location config — no manual entry needed', 'info'); }
-function showAddDeviceModal() { showAddDeviceSetModal(); }
+async function saveIssueAction() {
+  const device_id = document.getElementById('issue-device-select').value;
+  if (!device_id) { _setError('issue-modal-error', 'Please select a device.'); return; }
+
+  const devices = _issueType === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[_issueType] || []);
+  const d = devices.find(x => x.id === device_id);
+  if (!d) return;
+
+  const hasIssue = d.faulty || d.has_issue;
+  const notes    = (document.getElementById('issue-notes').value || '').trim();
+  _setError('issue-modal-error', '');
+
+  // Resolving issue
+  if (hasIssue) {
+    try {
+      const r = await fetch('/devices/api/toggle-issue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_type: _issueType, device_id, has_issue: false, notes }),
+      });
+      const res = await r.json();
+      if (res.error) { _setError('issue-modal-error', res.error); return; }
+      closeIssueModal();
+      showToast('Issue resolved', 'success');
+      await _refreshInventory();
+    } catch (e) {
+      _setError('issue-modal-error', 'Network error — please try again.');
+    }
+    return;
+  }
+
+  // Reporting issue — check if swap requested
+  const swapTo = document.getElementById('issue-swap-select')?.value || '';
+
+  if (swapTo && d.assigned_to) {
+    // Swap: marks old device faulty AND reassigns patient to new device
+    try {
+      const r = await fetch('/devices/api/swap-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_type: _issueType, old_device_id: device_id, new_device_id: swapTo, notes }),
+      });
+      const res = await r.json();
+      if (res.error) { _setError('issue-modal-error', res.error); return; }
+      closeIssueModal();
+      showToast(`Issue reported; ${res.homer_id || 'patient'} swapped to ${swapTo}`, 'success');
+      await _refreshInventory();
+    } catch (e) {
+      _setError('issue-modal-error', 'Network error — please try again.');
+    }
+  } else {
+    // Just mark issue, no swap
+    try {
+      const r = await fetch('/devices/api/toggle-issue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_type: _issueType, device_id, has_issue: true, notes }),
+      });
+      const res = await r.json();
+      if (res.error) { _setError('issue-modal-error', res.error); return; }
+      closeIssueModal();
+      showToast('Issue reported', 'error');
+      await _refreshInventory();
+    } catch (e) {
+      _setError('issue-modal-error', 'Network error — please try again.');
+    }
+  }
+}
+
+// ── Add Device Modal (Pluto / Mars) ───────────────────────────
+
+let _addDeviceType = 'pluto';
+
+function openAddDeviceModal(type) {
+  _addDeviceType = type;
+  const labels = { pluto: 'Pluto', mars: 'Mars' };
+  document.getElementById('add-device-title').textContent = `Add ${labels[type] || type} Device`;
+  document.getElementById('add-device-id').value     = '';
+  document.getElementById('add-device-serial').value = '';
+  _setError('add-device-error', '');
+  document.getElementById('add-device-modal').classList.remove('hidden');
+}
+
+function closeAddDeviceModal() {
+  document.getElementById('add-device-modal').classList.add('hidden');
+}
+
+async function saveNewDevice() {
+  const id     = document.getElementById('add-device-id').value.trim();
+  const serial = document.getElementById('add-device-serial').value.trim();
+  if (!id)     { _setError('add-device-error', 'Device ID is required.'); return; }
+  if (!serial) { _setError('add-device-error', 'Serial number is required.'); return; }
+  _setError('add-device-error', '');
+  try {
+    const r = await fetch('/devices/api/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: _addDeviceType, id, serial }),
+    });
+    const d = await r.json();
+    if (d.error) { _setError('add-device-error', d.error); return; }
+    closeAddDeviceModal();
+    showToast(`Device ${id} added`, 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('add-device-error', 'Network error — please try again.'); }
+}
+
+// ── Add Watch Modal ───────────────────────────────────────────
+
+let _watchLimb = 'Right';
+
+function openAddWatchModal(limb) {
+  _watchLimb = limb;
+  document.getElementById('add-watch-title').textContent = `Add ${limb} Watch`;
+  document.getElementById('add-watch-limb').value  = limb;
+  document.getElementById('add-watch-id').value    = '';
+  document.getElementById('add-watch-serial').value = '';
+  _setError('add-watch-error', '');
+  document.getElementById('add-watch-modal').classList.remove('hidden');
+}
+
+function closeAddWatchModal() {
+  document.getElementById('add-watch-modal').classList.add('hidden');
+}
+
+async function saveNewWatch() {
+  const id     = document.getElementById('add-watch-id').value.trim();
+  const serial = document.getElementById('add-watch-serial').value.trim();
+  if (!id)     { _setError('add-watch-error', 'Device ID is required.'); return; }
+  if (!serial) { _setError('add-watch-error', 'Serial number is required.'); return; }
+  _setError('add-watch-error', '');
+  try {
+    const r = await fetch('/devices/api/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: 'agwatch', id, serial, limb_default: _watchLimb }),
+    });
+    const d = await r.json();
+    if (d.error) { _setError('add-watch-error', d.error); return; }
+    closeAddWatchModal();
+    showToast(`Watch ${id} added`, 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('add-watch-error', 'Network error — please try again.'); }
+}
+
+// ── Add Modem Modal ───────────────────────────────────────────
+
+function openAddModemModal() {
+  document.getElementById('add-modem-id').value     = '';
+  document.getElementById('add-modem-serial').value = '';
+  _setError('add-modem-error', '');
+  const sel = document.getElementById('add-modem-sim');
+  sel.innerHTML = '<option value="">None</option>';
+  const linkedSimIds = new Set((_inventory?.modems || []).filter(m => m.sim_id).map(m => m.sim_id));
+  for (const s of (_inventory?.sims || [])) {
+    if (!linkedSimIds.has(s.id)) {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = `${s.network || '?'} — ${s.phoneNumber || s.id}`;
+      sel.appendChild(opt);
+    }
+  }
+  document.getElementById('add-modem-modal').classList.remove('hidden');
+}
+
+function closeAddModemModal() {
+  document.getElementById('add-modem-modal').classList.add('hidden');
+}
+
+async function saveNewModem() {
+  const id     = document.getElementById('add-modem-id').value.trim();
+  const serial = document.getElementById('add-modem-serial').value.trim();
+  const sim_id = document.getElementById('add-modem-sim').value.trim() || null;
+  if (!id)     { _setError('add-modem-error', 'Modem ID is required.'); return; }
+  if (!serial) { _setError('add-modem-error', 'Serial number is required.'); return; }
+  _setError('add-modem-error', '');
+  try {
+    const r = await fetch('/devices/api/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: 'modem', id, serial, sim_id }),
+    });
+    const d = await r.json();
+    if (d.error) { _setError('add-modem-error', d.error); return; }
+    closeAddModemModal();
+    showToast(`Modem ${id} added`, 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('add-modem-error', 'Network error — please try again.'); }
+}
+
+// ── Add SIM Modal ─────────────────────────────────────────────
+
+function openAddSimModal() {
+  document.getElementById('add-sim-phone').value    = '';
+  document.getElementById('add-sim-network').value  = '';
+  document.getElementById('add-sim-recharge').value = '';
+  document.getElementById('add-sim-plan').value     = '';
+  document.getElementById('add-sim-expiry').value   = '';
+  document.getElementById('add-sim-expiry').readOnly = false;
+  document.getElementById('add-sim-expiry-note').textContent = '';
+  document.getElementById('add-sim-reminder').value = '5';
+  _setError('add-sim-error', '');
+  document.getElementById('add-sim-modal').classList.remove('hidden');
+}
+
+function closeAddSimModal() {
+  document.getElementById('add-sim-modal').classList.add('hidden');
+}
+
+function _addDays(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+function onSimRechargeChange() {
+  const plan = document.getElementById('add-sim-plan').value;
+  if (plan && plan !== 'custom') {
+    const recharge = document.getElementById('add-sim-recharge').value;
+    if (recharge) {
+      document.getElementById('add-sim-expiry').value = _addDays(recharge, parseInt(plan));
+    }
+  }
+}
+
+function onSimPlanChange() {
+  const plan = document.getElementById('add-sim-plan').value;
+  const expiryInput = document.getElementById('add-sim-expiry');
+  const note = document.getElementById('add-sim-expiry-note');
+  if (!plan || plan === 'custom') {
+    expiryInput.readOnly = false;
+    expiryInput.classList.remove('bg-slate-100');
+    note.textContent = '';
+  } else {
+    expiryInput.readOnly = true;
+    expiryInput.classList.add('bg-slate-100');
+    note.textContent = '(auto-computed)';
+    const recharge = document.getElementById('add-sim-recharge').value;
+    if (recharge) {
+      expiryInput.value = _addDays(recharge, parseInt(plan));
+    }
+  }
+}
+
+async function saveNewSim() {
+  const phone    = document.getElementById('add-sim-phone').value.trim();
+  const network  = document.getElementById('add-sim-network').value.trim();
+  const recharge = document.getElementById('add-sim-recharge').value;
+  const expiry   = document.getElementById('add-sim-expiry').value;
+  const plan     = document.getElementById('add-sim-plan').value;
+  const reminder = parseInt(document.getElementById('add-sim-reminder').value) || 5;
+
+  if (!phone) { _setError('add-sim-error', 'Phone number is required.'); return; }
+  _setError('add-sim-error', '');
+  try {
+    const r = await fetch('/devices/api/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device_type:  'sim',
+        phoneNumber:  phone,
+        network,
+        rechargeDate: recharge || null,
+        expiryDate:   expiry   || null,
+        dataPlan:     (plan && plan !== 'custom') ? plan : null,
+        reminderDays: reminder,
+      }),
+    });
+    const d = await r.json();
+    if (d.error) { _setError('add-sim-error', d.error); return; }
+    closeAddSimModal();
+    showToast(`SIM ${phone} added`, 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('add-sim-error', 'Network error — please try again.'); }
+}
+
+// ── Add Laptop Modal ──────────────────────────────────────────
+
+function openAddLaptopModal() {
+  document.getElementById('add-laptop-id').value     = '';
+  document.getElementById('add-laptop-serial').value = '';
+  _setError('add-laptop-error', '');
+  document.getElementById('add-laptop-modal').classList.remove('hidden');
+}
+
+function closeAddLaptopModal() {
+  document.getElementById('add-laptop-modal').classList.add('hidden');
+}
+
+async function saveNewLaptop() {
+  const id     = document.getElementById('add-laptop-id').value.trim();
+  const serial = document.getElementById('add-laptop-serial').value.trim();
+  if (!id)     { _setError('add-laptop-error', 'Laptop ID is required.'); return; }
+  if (!serial) { _setError('add-laptop-error', 'Serial number is required.'); return; }
+  _setError('add-laptop-error', '');
+  try {
+    const r = await fetch('/devices/api/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: 'laptop', id, serial }),
+    });
+    const d = await r.json();
+    if (d.error) { _setError('add-laptop-error', d.error); return; }
+    closeAddLaptopModal();
+    showToast(`Laptop ${id} added`, 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('add-laptop-error', 'Network error — please try again.'); }
+}
+
+// ── Link SIM Modal ────────────────────────────────────────────
+
+let _linkSimModemId = null;
+
+function openLinkSimModal(modemId) {
+  _linkSimModemId = modemId;
+  document.getElementById('link-sim-modem-label').textContent = modemId;
+  _setError('link-sim-error', '');
+  const modem = (_inventory?.modems || []).find(m => m.id === modemId);
+  const currentSimId = modem?.sim_id || null;
+  // SIMs already linked to other modems (that are assigned to a patient) are excluded
+  const assignedModemIds = new Set(
+    (_inventory?.modems || []).filter(m => m.assigned_to && m.id !== modemId).map(m => m.id)
+  );
+  const linkedSimIds = new Set(
+    (_inventory?.modems || [])
+      .filter(m => m.sim_id && m.id !== modemId && assignedModemIds.has(m.id))
+      .map(m => m.sim_id)
+  );
+  const sel = document.getElementById('link-sim-select');
+  sel.innerHTML = '<option value="">None (unlink)</option>';
+  for (const s of (_inventory?.sims || [])) {
+    if (!linkedSimIds.has(s.id) || s.id === currentSimId) {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = `${s.network || '?'} — ${s.phoneNumber || s.id}`;
+      if (s.id === currentSimId) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+  document.getElementById('link-sim-modal').classList.remove('hidden');
+}
+
+function closeLinkSimModal() {
+  document.getElementById('link-sim-modal').classList.add('hidden');
+}
+
+async function saveLinkSim() {
+  const sim_id = document.getElementById('link-sim-select').value.trim() || null;
+  _setError('link-sim-error', '');
+  try {
+    const r = await fetch('/devices/api/link-sim', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modem_id: _linkSimModemId, sim_id }),
+    });
+    const d = await r.json();
+    if (d.error) { _setError('link-sim-error', d.error); return; }
+    closeLinkSimModal();
+    showToast(sim_id ? 'SIM linked' : 'SIM unlinked', 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('link-sim-error', 'Network error — please try again.'); }
+}
+
+// ── Assign / Unassign Modem / Laptop ─────────────────────────
+
+let _assignDeviceType = null;
+let _assignDeviceId   = null;
+
+function openAssignModal(type, deviceId) {
+  _assignDeviceType = type;
+  _assignDeviceId   = deviceId;
+  document.getElementById('assign-device-label').textContent = `${type.charAt(0).toUpperCase() + type.slice(1)} ${deviceId}`;
+  document.getElementById('assign-patient-search').value = '';
+  _setError('assign-modal-error', '');
+
+  const sel = document.getElementById('assign-homer-select');
+  sel.innerHTML = '';
+
+  // Exclude patients already assigned to this device type
+  const assignedHomerIds = new Set(
+    (_inventory?.[type === 'modem' ? 'modems' : 'laptops'] || [])
+      .filter(d => d.assigned_to && d.id !== deviceId)
+      .map(d => d.assigned_to.homerID)
+  );
+
+  const patients = (_inventory?.patients || []).filter(p => !assignedHomerIds.has(p.homerID));
+  if (!patients.length) {
+    const opt = document.createElement('option');
+    opt.disabled = true;
+    opt.textContent = 'No eligible patients';
+    sel.appendChild(opt);
+  } else {
+    patients.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.homerID;
+      opt.textContent = `${p.homerID} — ${p.hospitalID}`;
+      sel.appendChild(opt);
+    });
+  }
+
+  document.getElementById('assign-modal').classList.remove('hidden');
+}
+
+function filterAssignPatients() {
+  const q = document.getElementById('assign-patient-search').value.toLowerCase();
+  const sel = document.getElementById('assign-homer-select');
+  for (const opt of sel.options) {
+    opt.hidden = q ? !opt.textContent.toLowerCase().includes(q) : false;
+  }
+}
+
+function closeAssignModal() {
+  document.getElementById('assign-modal').classList.add('hidden');
+}
+
+async function saveAssignDevice() {
+  const homer_id = (document.getElementById('assign-homer-select').value || '').trim();
+  if (!homer_id) { _setError('assign-modal-error', 'Please select a patient.'); return; }
+  _setError('assign-modal-error', '');
+  try {
+    const r = await fetch('/devices/api/assign-device', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: _assignDeviceType, device_id: _assignDeviceId, homer_id }),
+    });
+    const res = await r.json();
+    if (res.error) { _setError('assign-modal-error', res.error); return; }
+    closeAssignModal();
+    showToast('Device assigned', 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('assign-modal-error', 'Network error — please try again.'); }
+}
+
+async function unassignDevice(type, deviceId) {
+  if (!confirm(`Return ${type} ${deviceId} from patient?`)) return;
+  try {
+    const r = await fetch('/devices/api/unassign-device', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: type, device_id: deviceId }),
+    });
+    const res = await r.json();
+    if (res.error) { showToast(res.error, 'error'); return; }
+    showToast('Device returned to available', 'success');
+    await _refreshInventory();
+  } catch (e) { showToast('Network error — please try again.', 'error'); }
+}
+
+// ── UI helpers ────────────────────────────────────────────────
+
+function _showLoading(show) {
+  document.getElementById('devices-loading').classList.toggle('hidden', !show);
+  document.getElementById('devices-error').classList.add('hidden');
+}
+
+function _showError(msg) {
+  document.getElementById('devices-loading').classList.add('hidden');
+  document.getElementById('devices-error').classList.remove('hidden');
+  document.getElementById('devices-error-msg').textContent = msg;
+}
+
+function _setError(elId, msg) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (msg) { el.textContent = msg; el.classList.remove('hidden'); }
+  else     { el.classList.add('hidden'); }
+}
+
+function _esc(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function showToast(message, type = 'info') {
+  const colours = { success: 'bg-green-600', error: 'bg-red-600', info: 'bg-blue-600' };
+  const icons   = { success: 'fa-check-circle', error: 'fa-exclamation-circle', info: 'fa-info-circle' };
+  const toast = document.createElement('div');
+  toast.className = `fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg text-white text-sm font-medium ${colours[type] || colours.info} transition-all duration-300 opacity-0 translate-y-2`;
+  toast.innerHTML = `<i class="fas ${icons[type] || icons.info}"></i><span>${_esc(message)}</span>`;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.remove('opacity-0', 'translate-y-2'));
+  setTimeout(() => {
+    toast.classList.add('opacity-0', 'translate-y-2');
+    setTimeout(() => toast.remove(), 300);
+  }, 3500);
+}
+
+// ── Close modals on backdrop click ────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+  [
+    ['add-device-modal', closeAddDeviceModal],
+    ['clinic-modal',     closeClinicModal],
+    ['issue-modal',      closeIssueModal],
+    ['add-watch-modal',  closeAddWatchModal],
+    ['add-modem-modal',  closeAddModemModal],
+    ['add-sim-modal',    closeAddSimModal],
+    ['add-laptop-modal', closeAddLaptopModal],
+    ['link-sim-modal',   closeLinkSimModal],
+  ].forEach(([id, fn]) => {
+    document.getElementById(id)?.addEventListener('click', e => {
+      if (e.target === e.currentTarget) fn();
+    });
+  });
+});
