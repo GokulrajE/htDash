@@ -1,0 +1,377 @@
+# htDash — Device Data Schemas
+
+---
+
+## Folder Structure
+
+All device data lives under `data/<hospital>/devices/`.
+
+```
+data/<hospital>/devices/
+├── inventory/
+│   ├── pluto.json
+│   ├── mars.json
+│   ├── agwatch.json
+│   ├── modems.json
+│   ├── laptops.json
+│   └── sims.json
+├── assignments/
+│   ├── pluto.json
+│   ├── mars.json
+│   ├── agwatch.json
+│   ├── modems.json
+│   └── laptops.json
+└── logs/
+    ├── pluto/
+    │   └── <device_id>.log
+    ├── mars/
+    │   └── <device_id>.log
+    ├── agwatch/
+    │   └── <device_id>.log
+    ├── modems/
+    │   └── <device_id>.log
+    └── laptops/
+        └── <device_id>.log
+```
+
+---
+
+## Device States
+
+State is always **derived** — never stored directly. Derivation order (highest priority first):
+
+| State | Badge | Condition |
+|-------|-------|-----------|
+| **Issue** | red | `faulty=true` (pluto/mars) or `has_issue=true` (agwatch) |
+| **Assigned** | blue | Active assignment record exists (`returned_date=null`) |
+| **Clinic** | gray | `clinic_only=true`, no active assignment |
+| **Available** | green | None of the above |
+
+---
+
+## Inventory Files
+
+### `inventory/pluto.json` and `inventory/mars.json`
+
+```json
+{
+  "devices": [
+    {
+      "id": "PLT-001",
+      "serial": "PLT2024001",
+      "clinic_only": false,
+      "faulty": false,
+      "inclusion_date": "2024-01-15",
+      "removal_date": null
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique device identifier (e.g. `PLT-001`, `MRS-001`) |
+| `serial` | string | Physical serial number |
+| `clinic_only` | boolean | `true` = device reserved for in-clinic sessions; not assignable to patients |
+| `faulty` | boolean | `true` = device has a reported fault; overrides all other states |
+| `inclusion_date` | `YYYY-MM-DD` | Date added to inventory |
+| `removal_date` | `YYYY-MM-DD` or `null` | Date permanently removed; `null` = still in service |
+
+**Notes:**
+- Only one pluto and one mars device can be `clinic_only=true` at a time (enforced server-side).
+- A device with `removal_date` set is permanently retired and excluded from all lists.
+
+---
+
+### `inventory/agwatch.json`
+
+```json
+{
+  "devices": [
+    {
+      "id": "AGW-001",
+      "serial": "AGW2024001",
+      "limb_default": "Right",
+      "has_issue": false,
+      "inclusion_date": "2024-01-15",
+      "removal_date": null,
+      "lost_date": null
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique device identifier (e.g. `AGW-001`) |
+| `serial` | string | Physical serial number |
+| `limb_default` | `"Right"` or `"Left"` | Which arm this watch is designated for; determines display column |
+| `has_issue` | boolean | `true` = watch has a reported fault; overrides all other states |
+| `inclusion_date` | `YYYY-MM-DD` | Date added to inventory |
+| `removal_date` | `YYYY-MM-DD` or `null` | Date permanently removed; `null` = still in service |
+| `lost_date` | `YYYY-MM-DD` or `null` | Set when watch is confirmed lost; permanently retired |
+
+**Notes:**
+- A watch with `lost_date` set is excluded from all lists and cannot be re-assigned.
+- `limb_default` determines which column (Left / Right) the watch appears in on the devices page.
+
+---
+
+### `inventory/modems.json`
+
+```json
+{
+  "devices": [
+    {
+      "id": "MDM-001",
+      "serial": "MDM2024001",
+      "sim_id": "8920949d-84a4-485f-aee0-9db217db1b00",
+      "inclusion_date": "2024-01-15",
+      "removal_date": null
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique device identifier (e.g. `MDM-001`) |
+| `serial` | string | Physical serial number |
+| `sim_id` | UUID string or `null` | ID of the linked SIM card in `inventory/sims.json`; `null` = no SIM linked |
+| `inclusion_date` | `YYYY-MM-DD` | Date added to inventory |
+| `removal_date` | `YYYY-MM-DD` or `null` | Date permanently removed |
+
+**Notes:**
+- A SIM can only be linked to one modem at a time (enforced server-side).
+- SIM expiry is shown for all SIMs regardless of modem assignment status.
+
+---
+
+### `inventory/laptops.json`
+
+```json
+{
+  "devices": [
+    {
+      "id": "LPT-001",
+      "serial": "LPT2024001",
+      "inclusion_date": "2024-01-15",
+      "removal_date": null
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique device identifier (e.g. `LPT-001`) |
+| `serial` | string | Physical serial number |
+| `inclusion_date` | `YYYY-MM-DD` | Date added to inventory |
+| `removal_date` | `YYYY-MM-DD` or `null` | Date permanently removed |
+
+---
+
+## Assignment Files
+
+One file per device type. All assignment files share the same top-level key `"assignments"`.
+
+### `assignments/pluto.json` and `assignments/mars.json`
+
+```json
+{
+  "assignments": [
+    {
+      "id": "uuid",
+      "device_id": "PLT-001",
+      "homer_id": "HOCMCV002",
+      "assigned_date": "2026-04-08T09:00",
+      "returned_date": null,
+      "assigned_by": "RP-HS-ADMIN",
+      "notes": ""
+    }
+  ]
+}
+```
+
+### `assignments/agwatch.json`
+
+```json
+{
+  "assignments": [
+    {
+      "id": "uuid",
+      "device_id": "AGW-001",
+      "homer_id": "HOCMCV002",
+      "limb": "Right",
+      "assigned_date": "2026-04-08T09:00",
+      "returned_date": null,
+      "assigned_by": "RP-HS-ADMIN",
+      "notes": ""
+    }
+  ]
+}
+```
+
+### `assignments/modems.json` and `assignments/laptops.json`
+
+```json
+{
+  "assignments": [
+    {
+      "id": "uuid",
+      "device_id": "MDM-001",
+      "homer_id": "HOCMCV002",
+      "assigned_date": "2026-04-08T09:00",
+      "returned_date": null,
+      "assigned_by": "RP-HS-ADMIN"
+    }
+  ]
+}
+```
+
+### Assignment record fields
+
+| Field | Type | Present on | Description |
+|-------|------|------------|-------------|
+| `id` | UUID string | All | Unique record ID (absent on older records written before UUID was added) |
+| `device_id` | string | All | References `id` in the corresponding inventory file |
+| `homer_id` | string | All | Patient's Homer ID (`patient_id` in older records — both are accepted on read) |
+| `limb` | `"Right"` or `"Left"` | agwatch only | Which arm the watch was assigned to |
+| `assigned_date` | `YYYY-MM-DDTHH:MM` | All | When the assignment was created |
+| `returned_date` | `YYYY-MM-DDTHH:MM` or `null` | All | When the device was returned; `null` = assignment is active |
+| `assigned_by` | string | All | Login ID of the admin who created the assignment |
+| `notes` | string | pluto/mars | Optional notes entered at assignment time |
+
+**Active assignment:** `returned_date = null`. A device with any active assignment record is in the Assigned state.
+
+**28-day auto-reset (all device types):** On every `GET /devices/api/inventory` call, active assignments across all device types where the patient's `activationDate` is ≥ 28 days ago have `returned_date` set automatically. Assignment date is not used — the reset counts from the patient's activation. Devices with `faulty=true` (pluto/mars) or `has_issue=true` (agwatch) are skipped.
+
+---
+
+## `inventory/sims.json`
+
+```json
+{
+  "sims": [
+    {
+      "id": "8920949d-84a4-485f-aee0-9db217db1b00",
+      "phoneNumber": "9090909090",
+      "network": "jio",
+      "rechargeDate": "2026-04-07",
+      "expiryDate": "2026-05-07",
+      "rechargeAmount": null,
+      "dataPlan": "28",
+      "reminderDays": 5,
+      "status": "active",
+      "notes": "",
+      "createdAt": "2026-04-08T12:02:29"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID string | Unique SIM identifier; referenced by modem inventory via `sim_id` |
+| `phoneNumber` | string | SIM phone number |
+| `network` | string | Carrier name (e.g. `"jio"`, `"airtel"`) |
+| `rechargeDate` | `YYYY-MM-DD` or `null` | Date of most recent recharge |
+| `expiryDate` | `YYYY-MM-DD` or `null` | Date the current recharge expires |
+| `rechargeAmount` | number or `null` | Amount paid at last recharge |
+| `dataPlan` | string or `null` | Plan duration in days (e.g. `"28"`) |
+| `reminderDays` | integer | Days before expiry to start showing the amber warning banner |
+| `status` | `"active"` or `"inactive"` | Whether this SIM is in service |
+| `notes` | string | Free-text notes |
+| `createdAt` | ISO 8601 datetime | When this SIM record was created |
+
+**SIM expiry badge logic** (shown for all SIMs regardless of modem assignment status):
+
+| Condition | Badge |
+|-----------|-------|
+| `expiryDate` not set | — |
+| Expired | red "Expired" + Recharge button |
+| ≤ 3 days remaining | red "Expires in Xd" |
+| ≤ 5 days remaining | amber "Expires in Xd" |
+| Active | green with expiry date |
+
+An amber banner appears at the top of the Devices page if any SIM expires within `reminderDays` days.
+
+When `isExpired=true`, a **Recharge** button appears in the SIM row alongside the badge. Clicking it opens the Recharge SIM modal (fields: Recharge Date, Data Plan, Expiry Date auto-computed from plan). Calls `POST /devices/api/recharge-sim` (body: `{sim_id, rechargeDate, dataPlan, expiryDate}`).
+
+---
+
+## Device Log Files
+
+One log file per device, stored at `logs/<device_type>/<device_id>.log`.
+
+`<device_type>` is one of: `pluto`, `mars`, `agwatch`, `modems`, `laptops`.
+
+```
+:Location: Ranipet
+:DeviceId: AGR-88
+[2026-04-09T08:49:36]   RP-HS-ADMIN     #3    Added to inventory
+[2026-04-09T09:15:00]   RP-HS-ADMIN     #3    Assigned to HOCMCV002
+[2026-04-09T10:30:00]   RP-HS-ADMIN     #3    Issue reported; swapped to AGR-99 — Screen cracked
+[2026-04-09T11:00:00]   RP-HS-ADMIN     #3    Issue resolved
+```
+
+Example path: `logs/agwatch/AGR-88.log`
+
+**Header lines** (written once at creation):
+
+| Line | Content |
+|------|---------|
+| `:Location:` | Hospital display name |
+| `:DeviceId:` | Device ID matching the filename |
+
+**Log entry columns** (tab-separated):
+
+| Column | Content |
+|--------|---------|
+| Timestamp | `[YYYY-MM-DDTHH:MM:SS]` |
+| Login ID | The user who performed the action |
+| Session | `#<session_id>` |
+| Action | Free-text description |
+
+**Standard action strings:**
+
+| Action | Trigger |
+|--------|---------|
+| `Added to inventory` | Device added via Add modal |
+| `Assigned to <homer_id>` | Device assigned to patient (modem/laptop assign, or device swap — new device) |
+| `Returned from <homer_id>` | Device unassigned from patient |
+| `Issue reported` | `toggle-issue` called with `has_issue=true`; optional `— <notes>` appended |
+| `Issue resolved` | `toggle-issue` called with `has_issue=false`; optional `— <notes>` appended |
+| `Issue reported; swapped to <new_id>` | Old device log on swap; optional `— <notes>` appended |
+| `Assigned to <homer_id> (swap from <old_id>)` | New device log on swap; optional `— <notes>` appended |
+| `Set to clinic-only` | Admin toggled device to Clinic state |
+| `Cleared from clinic-only` | Admin cleared device from Clinic state |
+
+---
+
+## Field Naming: `homer_id` vs `patient_id`
+
+Assignment records written by the current codebase use `homer_id`. Older records (written before this convention was standardised) use `patient_id`. Both field names are accepted on read throughout `routes/devices.py`:
+
+```python
+homer_id = a.get('patient_id') or a.get('homer_id')
+```
+
+New records written by the API always use `homer_id`.
+
+---
+
+## API Endpoints
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/devices/page` | GET | Required | Render the devices HTML page |
+| `/devices/api/inventory` | GET | Required | Full inventory + assignments + SIMs; triggers 28-day auto-reset |
+| `/devices/api/add` | POST | Admin | Add a device or SIM to inventory |
+| `/devices/api/toggle-clinic` | POST | Admin | Toggle `clinic_only` on a pluto or mars device (one-per-type rule) |
+| `/devices/api/toggle-issue` | POST | Admin/Engineer | Mark or resolve a device issue; optional `notes` |
+| `/devices/api/swap-device` | POST | Admin/Engineer | Replace a faulty assigned device; patient follows to new device; swap recorded in device log entries |
+| `/devices/api/link-sim` | POST | Admin | Link or unlink a SIM to a modem |
+| `/devices/api/assign-device` | POST | Admin | Manually assign a modem or laptop to a patient |
+| `/devices/api/unassign-device` | POST | Admin | Return a modem or laptop from a patient |
+| `/devices/api/recharge-sim` | POST | Admin | Record a SIM recharge — updates rechargeDate, expiryDate, dataPlan |
