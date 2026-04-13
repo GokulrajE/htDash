@@ -23,6 +23,13 @@ from pathlib import Path
 from typing import Optional
 from config import Config
 
+if Config.USE_S3:
+    from utils.s3_store import (
+        s3_read_json, s3_write_json,
+        s3_read_text, s3_write_text, s3_append_text,
+        s3_list_immediate_folders, s3_key_exists,
+    )
+
 _PROTOCOL_PATH = Path(__file__).parent.parent / 'config' / 'study_protocol.json'
 _protocol_cache: dict = {}
 
@@ -102,6 +109,8 @@ def get_patients_path(hospital_folder: str) -> Path:
 
 def list_patient_ids(hospital_folder: str) -> list:
     """Return a list of patient_id strings (one per subfolder)."""
+    if Config.USE_S3:
+        return sorted(s3_list_immediate_folders(f"{hospital_folder}/patients"))
     path = get_patients_path(hospital_folder)
     if not path.exists():
         return []
@@ -110,6 +119,8 @@ def list_patient_ids(hospital_folder: str) -> list:
 
 def read_patient_meta(hospital_folder: str, patient_id: str) -> Optional[dict]:
     """Read <patient_id>.json for a single patient. Returns None if not found."""
+    if Config.USE_S3:
+        return s3_read_json(f"{hospital_folder}/patients/{patient_id}/{patient_id}.json")
     meta_path = get_patients_path(hospital_folder) / patient_id / f'{patient_id}.json'
     if not meta_path.exists():
         return None
@@ -196,6 +207,9 @@ def generate_homer_id(hospital_folder: str) -> str:
 
 def write_patient_meta(hospital_folder: str, patient_id: str, data: dict) -> None:
     """Write (create or update) <patient_id>.json for a patient atomically."""
+    if Config.USE_S3:
+        s3_write_json(f"{hospital_folder}/patients/{patient_id}/{patient_id}.json", data)
+        return
     patient_dir = get_patients_path(hospital_folder) / patient_id
     patient_dir.mkdir(parents=True, exist_ok=True)
     meta_path = patient_dir / f'{patient_id}.json'
@@ -217,10 +231,34 @@ def open_session(hospital_folder: str, user_id: str) -> int:
     """Write a new session row to dashboard/<user_id>.csv on login.
     Returns the new session_id.
     """
+    login_time = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    safe_id = _safe_id(user_id)
+
+    if Config.USE_S3:
+        key = f"{hospital_folder}/dashboard/{safe_id}.csv"
+        try:
+            existing = s3_read_text(key) or ''
+            if not existing:
+                header = (
+                    f':Location: {hospital_folder.capitalize()}\n'
+                    f':ID: {user_id}\n'
+                    'session_id,login_time,logout_time,logout_reason\n'
+                )
+                content = header + f'1,{login_time},null,null\n'
+                s3_write_text(key, content)
+                return 1
+            lines = existing.splitlines(keepends=True)
+            data_rows = [l for l in lines if l.strip() and not l.startswith(':') and not l.startswith('session_id')]
+            session_id = len(data_rows) + 1
+            s3_append_text(key, f'{session_id},{login_time},null,null\n')
+            return session_id
+        except Exception as e:
+            print(f'Warning: could not open session (S3): {e}')
+            return -1
+
     dashboard_dir = _dashboard_path(hospital_folder)
     dashboard_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = dashboard_dir / f'{_safe_id(user_id)}.csv'
-    login_time = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    csv_path = dashboard_dir / f'{safe_id}.csv'
 
     preheader = [
         f':Location: {hospital_folder.capitalize()}\n',
@@ -252,10 +290,31 @@ def open_session(hospital_folder: str, user_id: str) -> int:
 
 def close_session(hospital_folder: str, user_id: str, session_id: int, reason: str) -> None:
     """Update the open session row with logout_time and reason."""
-    csv_path = _dashboard_path(hospital_folder) / f'{_safe_id(user_id)}.csv'
+    logout_time = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    safe_id = _safe_id(user_id)
+
+    if Config.USE_S3:
+        key = f"{hospital_folder}/dashboard/{safe_id}.csv"
+        try:
+            existing = s3_read_text(key)
+            if not existing:
+                return
+            lines = existing.splitlines(keepends=True)
+            updated = []
+            for line in lines:
+                if not line.startswith(':') and not line.startswith('session_id') and line.strip():
+                    parts = line.strip().split(',')
+                    if len(parts) >= 4 and parts[0] == str(session_id) and parts[2] == 'null':
+                        line = f'{parts[0]},{parts[1]},{logout_time},{reason}\n'
+                updated.append(line)
+            s3_write_text(key, ''.join(updated))
+        except Exception as e:
+            print(f'Warning: could not close session (S3): {e}')
+        return
+
+    csv_path = _dashboard_path(hospital_folder) / f'{safe_id}.csv'
     if not csv_path.exists():
         return
-    logout_time = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     try:
         with open(csv_path, encoding='utf-8') as f:
             lines = f.readlines()
@@ -276,6 +335,13 @@ def close_session(hospital_folder: str, user_id: str, session_id: int, reason: s
 
 def create_patient_log(hospital_folder: str, homer_id: str) -> None:
     """Create <homer_id>.log with the two-line preheader. Called at enrollment."""
+    if Config.USE_S3:
+        key = f"{hospital_folder}/patients/{homer_id}/{homer_id}.log"
+        try:
+            s3_write_text(key, f':Location: {hospital_folder.capitalize()}\n:HomerId: {homer_id}\n')
+        except Exception as e:
+            print(f'Warning: could not create patient log (S3): {e}')
+        return
     log_path = get_patients_path(hospital_folder) / homer_id / f'{homer_id}.log'
     try:
         with open(log_path, 'w', encoding='utf-8') as f:
@@ -292,10 +358,17 @@ def write_patient_log(hospital_folder: str, homer_id: str, user_id: str,
     Format:
         [YYYY-MM-DD HH:MM:SS]   <user_id>    #<session_id>    <action> | <detail_file>
     """
-    log_path = get_patients_path(hospital_folder) / homer_id / f'{homer_id}.log'
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     detail = f' | {detail_file}' if detail_file else ''
     line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}{detail}\n'
+    if Config.USE_S3:
+        key = f"{hospital_folder}/patients/{homer_id}/{homer_id}.log"
+        try:
+            s3_append_text(key, line)
+        except Exception as e:
+            print(f'Warning: could not write patient log (S3): {e}')
+        return
+    log_path = get_patients_path(hospital_folder) / homer_id / f'{homer_id}.log'
     try:
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(line)
@@ -311,6 +384,9 @@ def _devices_path(hospital_folder: str) -> Path:
 
 def read_device_inventory(hospital_folder: str, device_type: str) -> list:
     """Return all device entries from inventory/<device_type>.json."""
+    if Config.USE_S3:
+        data = s3_read_json(f"{hospital_folder}/devices/inventory/{device_type}.json")
+        return (data or {}).get('devices', [])
     path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
     try:
         with open(path, encoding='utf-8') as f:
@@ -321,6 +397,9 @@ def read_device_inventory(hospital_folder: str, device_type: str) -> list:
 
 def read_device_assignments(hospital_folder: str, device_type: str) -> list:
     """Return all assignment records from assignments/<device_type>.json."""
+    if Config.USE_S3:
+        data = s3_read_json(f"{hospital_folder}/devices/assignments/{device_type}.json")
+        return (data or {}).get('assignments', [])
     path = _devices_path(hospital_folder) / 'assignments' / f'{device_type}.json'
     try:
         with open(path, encoding='utf-8') as f:
@@ -331,11 +410,56 @@ def read_device_assignments(hospital_folder: str, device_type: str) -> list:
 
 def write_device_assignments(hospital_folder: str, device_type: str, assignments: list) -> None:
     """Atomically overwrite assignments/<device_type>.json."""
+    if Config.USE_S3:
+        s3_write_json(f"{hospital_folder}/devices/assignments/{device_type}.json",
+                      {'assignments': assignments})
+        return
     path = _devices_path(hospital_folder) / 'assignments' / f'{device_type}.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp')
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump({'assignments': assignments}, f, indent=2)
     os.replace(tmp, path)
+
+
+def write_device_inventory(hospital_folder: str, device_type: str, data: dict) -> None:
+    """Atomically overwrite inventory/<device_type>.json."""
+    if Config.USE_S3:
+        s3_write_json(f"{hospital_folder}/devices/inventory/{device_type}.json", data)
+        return
+    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    tmp = path.with_suffix('.tmp')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+
+def read_sims(hospital_folder: str) -> list:
+    """Return all SIM cards from devices/inventory/sims.json."""
+    if Config.USE_S3:
+        data = s3_read_json(f"{hospital_folder}/devices/inventory/sims.json")
+        return (data or {}).get('sims', [])
+    path = _devices_path(hospital_folder) / 'inventory' / 'sims.json'
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.load(f).get('sims', [])
+    except Exception:
+        return []
+
+
+def write_sims(hospital_folder: str, sims: list) -> None:
+    """Atomically overwrite devices/inventory/sims.json."""
+    if Config.USE_S3:
+        s3_write_json(f"{hospital_folder}/devices/inventory/sims.json", {'sims': sims})
+        return
+    path = _devices_path(hospital_folder) / 'inventory' / 'sims.json'
+    tmp = path.with_suffix('.tmp')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'sims': sims}, f, indent=2)
+    os.replace(tmp, path)
+
 
 
 def get_available_devices(hospital_folder: str, device_type: str) -> list:
@@ -349,12 +473,25 @@ def get_available_devices(hospital_folder: str, device_type: str) -> list:
         and d.get('lost_date') is None
         and not d.get('clinic_only', False)
         and not d.get('faulty', False)
+        and not d.get('has_issue', False)
         and d['id'] not in assigned_ids
     ]
 
 
 def mark_device_faulty(hospital_folder: str, device_type: str, device_id: str) -> None:
     """Set faulty: true on a device inventory entry."""
+    if Config.USE_S3:
+        key = f"{hospital_folder}/devices/inventory/{device_type}.json"
+        try:
+            data = s3_read_json(key) or {'devices': []}
+            for d in data.get('devices', []):
+                if d['id'] == device_id:
+                    d['faulty'] = True
+                    break
+            s3_write_json(key, data)
+        except Exception as e:
+            print(f'Warning: could not mark device faulty (S3): {e}')
+        return
     path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
     try:
         with open(path, encoding='utf-8') as f:
@@ -373,6 +510,18 @@ def mark_device_faulty(hospital_folder: str, device_type: str, device_id: str) -
 
 def mark_device_not_faulty(hospital_folder: str, device_type: str, device_id: str) -> None:
     """Clear faulty flag on a device inventory entry (device declared repaired)."""
+    if Config.USE_S3:
+        key = f"{hospital_folder}/devices/inventory/{device_type}.json"
+        try:
+            data = s3_read_json(key) or {'devices': []}
+            for d in data.get('devices', []):
+                if d['id'] == device_id:
+                    d.pop('faulty', None)
+                    break
+            s3_write_json(key, data)
+        except Exception as e:
+            print(f'Warning: could not clear device faulty flag (S3): {e}')
+        return
     path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
     try:
         with open(path, encoding='utf-8') as f:
@@ -392,6 +541,18 @@ def mark_device_not_faulty(hospital_folder: str, device_type: str, device_id: st
 def mark_device_lost(hospital_folder: str, device_type: str,
                      device_id: str, lost_date: str) -> None:
     """Set lost_date on a device inventory entry (agwatch only)."""
+    if Config.USE_S3:
+        key = f"{hospital_folder}/devices/inventory/{device_type}.json"
+        try:
+            data = s3_read_json(key) or {'devices': []}
+            for d in data.get('devices', []):
+                if d['id'] == device_id:
+                    d['lost_date'] = lost_date
+                    break
+            s3_write_json(key, data)
+        except Exception as e:
+            print(f'Warning: could not mark device lost (S3): {e}')
+        return
     path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
     try:
         with open(path, encoding='utf-8') as f:
@@ -408,14 +569,33 @@ def mark_device_lost(hospital_folder: str, device_type: str,
         print(f'Warning: could not mark device lost: {e}')
 
 
+_LOG_TYPE_FOLDER = {
+    'pluto': 'pluto', 'mars': 'mars', 'agwatch': 'agwatch',
+    'modem': 'modems', 'modems': 'modems',
+    'laptop': 'laptops', 'laptops': 'laptops',
+}
+
+
 def write_device_log(hospital_folder: str, device_id: str, user_id: str,
-                     session_id: int, action: str) -> None:
-    """Append an entry to devices/logs/<device_id>.log, creating it if needed."""
-    logs_dir = _devices_path(hospital_folder) / 'logs'
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    log_path = logs_dir / f'{device_id}.log'
+                     session_id: int, action: str, device_type: str = '') -> None:
+    """Append an entry to devices/logs/<device_type>/<device_id>.log, creating it if needed."""
+    subfolder = _LOG_TYPE_FOLDER.get(device_type, 'misc')
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}\n'
+    if Config.USE_S3:
+        key = f"{hospital_folder}/devices/logs/{subfolder}/{device_id}.log"
+        try:
+            existing = s3_read_text(key)
+            if existing is None:
+                line = (f':Location: {hospital_folder.capitalize()}\n'
+                        f':DeviceId: {device_id}\n') + line
+            s3_append_text(key, line)
+        except Exception as e:
+            print(f'Warning: could not write device log (S3): {e}')
+        return
+    logs_dir = _devices_path(hospital_folder) / 'logs' / subfolder
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f'{device_id}.log'
     is_new = not log_path.exists()
     try:
         with open(log_path, 'a', encoding='utf-8') as f:
@@ -429,6 +609,9 @@ def write_device_log(hospital_folder: str, device_id: str, user_id: str,
 
 def read_fault_reports(hospital_folder: str, device_type: str) -> list:
     """Read fault reports for a device type from devices/fault_reports/<type>.json."""
+    if Config.USE_S3:
+        data = s3_read_json(f"{hospital_folder}/devices/fault_reports/{device_type}.json")
+        return (data or {}).get('fault_reports', [])
     path = _devices_path(hospital_folder) / 'fault_reports' / f'{device_type}.json'
     if not path.exists():
         return []
@@ -442,6 +625,10 @@ def read_fault_reports(hospital_folder: str, device_type: str) -> list:
 
 def write_fault_reports(hospital_folder: str, device_type: str, reports: list) -> None:
     """Write fault reports for a device type to devices/fault_reports/<type>.json."""
+    if Config.USE_S3:
+        s3_write_json(f"{hospital_folder}/devices/fault_reports/{device_type}.json",
+                      {'fault_reports': reports})
+        return
     path = _devices_path(hospital_folder) / 'fault_reports' / f'{device_type}.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp')
@@ -454,7 +641,11 @@ def write_fault_reports(hospital_folder: str, device_type: str, reports: list) -
 
 
 def create_patient_folders(hospital_folder: str, patient_id: str, group: str) -> None:
-    """Create the standard subfolder structure for a new patient."""
+    """Create the standard subfolder structure for a new patient.
+    No-op when USE_S3=True — S3 has no concept of empty folders.
+    """
+    if Config.USE_S3:
+        return
     base = get_patients_path(hospital_folder) / patient_id
     common = ['actigraphs', 'adl', 'attachments']
     experimental_only = ['pluto', 'mars']

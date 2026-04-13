@@ -29,6 +29,8 @@ HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managin
 |---|---|
 | `docs/data_schemas.md` | All data file schemas: patient JSON, protocol events, device files, logs |
 | `docs/pages.md` | URL structure, page specs, all actions and modals defined in one place |
+| `docs/devices.md` | Device state machine, assignment rules, clinic logic, SIM linkage, 28-day auto-reset |
+| `docs/device_data_schemas.md` | Detailed field-level schemas for all device inventory, assignment, SIM, and log files |
 
 ---
 
@@ -69,8 +71,8 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 18. ⬜ Adverse Event Clinical Visit modal (new)
 19. ⬜ Assessment modals (a1, a2)
 20. ⬜ Patient detail tab content — Call Logs, Adverse Events, Watch Records, Robot Issues (exp only)
-21. ⬜ Devices page
-22. ⬜ SIMs page
+21. ✅ Devices page — inventory, assignments, SIM management (integrated)
+22. ✅ SIM management — integrated into Devices page (no separate page)
 23. ⬜ Cleanup — remove old `dashboard.html` and unused JS
 24. ⬜ Test all routes and functionality
 25. ⬜ Merge to `main`
@@ -87,8 +89,8 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 | `routes/auth.py` | Login, logout, on-login checks |
 | `routes/dashboard.py` | Dashboard stats and events API |
 | `routes/user_management.py` | Patient CRUD, group assignment, patient events API |
-| `routes/devices.py` | Device page (stub) |
-| `routes/sim_cards.py` | SIM cards page (stub) |
+| `routes/devices.py` | Full device management: inventory, assignments, SIM cards, 28-day auto-reset, recharge |
+| `routes/sim_cards.py` | Legacy SIM blueprint (not used by the Devices page; SIMs managed via routes/devices.py) |
 | `utils/data_access.py` | Patient file I/O, hospital folder lookup, session logs |
 | `utils/protocol_events.py` | Protocol event file creation and date population |
 | `config/study_protocol.json` | Static protocol event definitions |
@@ -424,13 +426,13 @@ All 75 exercises now have YouTube URLs. Previously only `adl_1` had a URL; all o
 
 **Status:** ✅ Complete
 
-Exercise screenshots from `EXERCISE_SS/` folder now display in each exercise card before the YouTube QR code.
+Exercise screenshots display in each exercise card before the YouTube QR code. When `USE_S3=True`, images are fetched from S3 at `EXERCISE_SS/<subfolder>/<filename>`; when `USE_S3=False`, images are read from the local `EXERCISE_SS/` folder. Both `.png` and `.jpg` are supported — `.png` is tried first, falling back to `.jpg`.
 
 **Files Modified:**
 - `routes/user_management.py`:
   - Added `_EXERCISE_SS_PATH` constant pointing to `EXERCISE_SS/` folder
   - Added `_SCREENSHOT_MAP` dict: 75-entry mapping of exercise IDs → screenshot filenames
-  - Added `_make_screenshot_b64(exercise_id)` function to read images and return base64 encoded
+  - Added `_make_screenshot_b64(exercise_id)` function: tries `.png` then `.jpg`; reads from S3 (`EXERCISE_SS/<filename>`) when `USE_S3=True`, local path otherwise
   - Updated `api_prescription_pamphlet()` to add `screenshot` field to each exercise dict (both ADL and VCG)
 
 - `templates/prescription_pamphlet.html`:

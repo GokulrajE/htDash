@@ -43,6 +43,9 @@ class Config:
     
     # AWS
     BUCKET_NAME = 'homerclouds'
+    # Set USE_S3=true in production to store all data/ files in S3.
+    # Set USE_S3=false (default) for local development — data/ folder is used instead.
+    USE_S3 = os.environ.get('USE_S3', 'false').lower() == 'true'
     
     # Security
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'change-this-in-production'

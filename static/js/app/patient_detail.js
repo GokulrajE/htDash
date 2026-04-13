@@ -59,6 +59,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-pane').forEach(pane => {
     pane.classList.toggle('hidden', pane.id !== `tab-${tab}`);
   });
+  if (tab === 'devices')   loadDevicesTab();
   if (tab === 'adl')      loadAdlTab();
   if (tab === 'vcg')      loadVcgTab();
   if (tab === 'calls')         renderCallLogsTab();
@@ -2918,6 +2919,316 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
         ${generalNotes}
       </div>
     </div>`;
+}
+
+// ── Devices Tab (activity graph) ──────────────────────────────────────────────
+
+let _devicesTabLoaded = false;
+let _devicesCharts = {};  // device → Chart instance
+
+async function loadDevicesTab() {
+  if (_devicesTabLoaded) return;
+  _devicesTabLoaded = true;
+  const container = document.getElementById('devices-tab-content');
+  if (!container) return;
+
+  // Only show graph for experimental patients
+  if (patientData?.group !== 'experimental') {
+    container.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-slate-400">
+      <i class="fas fa-mobile-alt text-3xl mb-3"></i>
+      <p class="font-medium">No robot devices for control patients</p>
+    </div>`;
+    return;
+  }
+
+  await _renderDeviceGraphs(container);
+}
+
+async function _renderDeviceGraphs(container) {
+  container.innerHTML = `<div class="flex items-center justify-center py-12 text-slate-400">
+    <i class="fas fa-spinner fa-spin mr-2"></i><span>Loading device data…</span></div>`;
+
+  try {
+    const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/activity`);
+    const data = await res.json();
+    const hasData = data.pluto || data.mars;
+
+    const syncBtn = `<button onclick="_syncActivity()"
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-700 text-white rounded-lg hover:bg-slate-800 active:scale-95 transition-all">
+      <i class="fas fa-sync-alt text-[10px]"></i> Sync from S3
+    </button>`;
+
+    if (!hasData) {
+      container.innerHTML = `
+        <div class="flex items-center justify-end mb-4">${syncBtn}</div>
+        <div class="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-2xl border border-slate-200">
+          <i class="fas fa-chart-line text-4xl mb-4 opacity-40"></i>
+          <p class="font-semibold text-slate-500">No device data available yet</p>
+          <p class="text-sm mt-1 text-slate-400">Use "Sync from S3" to download the latest data.</p>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = `<div class="flex items-center justify-end mb-1">${syncBtn}</div>`;
+
+    const DEVICE_CFG = {
+      pluto: { label: 'Pluto',  color: '#2563eb', bg: '#eff6ff', accent: '#1d4ed8', iconColor: 'text-blue-600',  badgeBg: 'bg-blue-50',  badgeBorder: 'border-blue-200',  badgeText: 'text-blue-700'  },
+      mars:  { label: 'Mars',   color: '#059669', bg: '#f0fdf4', accent: '#047857', iconColor: 'text-emerald-600', badgeBg: 'bg-emerald-50', badgeBorder: 'border-emerald-200', badgeText: 'text-emerald-700' },
+    };
+
+    for (const [deviceKey, cfg] of Object.entries(DEVICE_CFG)) {
+      const d = data[deviceKey];
+      if (!d) continue;
+
+      // Stat: days with data, total minutes, avg
+      const actualDays = d.data.filter(v => v !== null && v > 0).length;
+      const totalMins  = d.data.reduce((s, v) => s + (v || 0), 0).toFixed(1);
+      const avgMins    = actualDays ? (totalMins / actualDays).toFixed(1) : '—';
+
+      // Prescribed mechanism chips
+      const mechChips = Object.entries(d.prescribed || {}).map(([mech, mins]) =>
+        `<div class="flex flex-col items-center px-3 py-2 rounded-xl border ${cfg.badgeBorder} ${cfg.badgeBg} min-w-[56px]">
+          <span class="text-[11px] font-bold ${cfg.badgeText} tracking-wide">${mech}</span>
+          <span class="text-base font-bold ${cfg.badgeText} leading-tight">${mins}</span>
+          <span class="text-[10px] text-slate-400 -mt-0.5">min/day</span>
+        </div>`
+      ).join('');
+
+      const mismatchBanner = d.mismatch ? `
+        <!-- Mismatch warning -->
+        <div class="flex items-start gap-3 px-6 py-3 bg-orange-50 border-b border-orange-200">
+          <i class="fas fa-exclamation-triangle text-orange-500 mt-0.5 shrink-0"></i>
+          <div>
+            <p class="text-sm font-semibold text-orange-800">Config date mismatch (${d.mismatch.diff_days > 0 ? '+' : ''}${d.mismatch.diff_days} day${Math.abs(d.mismatch.diff_days) !== 1 ? 's' : ''})</p>
+            <p class="text-xs text-orange-600 mt-0.5">Config StartDate: <strong>${d.mismatch.config_start}</strong> · Activation date: <strong>${d.mismatch.activation}</strong>. The graph window may not align with actual therapy dates.</p>
+          </div>
+        </div>` : '';
+
+      const card = document.createElement('div');
+      card.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
+      card.innerHTML = `
+        <!-- Card header -->
+        <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-100" style="background:${cfg.bg}">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center shadow-sm" style="background:${cfg.color}">
+            <i class="fas fa-robot text-white text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-slate-800">${cfg.label}</h3>
+            <p class="text-xs text-slate-500">${d.start_date} → ${d.end_date} &nbsp;·&nbsp; Training side: <strong>${d.training_side}</strong></p>
+          </div>
+          <div class="ml-auto flex items-center gap-4 text-right">
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Total</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${totalMins}<span class="text-xs font-normal text-slate-400 ml-0.5">min</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Avg/day</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${avgMins}<span class="text-xs font-normal text-slate-400 ml-0.5">min</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Active days</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${actualDays}<span class="text-xs font-normal text-slate-400 ml-0.5">/ 30</span></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Prescription row -->
+        <div class="px-6 py-4 border-b border-slate-100 bg-slate-50">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Prescribed Mechanisms</span>
+            <span class="text-xs text-slate-400">Daily target: <strong style="color:${cfg.color}">${d.target} min total</strong></span>
+          </div>
+          <div class="flex flex-wrap gap-2">${mechChips}</div>
+        </div>
+
+        ${mismatchBanner}
+
+        <!-- Chart -->
+        <div class="px-6 pt-5 pb-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Daily Activity</span>
+            <div class="flex items-center gap-4 text-xs text-slate-400">
+              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${cfg.color}"></span>Actual</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-0" style="border-top:2px dashed #f87171"></span>Target</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full border-2" style="background:${cfg.color};border-color:white;box-shadow:0 0 0 2px ${cfg.color}"></span>Click dot for breakdown</span>
+            </div>
+          </div>
+          <div style="position:relative;height:220px">
+            <canvas id="devices-chart-${deviceKey}"></canvas>
+          </div>
+        </div>
+
+        <!-- Breakdown panel (hidden until dot clicked) -->
+        <div id="devices-detail-${deviceKey}" class="hidden border-t border-slate-100"></div>`;
+
+      container.appendChild(card);
+
+      const ctx = document.getElementById(`devices-chart-${deviceKey}`).getContext('2d');
+      if (_devicesCharts[deviceKey]) _devicesCharts[deviceKey].destroy();
+
+      // Format labels as short dates for display
+      const shortLabels = d.labels.map(lbl => {
+        const dt = new Date(lbl);
+        return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+      });
+
+      _devicesCharts[deviceKey] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: shortLabels,
+          datasets: [
+            {
+              label: 'Session (min)',
+              data: d.data,
+              borderColor: cfg.color,
+              backgroundColor: cfg.color + '22',
+              borderWidth: 2.5,
+              pointRadius: d.labels.map(lbl => d.dates_with_data.includes(lbl) ? 5 : 3),
+              pointBackgroundColor: d.labels.map(lbl =>
+                d.dates_with_data.includes(lbl) ? cfg.color : cfg.color + '88'),
+              pointHoverRadius: 7,
+              fill: true,
+              tension: 0.3,
+              spanGaps: false,
+              order: 2,
+            },
+            {
+              label: 'Target',
+              data: d.labels.map(() => d.target),
+              borderColor: '#f87171',
+              borderDash: [6, 4],
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false,
+              tension: 0,
+              order: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              padding: 10,
+              titleFont: { size: 12 },
+              bodyFont: { size: 12 },
+              callbacks: {
+                title: items => d.labels[items[0].dataIndex],
+                label: c => c.dataset.label === 'Target'
+                  ? `  Target: ${c.parsed.y} min`
+                  : `  Actual: ${c.parsed.y !== null ? c.parsed.y + ' min' : 'No session'}`,
+                afterBody: items => {
+                  const lbl = d.labels[items[0].dataIndex];
+                  return d.dates_with_data.includes(lbl) ? ['  ↓ Click to see breakdown'] : [];
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 0 },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              ticks: { font: { size: 11 }, stepSize: 10 },
+              title: { display: true, text: 'Minutes', font: { size: 11 }, color: '#94a3b8' },
+            },
+          },
+          onClick: (evt, elements) => {
+            if (!elements.length) return;
+            const idx = elements[0].index;
+            const clickedDate = d.labels[idx];
+            if (!d.dates_with_data.includes(clickedDate)) return;
+            _loadDeviceDetail(clickedDate, deviceKey, cfg.label, cfg.color, shortLabels[idx]);
+          },
+        },
+      });
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="flex items-center justify-center py-12 text-red-500 text-sm gap-2">
+      <i class="fas fa-exclamation-circle"></i> Failed to load device data.
+    </div>`;
+  }
+}
+
+async function _syncActivity() {
+  const container = document.getElementById('devices-tab-content');
+  if (!container) return;
+  container.innerHTML = `<div class="flex items-center justify-center py-10 text-slate-400">
+    <i class="fas fa-sync-alt fa-spin mr-2"></i><span>Syncing from S3…</span></div>`;
+  try {
+    const r = await fetch(`/api/patients/${PATIENT_HOMER_ID}/sync-activity`, { method: 'POST' });
+    const res = await r.json();
+    if (!r.ok || res.error) {
+      container.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-slate-400">
+        <i class="fas fa-exclamation-circle text-2xl mb-3 text-red-400"></i>
+        <p class="text-sm text-red-500">${res.error || 'Sync failed'}</p>
+        <button onclick="_renderDeviceGraphs(document.getElementById('devices-tab-content'))"
+          class="mt-4 px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200">
+          Try viewing existing data
+        </button>
+      </div>`;
+      return;
+    }
+    _devicesTabLoaded = false;
+    Object.values(_devicesCharts).forEach(c => c.destroy());
+    _devicesCharts = {};
+    await _renderDeviceGraphs(container);
+  } catch (e) {
+    container.innerHTML = `<div class="flex items-center justify-center py-10 text-red-500 text-sm">
+      <i class="fas fa-exclamation-circle mr-2"></i>Network error during sync.
+    </div>`;
+  }
+}
+
+async function _loadDeviceDetail(date, deviceKey, deviceLabel, color) {
+  const panel = document.getElementById(`devices-detail-${deviceKey}`);
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  panel.innerHTML = `<div class="flex items-center justify-center py-6 text-slate-400 text-sm">
+    <i class="fas fa-spinner fa-spin mr-2"></i>Loading…</div>`;
+
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/activity/${date}/${deviceKey}`);
+    const d   = await res.json();
+    if (!res.ok || d.error) {
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${d.error || 'No data'}</p>`;
+      return;
+    }
+
+    const maxVal = Math.max(...d.durations, ...d.target, 1);
+    const bars = d.mechanisms.map((mech, i) => {
+      const used    = d.durations[i] || 0;
+      const tgt     = d.target[i]    || 0;
+      const pctUsed = Math.round((used / maxVal) * 100);
+      const pctTgt  = Math.round((tgt  / maxVal) * 100);
+      return `<div class="flex items-center gap-3">
+        <span class="w-14 text-right text-xs font-medium text-slate-600 shrink-0">${mech}</span>
+        <div class="flex-1 relative h-5 bg-slate-100 rounded-full overflow-hidden">
+          <div class="absolute inset-y-0 left-0 rounded-full" style="width:${pctUsed}%;background:${color}88"></div>
+          <div class="absolute inset-y-0 w-0.5 bg-red-400" style="left:${pctTgt}%"></div>
+        </div>
+        <span class="text-xs text-slate-500 w-28 shrink-0">${used} / ${tgt} min</span>
+      </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <div class="px-6 py-4">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-xs font-semibold text-slate-600">${deviceLabel} — ${date}</p>
+          <span class="text-xs text-slate-400">Bar = used &nbsp;|&nbsp; <span class="text-red-400 font-bold">|</span> = target</span>
+        </div>
+        <div class="space-y-2">${bars}</div>
+      </div>`;
+  } catch (e) {
+    panel.innerHTML = `<p class="text-sm text-red-400 text-center py-4">Failed to load breakdown.</p>`;
+  }
 }
 
 async function loadAdlTab() {
