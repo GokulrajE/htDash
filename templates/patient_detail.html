@@ -1307,11 +1307,7 @@
 <script>
 const PATIENT_HOMER_ID = {{ homer_id | tojson }};
 const PATIENT_PLACE = {{ place | tojson }};</script>
-<!-- For prescription printout PDF generation -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-
-
+<!-- PDF generation now uses server-side Puppeteer rendering (no client-side libraries needed) -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="{{ url_for('static', filename='js/app/patient_detail.js') }}?v={{ js_version }}"></script>
 {% endblock %}

@@ -798,6 +798,136 @@ def api_complete_prescription_printout(homer_id):
     return jsonify({'ok': True})
 
 
+@bp.route('/api/patients/<homer_id>/generate-prescription-pdf', methods=['POST'])
+def api_generate_prescription_pdf(homer_id):
+    """Generate prescription pamphlet PDF server-side using Puppeteer."""
+    import subprocess
+    import tempfile
+    import platform
+
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    data = request.get_json() or {}
+    event_id = data.get('event_id')
+    protocol_event_id = data.get('protocol_event_id', '')
+    language = data.get('language', 'english')
+    html_content = data.get('html_content', '')
+    caption = data.get('caption', '')
+
+    if not html_content:
+        return jsonify({'error': 'No HTML content provided'}), 400
+    if protocol_event_id not in _PRINTOUT_PDF_FILES:
+        return jsonify({'error': 'Invalid protocol event ID'}), 400
+    if not caption:
+        return jsonify({'error': 'Caption is required'}), 400
+
+    try:
+        # Create temporary files for HTML input and PDF output
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as html_file:
+            html_file.write(html_content)
+            html_input_path = html_file.name
+
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as pdf_file:
+            pdf_output_path = pdf_file.name
+
+        try:
+            # Get the path to the render_pdf.js script
+            script_path = Path(__file__).parent.parent / 'scripts' / 'render_pdf.js'
+
+            # Determine Node command based on OS
+            node_cmd = 'node.exe' if platform.system() == 'Windows' else 'node'
+
+            # Call Puppeteer script to render HTML to PDF
+            result = subprocess.run(
+                [node_cmd, str(script_path), html_input_path, pdf_output_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                return jsonify({
+                    'error': f'PDF rendering failed: {result.stderr}'
+                }), 500
+
+            # Read the generated PDF
+            with open(pdf_output_path, 'rb') as f:
+                pdf_bytes = f.read()
+
+            # Save PDF to patient folder (same location as upload-attachment)
+            pdf_rel_path = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+
+            if Config.USE_S3:
+                from utils.s3_store import s3_upload_bytes
+                s3_upload_bytes(
+                    f"{folder}/patients/{homer_id}/{pdf_rel_path}",
+                    pdf_bytes,
+                    content_type='application/pdf'
+                )
+            else:
+                pdf_full_path = get_patients_path(folder) / homer_id / pdf_rel_path
+                pdf_full_path.parent.mkdir(parents=True, exist_ok=True)
+                pdf_full_path.write_bytes(pdf_bytes)
+
+            # Mark event complete
+            events_data = read_protocol_events(folder, homer_id)
+            if not events_data:
+                return jsonify({'error': 'Protocol events not found'}), 404
+
+            incomplete = events_data.get('incomplete', [])
+            entry = next(
+                (e for e in incomplete
+                 if e.get('protocol_event_id') == protocol_event_id
+                 and (event_id is None or e.get('id') == event_id)),
+                None
+            )
+            if not entry:
+                return jsonify({'error': 'Event not found in incomplete list'}), 404
+
+            now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            complete_entry = {
+                **entry,
+                'completion_date': now,
+                'filed_at': now,
+                'attachment': pdf_rel_path,
+                'attachment_caption': caption,
+            }
+
+            events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+            events_data.setdefault('complete', []).append(complete_entry)
+
+            write_protocol_events(folder, homer_id, events_data)
+
+            # Log the event
+            loginid = flask_session.get('loginid', 'unknown')
+            session_id = flask_session.get('session_id', -1)
+            log_msg = (f'Prescription printout ({language}) generated and saved as PDF')
+            write_patient_log(folder, homer_id, loginid, session_id, log_msg)
+
+            return jsonify({'ok': True})
+
+        finally:
+            # Clean up temporary files
+            try:
+                os.unlink(html_input_path)
+            except:
+                pass
+            try:
+                os.unlink(pdf_output_path)
+            except:
+                pass
+
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'PDF rendering timed out'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
 @bp.route('/api/patients/<homer_id>/attachment/<path:rel_path>', methods=['GET'])
 def api_get_attachment(homer_id, rel_path):
     """Serve a file from the patient's attachments folder."""

@@ -3423,8 +3423,45 @@ async function savePrescriptionPrintout() {
 
   try {
     const previewDiv = document.getElementById('presc-printout-preview');
+    const htmlContent = previewDiv.innerHTML;
 
-    // Get jsPDF constructor
+    console.log('Sending HTML to server for server-side PDF rendering...');
+
+    // Send HTML to server for server-side PDF generation with Puppeteer
+    const { ok: renderOk, data: renderData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/generate-prescription-pdf`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+        html_content: htmlContent,
+        caption: `Exercise Prescription Printout (${_prescPrintoutLanguage})`
+      }
+    );
+
+    if (!renderOk) {
+      throw new Error(renderData.error || 'Failed to generate PDF');
+    }
+
+    console.log('✓ PDF generated and saved successfully');
+
+    // Success: close modal and refresh events
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to generate and save PDF');
+  } finally {
+    setLoading('prescription-printout-save', false);
+  }
+}
+
+/* OLD CLIENT-SIDE PDF CODE (DISABLED - using server-side rendering now)
+async function savePrescriptionPrintout_OLD() {
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor - DISABLED (old code below for reference)
     let jsPDFConstructor = null;
     if (window.jsPDF && typeof window.jsPDF === 'function') {
       jsPDFConstructor = window.jsPDF;
@@ -3470,93 +3507,8 @@ async function savePrescriptionPrintout() {
     previewDiv.style.overflowY = originalOverflow;
     previewDiv.style.height = originalHeight;
 
-    console.log('Content captured, creating PDF with page breaks...');
-
-    // Create PDF from canvas
-    const imgData = canvas.toDataURL('image/png');
-    const pdf = new jsPDFConstructor('p', 'mm', 'a4');
-    const imgWidth = 210;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    let heightLeft = imgHeight;
-    let position = 0;
-
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= 297;
-
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= 297;
-    }
-
-    // Convert PDF to blob
-    const pdfBlob = pdf.output('blob');
-
-    // Mark event complete FIRST (moves it from incomplete to complete)
-    console.log('Marking event as complete...');
-    const { ok: completeOk, data: completeData } = await apiPost(
-      `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
-      {
-        event_id: _prescPrintoutEventId,
-        protocol_event_id: _prescPrintoutProtocolId,
-        language: _prescPrintoutLanguage,
-      }
-    );
-
-    if (!completeOk) {
-      throw new Error(completeData.error || 'Failed to mark event complete');
-    }
-
-    console.log('✓ Event marked as complete');
-
-    // NOW upload the attachment (event is now in complete list)
-    console.log('Uploading PDF attachment...');
-    const formData = new FormData();
-    formData.append('event_id', _prescPrintoutEventId);
-    formData.append('caption', `Exercise Prescription Printout (${_prescPrintoutLanguage})`);
-    formData.append('file', pdfBlob, `prescription_${_prescPrintoutLanguage}.pdf`);
-
-    const uploadUrl = `/api/patients/${PATIENT_HOMER_ID}/upload-attachment`;
-    console.log('Upload details:', {
-      url: uploadUrl,
-      method: 'POST',
-      event_id: _prescPrintoutEventId,
-      file_size: pdfBlob.size,
-      file_type: pdfBlob.type
-    });
-
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'POST',
-      body: formData,
-    });
-
-    console.log('Upload response status:', uploadRes.status, uploadRes.statusText);
-
-    if (!uploadRes.ok) {
-      let errorMsg = 'Failed to upload attachment';
-      try {
-        const errorData = await uploadRes.json();
-        errorMsg = errorData.error || errorMsg;
-        console.error('Upload error details:', errorData);
-      } catch (e) {
-        console.error('Upload failed with status:', uploadRes.status, uploadRes.statusText);
-      }
-      throw new Error(errorMsg);
-    }
-
-    console.log('✓ PDF uploaded successfully');
-
-    // Success: close modal and refresh events
-    hideModal('prescription-printout-modal');
-    loadPatientEvents();
-
-  } catch (err) {
-    setError('prescription-printout-error', err.message || 'Failed to save PDF');
-  } finally {
-    setLoading('prescription-printout-save', false);
-  }
 }
+*/
 
 // ── Custom PDF Dialog Modal ────────────────────────────────────────
 
