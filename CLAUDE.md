@@ -573,3 +573,4 @@ Exercise cards now display in this order:
 - ✅ S3 cloud access: Now reads configdata.csv from S3 when data is synced
 - ✅ Handles missing files gracefully: Returns null instead of error
 - ✅ Works with both Pluto and Mars device folders
+
