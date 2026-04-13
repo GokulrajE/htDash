@@ -2762,6 +2762,11 @@ def api_upload_attachment(homer_id):
     friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
     print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
 
+  
+    # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
+    friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
+    print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
+
     # Stamp fields on the entry
     entry['attachment']         = pdf_path_mapping
     entry['attachment_caption'] = caption
