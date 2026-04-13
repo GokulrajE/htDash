@@ -436,11 +436,11 @@ def write_device_inventory(hospital_folder: str, device_type: str, data: dict) -
 
 
 def read_sims(hospital_folder: str) -> list:
-    """Return all SIM cards from devices/sims.json."""
+    """Return all SIM cards from devices/inventory/sims.json."""
     if Config.USE_S3:
-        data = s3_read_json(f"{hospital_folder}/devices/sims.json")
+        data = s3_read_json(f"{hospital_folder}/devices/inventory/sims.json")
         return (data or {}).get('sims', [])
-    path = _devices_path(hospital_folder) / 'sims.json'
+    path = _devices_path(hospital_folder) / 'inventory' / 'sims.json'
     try:
         with open(path, encoding='utf-8') as f:
             return json.load(f).get('sims', [])
@@ -449,42 +449,17 @@ def read_sims(hospital_folder: str) -> list:
 
 
 def write_sims(hospital_folder: str, sims: list) -> None:
-    """Atomically overwrite devices/sims.json."""
+    """Atomically overwrite devices/inventory/sims.json."""
     if Config.USE_S3:
-        s3_write_json(f"{hospital_folder}/devices/sims.json", {'sims': sims})
+        s3_write_json(f"{hospital_folder}/devices/inventory/sims.json", {'sims': sims})
         return
-    path = _devices_path(hospital_folder) / 'sims.json'
+    path = _devices_path(hospital_folder) / 'inventory' / 'sims.json'
     tmp = path.with_suffix('.tmp')
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump({'sims': sims}, f, indent=2)
     os.replace(tmp, path)
 
-
-def read_device_history(hospital_folder: str) -> list:
-    """Return device replacement history from devices/device_history.json."""
-    if Config.USE_S3:
-        data = s3_read_json(f"{hospital_folder}/devices/device_history.json")
-        return (data or {}).get('history', [])
-    path = _devices_path(hospital_folder) / 'device_history.json'
-    try:
-        with open(path, encoding='utf-8') as f:
-            return json.load(f).get('history', [])
-    except Exception:
-        return []
-
-
-def write_device_history(hospital_folder: str, history: list) -> None:
-    """Atomically overwrite devices/device_history.json."""
-    if Config.USE_S3:
-        s3_write_json(f"{hospital_folder}/devices/device_history.json", {'history': history})
-        return
-    path = _devices_path(hospital_folder) / 'device_history.json'
-    tmp = path.with_suffix('.tmp')
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump({'history': history}, f, indent=2)
-    os.replace(tmp, path)
 
 
 def get_available_devices(hospital_folder: str, device_type: str) -> list:
@@ -594,13 +569,21 @@ def mark_device_lost(hospital_folder: str, device_type: str,
         print(f'Warning: could not mark device lost: {e}')
 
 
+_LOG_TYPE_FOLDER = {
+    'pluto': 'pluto', 'mars': 'mars', 'agwatch': 'agwatch',
+    'modem': 'modems', 'modems': 'modems',
+    'laptop': 'laptops', 'laptops': 'laptops',
+}
+
+
 def write_device_log(hospital_folder: str, device_id: str, user_id: str,
-                     session_id: int, action: str) -> None:
-    """Append an entry to devices/logs/<device_id>.log, creating it if needed."""
+                     session_id: int, action: str, device_type: str = '') -> None:
+    """Append an entry to devices/logs/<device_type>/<device_id>.log, creating it if needed."""
+    subfolder = _LOG_TYPE_FOLDER.get(device_type, 'misc')
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}\n'
     if Config.USE_S3:
-        key = f"{hospital_folder}/devices/logs/{device_id}.log"
+        key = f"{hospital_folder}/devices/logs/{subfolder}/{device_id}.log"
         try:
             existing = s3_read_text(key)
             if existing is None:
@@ -610,7 +593,7 @@ def write_device_log(hospital_folder: str, device_id: str, user_id: str,
         except Exception as e:
             print(f'Warning: could not write device log (S3): {e}')
         return
-    logs_dir = _devices_path(hospital_folder) / 'logs'
+    logs_dir = _devices_path(hospital_folder) / 'logs' / subfolder
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / f'{device_id}.log'
     is_new = not log_path.exists()

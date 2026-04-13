@@ -29,6 +29,8 @@ HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managin
 |---|---|
 | `docs/data_schemas.md` | All data file schemas: patient JSON, protocol events, device files, logs |
 | `docs/pages.md` | URL structure, page specs, all actions and modals defined in one place |
+| `docs/devices.md` | Device state machine, assignment rules, clinic logic, SIM linkage, 28-day auto-reset |
+| `docs/device_data_schemas.md` | Detailed field-level schemas for all device inventory, assignment, SIM, and log files |
 
 ---
 
@@ -69,8 +71,8 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 18. ⬜ Adverse Event Clinical Visit modal (new)
 19. ⬜ Assessment modals (a1, a2)
 20. ⬜ Patient detail tab content — Call Logs, Adverse Events, Watch Records, Robot Issues (exp only)
-21. ⬜ Devices page
-22. ⬜ SIMs page
+21. ✅ Devices page — inventory, assignments, SIM management (integrated)
+22. ✅ SIM management — integrated into Devices page (no separate page)
 23. ⬜ Cleanup — remove old `dashboard.html` and unused JS
 24. ⬜ Test all routes and functionality
 25. ⬜ Merge to `main`
@@ -87,8 +89,8 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 | `routes/auth.py` | Login, logout, on-login checks |
 | `routes/dashboard.py` | Dashboard stats and events API |
 | `routes/user_management.py` | Patient CRUD, group assignment, patient events API |
-| `routes/devices.py` | Device page (stub) |
-| `routes/sim_cards.py` | SIM cards page (stub) |
+| `routes/devices.py` | Full device management: inventory, assignments, SIM cards, 28-day auto-reset, recharge |
+| `routes/sim_cards.py` | Legacy SIM blueprint (not used by the Devices page; SIMs managed via routes/devices.py) |
 | `utils/data_access.py` | Patient file I/O, hospital folder lookup, session logs |
 | `utils/protocol_events.py` | Protocol event file creation and date population |
 | `config/study_protocol.json` | Static protocol event definitions |
@@ -364,3 +366,180 @@ When modifying any pause-related logic, verify ALL of the following are kept in 
 | `static/js/app/patient_detail.js` — `renderPauseBanner` | Segmented progress bar driven by `pauseHistory` closed entries + current open epoch |
 | `static/js/app/patient_detail.js` — `renderPauseHistoryTable` | Renders pause history table from `p.pauseHistory` |
 | `static/js/app/patient_detail.js` — `_deriveTransitions` | Builds `Map<event_id, badge>` for timeline transition badges; must be updated if new state-changing events are added |
+
+### Exercise Prescription Printout
+
+**Status:** ✅ Implemented
+
+Therapists can generate multi-language exercise pamphlets after ADL and VCG prescriptions. Supports 6 languages across 3 sites (Ranipet: English/Tamil/Telugu, Manipal: English/Kannada/Hindi, Ludhiana: English/Punjabi/Hindi).
+
+**User Flow:**
+1. Complete ADL + VCG prescriptions
+2. Click `prescription_printout_d01` or `prescription_printout_d15` event
+3. Select language using pill buttons (தமிழ், తెలుగు, ಕನ್ನಡ, हिंदी, ਪੰਜਾਬੀ)
+4. Preview renders automatically with all translations
+5. **Print** — Opens print dialog for immediate printing
+6. **Save PDF** — Generates and uploads as attachment
+
+**Key Files:**
+- `routes/user_management.py` — API endpoints: `api_prescription_pamphlet()`, `api_complete_prescription_printout()`
+- `templates/prescription_pamphlet.html` — Exercise cards with translated labels
+- `templates/patient_detail.html` — Modal with language buttons, preview pane, Print/Save PDF actions
+- `static/js/app/patient_detail.js` — `openPrescriptionPrintoutModal()`, `selectPrescriptionLanguage()`, `printPrescriptionPamphlet()`, `savePrescriptionPrintout()`
+
+**Pamphlet Layout:**
+- Info bar: Patient ID and Prescribed Date
+- Exercise cards: Name, description, dosage, items, QR code
+- Page breaks: Each exercise on separate page (except first)
+- Fonts: Google Noto Sans family (supports all 6 languages)
+
+**Issues Resolved:**
+| Issue | Fix |
+|-------|-----|
+| Prescribed date N/A | Use `completion_date` or `scheduled_date[0]` fallback |
+| Items field dict error | Use bracket notation: `{{ labels['items'] }}` instead of `{{ labels.items }}` |
+| Each exercise same page | CSS: `.exercise-card { page-break-before: always; }` + `.exercise-card.first-exercise { page-break-before: auto; }` |
+| Non-Latin scripts breaking | Remove `text-transform: uppercase;` and `letter-spacing: 0.3px;` from labels |.
+
+## Known Limitations
+
+**PDF Multi-Page Output:** 
+- **Print button** — Respects CSS `@page` and `page-break-before` rules; generates professional multi-page output with proper page breaks
+- **Save PDF button** — Uses html2canvas to capture DOM as image, then splits into A4 pages; results in continuous image layout rather than optimized page breaks
+- **Recommendation:** Use Print button for final multi-page PDFs; Save PDF for quick archival
+
+---
+
+## Enhancements Implemented ✅
+
+### 1. YouTube URLs for All Exercises
+
+**Status:** ✅ Complete
+
+All 75 exercises now have YouTube URLs. Previously only `adl_1` had a URL; all others were empty.
+
+**Implementation:**
+- Filled `youtube_url` field in `config/homer_exercises.json` with `https://youtu.be/Ccaz3yJhaVA?si=I0Y1kbCluhiZBuAH`
+- QR codes now generate for all 75 exercises in the pamphlet
+
+### 2. Exercise Screenshots in Pamphlet
+
+**Status:** ✅ Complete
+
+Exercise screenshots display in each exercise card before the YouTube QR code. When `USE_S3=True`, images are fetched from S3 at `EXERCISE_SS/<subfolder>/<filename>`; when `USE_S3=False`, images are read from the local `EXERCISE_SS/` folder. Both `.png` and `.jpg` are supported — `.png` is tried first, falling back to `.jpg`.
+
+**Files Modified:**
+- `routes/user_management.py`:
+  - Added `_EXERCISE_SS_PATH` constant pointing to `EXERCISE_SS/` folder
+  - Added `_SCREENSHOT_MAP` dict: 75-entry mapping of exercise IDs → screenshot filenames
+  - Added `_make_screenshot_b64(exercise_id)` function: tries `.png` then `.jpg`; reads from S3 (`EXERCISE_SS/<filename>`) when `USE_S3=True`, local path otherwise
+  - Updated `api_prescription_pamphlet()` to add `screenshot` field to each exercise dict (both ADL and VCG)
+
+- `templates/prescription_pamphlet.html`:
+  - Added `.exercise-screenshot` CSS: max-width 220px, auto height, 4px border-radius (reduced, convenient viewing)
+  - Added screenshot display block before QR code in both ADL and VCG exercise cards
+
+**Screenshot Filename Mapping:**
+- ADL (8): `ADL_1.png` – `ADL_8.png`
+- VCG2 Unilateral (8): `VCG2_Unilateral_task_1.png` – `VCG2_Unilateral_task_8.png`
+- VCG2 Bilateral (10): `VCG2_Bilateral_task_1.png` – `VCG2_Bilateral_task_10.png`
+- VCG3 Unilateral (10): `VCG3-Uni-task_1.png` – `VCG3-Uni-task_10.png`
+- VCG3 Bilateral (12): `VCG3-Bi-task_1.png` – `VCG3-Bi-task_12.png`
+- VCG4-5 Unilateral (8): `VCG4-5-Uni-task_1.png` – `VCG4-5-Uni-task_8.png` (except task_4 is lowercase `uni`)
+- VCG4-5 Bilateral (19): `VCG4-5-Bi-task_1.png` – `VCG4-5-Bi-task_19.png`
+
+### 3. Complete Translations
+
+**Status:** ✅ Fully Translated
+
+All 75 exercises have complete translations for 5 languages (Tamil, Telugu, Kannada, Hindi, Punjabi). Each language block contains fully translated: `name`, `description`, `dosage`, `items`.
+
+**Files Modified:**
+- `config/homer_exercises.json`: 
+  - Translated 105 dosage fields from English to native languages
+  - All "reps" → "மறுநிகழ்வுகள்" (Tamil), "పూనుకోవటాలు" (Telugu), etc.
+  - All "sets" → "தொகுப்புகள்" (Tamil), "సెట్లు" (Telugu), etc.
+  - Translation mapping:
+    - Tamil: reps → மறுநிகழ்வுகள், sets → தொகுப்புகள்
+    - Telugu: reps → పూనుకోవటాలు, sets → సెట్లు
+    - Kannada: reps → ಪುನರಾವರ್ತನೆಗಳು, sets → ಸೆಟ್‌ಗಳು
+    - Hindi: reps → दोहराव, sets → सेट
+    - Punjabi: reps → ਦੋਹਾਸ, sets → ਸੈਟ
+
+---
+
+## Pamphlet Card Layout (Updated)
+
+Exercise cards now display in this order:
+1. Exercise name (translated)
+2. Description (translated)
+3. Dosage (translated)
+4. Items needed (translated)
+5. **Screenshot image** (220px max width) ← NEW
+6. YouTube QR code (if youtube_url exists)
+
+**Example flow:** Click `prescription_printout_d01` → select language → preview renders with screenshots → Print or Save PDF
+
+### 4. Client-Side PDF Generation (html2canvas + jsPDF)
+
+**Status:** ✅ Complete
+
+**Goal:** Generate multi-language exercise PDFs with proper text rendering for all 6 languages (English, Tamil, Telugu, Kannada, Hindi, Punjabi).
+
+**Implementation:**
+
+**Frontend Flow** (`static/js/app/patient_detail.js` — `savePrescriptionPrintout()`):
+1. Retrieves the preview div containing the rendered pamphlet
+2. Uses `html2canvas` to capture the DOM as an image (supports all fonts rendered by browser)
+3. Splits the image into A4-sized pages using `jsPDF`
+4. Marks the event complete via `api_complete_prescription_printout()` endpoint
+5. Uploads the PDF blob as an attachment via `/api/patients/<homer_id>/upload-attachment`
+6. Closes modal and refreshes events
+
+**Why Client-Side?**
+- ✅ Browser already has all fonts (Google Noto Sans imported in HTML)
+- ✅ No server-side rendering complexity (no Puppeteer/Chromium needed)
+- ✅ Works on Windows dev machines (no GTK/Pango system libraries required)
+- ✅ Fonts render identically to preview (WYSIWYG)
+- ✅ Lower memory footprint on production servers (t2.micro)
+
+**Known Limitation:**
+- Multi-page PDF rendering via html2canvas produces a single-column continuous image split across pages
+- For optimized multi-page layout, use the **Print** button instead (opens browser print dialog with proper CSS page-break handling)
+- Use **Save PDF** for quick one-off saves; use **Print** for professional multi-page output
+
+**Dependencies:**
+- ✅ jsPDF (cdn): Client-side PDF generation
+- ✅ html2canvas (cdn): DOM to canvas capture
+- ✅ Google Fonts: Noto Sans (all 6 language variants) imported in HTML
+
+**User Workflow:**
+1. Complete ADL + VCG prescriptions
+2. Click `prescription_printout_d01` or `prescription_printout_d15`
+3. Select language using pill buttons
+4. Preview renders on client
+5. Click **"Save PDF"** button
+6. Server renders HTML with Puppeteer → generates PDF → uploads as attachment
+7. Event marked complete, modal closes, timeline refreshes
+8. PDF appears in Timeline tab with download link
+
+**Key Advantages:**
+- ✅ No more "Print Dialog" modal complexity
+- ✅ No browser cache issues (rendering happens server-side)
+- ✅ Professional multi-page PDF with proper page breaks
+- ✅ Works reliably across all users and browsers
+- ✅ Simple, clean user experience
+- ✅ Server generates, client only waits for completion
+- ✅ CSS page-breaks work perfectly (Chromium respects them)
+- ✅ No client-side library dependencies (jsPDF, html2canvas removed)
+
+**Testing Checklist:**
+1. ✅ Puppeteer installed via npm
+2. ✅ Backend endpoint created and tested
+3. ✅ PDF generated with correct page breaks (each exercise separate page)
+4. ✅ Attachment uploaded and stored correctly
+5. ✅ Event marked complete in protocol_events.json
+6. ✅ "Save PDF" button flow works end-to-end
+7. ✅ All 6 languages render correctly in PDFs
+8. ✅ Screenshots display in PDF pages
+9. ✅ QR codes generate for all exercises

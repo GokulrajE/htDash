@@ -273,7 +273,10 @@ function _renderSims(sims) {
               <td class="px-6 py-3.5 text-slate-600">${planLabel}</td>
               <td class="px-6 py-3.5">${modemLabel}</td>
               <td class="px-6 py-3.5 text-slate-600">${_esc(s.rechargeDate || '—')}</td>
-              <td class="px-6 py-3.5">${_simExpiryBadge(s)}</td>
+              <td class="px-6 py-3.5">
+                ${_simExpiryBadge(s)}
+                ${s.isExpired ? `<button onclick="openRechargeSimModal('${_esc(s.id)}')" class="ml-2 px-2.5 py-1 text-xs font-semibold text-white bg-sky-600 rounded-lg hover:bg-sky-700 active:scale-95 transition-all">Recharge</button>` : ''}
+              </td>
             </tr>`;
         }).join('')}
       </tbody>
@@ -725,17 +728,6 @@ function openAddModemModal() {
   document.getElementById('add-modem-id').value     = '';
   document.getElementById('add-modem-serial').value = '';
   _setError('add-modem-error', '');
-  const sel = document.getElementById('add-modem-sim');
-  sel.innerHTML = '<option value="">None</option>';
-  const linkedSimIds = new Set((_inventory?.modems || []).filter(m => m.sim_id).map(m => m.sim_id));
-  for (const s of (_inventory?.sims || [])) {
-    if (!linkedSimIds.has(s.id)) {
-      const opt = document.createElement('option');
-      opt.value = s.id;
-      opt.textContent = `${s.network || '?'} — ${s.phoneNumber || s.id}`;
-      sel.appendChild(opt);
-    }
-  }
   document.getElementById('add-modem-modal').classList.remove('hidden');
 }
 
@@ -746,14 +738,13 @@ function closeAddModemModal() {
 async function saveNewModem() {
   const id     = document.getElementById('add-modem-id').value.trim();
   const serial = document.getElementById('add-modem-serial').value.trim();
-  const sim_id = document.getElementById('add-modem-sim').value.trim() || null;
   if (!id)     { _setError('add-modem-error', 'Modem ID is required.'); return; }
   if (!serial) { _setError('add-modem-error', 'Serial number is required.'); return; }
   _setError('add-modem-error', '');
   try {
     const r = await fetch('/devices/api/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_type: 'modem', id, serial, sim_id }),
+      body: JSON.stringify({ device_type: 'modem', id, serial }),
     });
     const d = await r.json();
     if (d.error) { _setError('add-modem-error', d.error); return; }
@@ -880,6 +871,79 @@ async function saveNewLaptop() {
   } catch (e) { _setError('add-laptop-error', 'Network error — please try again.'); }
 }
 
+// ── Recharge SIM Modal ───────────────────────────────────────
+
+let _rechargeSimId = null;
+
+function openRechargeSimModal(simId) {
+  _rechargeSimId = simId;
+  document.getElementById('recharge-sim-recharge').value = '';
+  document.getElementById('recharge-sim-plan').value = '';
+  document.getElementById('recharge-sim-expiry').value = '';
+  document.getElementById('recharge-sim-expiry').readOnly = false;
+  document.getElementById('recharge-sim-expiry').classList.remove('bg-slate-100');
+  document.getElementById('recharge-sim-expiry-note').textContent = '';
+  _setError('recharge-sim-error', '');
+  document.getElementById('recharge-sim-modal').classList.remove('hidden');
+}
+
+function closeRechargeSimModal() {
+  document.getElementById('recharge-sim-modal').classList.add('hidden');
+}
+
+function onRechargeSimRechargeChange() {
+  const plan = document.getElementById('recharge-sim-plan').value;
+  if (plan && plan !== 'custom') {
+    const recharge = document.getElementById('recharge-sim-recharge').value;
+    if (recharge) {
+      document.getElementById('recharge-sim-expiry').value = _addDays(recharge, parseInt(plan));
+    }
+  }
+}
+
+function onRechargeSimPlanChange() {
+  const plan = document.getElementById('recharge-sim-plan').value;
+  const expiryInput = document.getElementById('recharge-sim-expiry');
+  const note = document.getElementById('recharge-sim-expiry-note');
+  if (!plan || plan === 'custom') {
+    expiryInput.readOnly = false;
+    expiryInput.classList.remove('bg-slate-100');
+    note.textContent = '';
+  } else {
+    expiryInput.readOnly = true;
+    expiryInput.classList.add('bg-slate-100');
+    note.textContent = '(auto-computed)';
+    const recharge = document.getElementById('recharge-sim-recharge').value;
+    if (recharge) {
+      expiryInput.value = _addDays(recharge, parseInt(plan));
+    }
+  }
+}
+
+async function saveRechargeSimModal() {
+  const recharge = document.getElementById('recharge-sim-recharge').value;
+  const plan     = document.getElementById('recharge-sim-plan').value;
+  const expiry   = document.getElementById('recharge-sim-expiry').value;
+  if (!recharge) { _setError('recharge-sim-error', 'Recharge date is required.'); return; }
+  _setError('recharge-sim-error', '');
+  try {
+    const r = await fetch('/devices/api/recharge-sim', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sim_id:       _rechargeSimId,
+        rechargeDate: recharge,
+        dataPlan:     (plan && plan !== 'custom') ? plan : null,
+        expiryDate:   expiry || null,
+      }),
+    });
+    const d = await r.json();
+    if (d.error) { _setError('recharge-sim-error', d.error); return; }
+    closeRechargeSimModal();
+    showToast('SIM recharged', 'success');
+    await _refreshInventory();
+  } catch (e) { _setError('recharge-sim-error', 'Network error — please try again.'); }
+}
+
 // ── Link SIM Modal ────────────────────────────────────────────
 
 let _linkSimModemId = null;
@@ -945,6 +1009,29 @@ function openAssignModal(type, deviceId) {
   document.getElementById('assign-patient-search').value = '';
   _setError('assign-modal-error', '');
 
+  // SIM expiry warning for modems
+  const warning = document.getElementById('assign-sim-warning');
+  warning.classList.add('hidden');
+  if (type === 'modem') {
+    const modem = (_inventory?.modems || []).find(m => m.id === deviceId);
+    const sim   = modem?.sim_id ? (_inventory?.sims || []).find(s => s.id === modem.sim_id) : null;
+    if (sim && sim.daysUntilExpiry !== undefined) {
+      const icon = document.getElementById('assign-sim-warning-icon');
+      const msg  = document.getElementById('assign-sim-warning-msg');
+      if (sim.isExpired) {
+        warning.className = 'rounded-xl p-3 text-sm flex flex-col gap-2 bg-red-50 text-red-700 border border-red-200';
+        icon.className    = 'fas fa-times-circle mt-0.5 shrink-0 text-red-500';
+        msg.textContent   = `SIM ${sim.phoneNumber} is expired. The modem will have no data connectivity. Recharge before assigning or assign and recharge later.`;
+        warning.classList.remove('hidden');
+      } else if (sim.daysUntilExpiry <= 5) {
+        warning.className = 'rounded-xl p-3 text-sm flex flex-col gap-2 bg-amber-50 text-amber-700 border border-amber-200';
+        icon.className    = 'fas fa-exclamation-triangle mt-0.5 shrink-0 text-amber-500';
+        msg.textContent   = `SIM ${sim.phoneNumber} expires in ${sim.daysUntilExpiry} day${sim.daysUntilExpiry === 1 ? '' : 's'}. Consider recharging before assigning.`;
+        warning.classList.remove('hidden');
+      }
+    }
+  }
+
   const sel = document.getElementById('assign-homer-select');
   sel.innerHTML = '';
 
@@ -971,6 +1058,15 @@ function openAssignModal(type, deviceId) {
   }
 
   document.getElementById('assign-modal').classList.remove('hidden');
+}
+
+function openRechargeFromAssign() {
+  // Find the SIM linked to the modem being assigned, open the recharge modal
+  const modem = (_inventory?.modems || []).find(m => m.id === _assignDeviceId);
+  const sim   = modem?.sim_id ? (_inventory?.sims || []).find(s => s.id === modem.sim_id) : null;
+  if (!sim) return;
+  closeAssignModal();
+  openRechargeSimModal(sim.id);
 }
 
 function filterAssignPatients() {

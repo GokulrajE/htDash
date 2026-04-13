@@ -13,7 +13,7 @@ This document defines the device state machine, assignment rules, and data model
 | Agwatch | `inventory/agwatch.json` | `assignments/agwatch.json` | Actigraph watch; Left or Right limb |
 | Modem | `inventory/modems.json` | `assignments/modems.json` | WiFi modem; linked to a SIM card |
 | Laptop | `inventory/laptops.json` | `assignments/laptops.json` | Study laptop |
-| SIM | `sims.json` | — | Linked to modem via `sim_id` on modem record |
+| SIM | `inventory/sims.json` | — | Linked to modem via `sim_id` on modem record |
 
 All files live under `data/<hospital>/devices/`.
 
@@ -84,7 +84,6 @@ The **Report Issue** section button opens a modal where the admin/engineer:
    - If a swap device was selected:
      - Old assignment is closed (`returned_date = now`).
      - New assignment is created for the same patient (and limb, for agwatch).
-     - A **Device Replacement History** record is written.
    - A device log entry is appended.
 
 ### Resolving an Issue
@@ -95,40 +94,19 @@ Same modal — selecting a device that already has an issue shows a "Resolve Iss
 
 ---
 
-## Device Replacement History
+## 28-Day Auto-Reset (All Device Types)
 
-Stored in `data/<hospital>/devices/device_history.json`.
-
-```json
-{
-  "history": [
-    {
-      "id": "uuid",
-      "device_type": "pluto",
-      "old_device_id": "PLT-001",
-      "new_device_id": "PLT-002",
-      "patient_id": "HOCMCV002",
-      "timestamp": "2026-04-08T12:00",
-      "reason": "Device Issue Replacement"
-    }
-  ]
-}
-```
-
-A record is created whenever a device is swapped via `POST /devices/api/swap-device`.
-
----
-
-## 28-Day Auto-Reset (Modems and Laptops)
-
-Modems and laptops are assigned for the study duration (28 days). On every `GET /devices/api/inventory` call:
-- All active modem and laptop assignments are checked.
-- If `assigned_date` is ≥ 28 days ago, `returned_date` is set to now and the assignment is written back.
+All assigned devices return to Available state automatically after the patient's 28-day training period. On every `GET /devices/api/inventory` call:
+- All active assignments across all device types are checked.
+- If the assigned patient's `activationDate` is ≥ 28 days ago, `returned_date` is set to now and the assignment is written back.
 - Device returns to Available state automatically.
 
 This avoids a background job — the reset happens lazily on the next page load.
 
-Pluto, Mars, and Agwatch are **not** auto-reset (their lifecycle is managed through the patient flow).
+**Exceptions — device is NOT auto-reset if:**
+- Patient has not yet activated (`activationDate` is null).
+- Pluto or Mars device has `faulty=true`.
+- Agwatch device has `has_issue=true`.
 
 ---
 
@@ -144,22 +122,27 @@ Pluto, Mars, and Agwatch are **not** auto-reset (their lifecycle is managed thro
 
 ## SIM → Modem Linkage
 
-- Each modem inventory record has an optional `sim_id` field pointing to a SIM in `sims.json`.
+- Each modem inventory record has an optional `sim_id` field pointing to a SIM in `inventory/sims.json`.
 - A SIM can only be linked to **one** modem at a time (enforced server-side).
+- SIM cards are linked post-creation via the **Link SIM** action on the modem row.
 - When a modem is assigned to a patient, SIM details are shown automatically on the modem row.
-- **SIM expiry is only shown when the linked modem has an active patient assignment.** An unassigned modem's SIM expiry is not shown (it's not in active use).
+- **SIM expiry is shown for all SIMs** regardless of modem assignment status, so expired or expiring SIMs can be recharged before being put into use.
 
 ### SIM Expiry Badges
 
 | Condition | Badge |
 |-----------|-------|
 | No expiry set | — |
-| Expired | red "Expired" |
+| Expired | red "Expired" + Recharge button |
 | ≤ 3 days remaining | red "Expires in Xd" |
 | ≤ 5 days remaining | amber "Expires in Xd" |
 | Active | green with expiry date |
 
-An amber banner appears at the top of the devices page if any active SIM expires within 5 days.
+An amber banner appears at the top of the devices page if any SIM expires within 5 days.
+
+When a SIM is expired, a **Recharge** button appears in the SIM row alongside the badge. Clicking it opens the Recharge SIM modal (Recharge Date, Data Plan, Expiry Date auto-computed from plan). Calls `POST /devices/api/recharge-sim` (body: `{sim_id, rechargeDate, dataPlan, expiryDate}`).
+
+When assigning a modem whose linked SIM is expired or expiring (≤5 days), the Assign modal shows a warning banner with a "Recharge SIM first" button that closes the assign modal and opens the Recharge SIM modal.
 
 ---
 
@@ -275,3 +258,4 @@ These checks are enforced by `get_available_devices()` in `utils/data_access.py`
 | `/devices/api/link-sim` | POST | Admin | Link or unlink SIM to modem |
 | `/devices/api/assign-device` | POST | Admin | Manually assign modem/laptop to patient |
 | `/devices/api/unassign-device` | POST | Admin | Return modem/laptop from patient |
+| `/devices/api/recharge-sim` | POST | Admin | Record a SIM recharge |

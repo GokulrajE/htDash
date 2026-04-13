@@ -25,6 +25,9 @@ from utils.file_handlers import FileHandler as FH
 from utils.s3_operations import S3Operations
 from utils.data_processors import DataProcessor
 import uuid
+import qrcode
+import io
+import base64
 
 
 bp = Blueprint("user_management", __name__)
@@ -43,7 +46,7 @@ def patients_page():
 def patient_detail_page(homer_id):
     if not flask_session.get('login_place'):
         return redirect(url_for('login'))
-    return render_template('patient_detail.html', homer_id=homer_id, active_page='patients')
+    return render_template('patient_detail.html', homer_id=homer_id, place=flask_session.get('login_place'), active_page='patients')
 
 
 @bp.route('/api/patients/<homer_id>', methods=['GET'])
@@ -729,7 +732,7 @@ def _generate_placeholder_pdf(homer_id: str, title: str) -> bytes:
 
 @bp.route('/api/patients/<homer_id>/complete-event/prescription-printout', methods=['POST'])
 def api_complete_prescription_printout(homer_id):
-    """Generate prescription PDF, save it, and mark the printout event complete."""
+    """Mark prescription printout event complete. PDF attachment is uploaded separately."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     folder = find_patient_folder(flask_session['login_place'], homer_id)
@@ -739,6 +742,7 @@ def api_complete_prescription_printout(homer_id):
     data              = request.get_json() or {}
     event_id          = data.get('event_id')
     protocol_event_id = data.get('protocol_event_id', '')
+    language          = data.get('language', 'english')  # For logging purposes
 
     if protocol_event_id not in _PRINTOUT_PDF_FILES:
         return jsonify({'error': 'Invalid protocol event ID.'}), 400
@@ -757,6 +761,7 @@ def api_complete_prescription_printout(homer_id):
     if not entry:
         return jsonify({'error': 'Event not found in incomplete list.'}), 404
 
+    # Mark event complete (attachment will be added separately via upload-attachment endpoint)
     # Generate and save the PDF
     rel_path = _PRINTOUT_PDF_FILES[protocol_event_id]
     title = ('Revised Therapy Prescription Printout'
@@ -776,7 +781,6 @@ def api_complete_prescription_printout(homer_id):
         **entry,
         'completion_date': now,
         'filed_at':        now,
-        'attachment':      rel_path,
     }
 
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
@@ -787,12 +791,11 @@ def api_complete_prescription_printout(homer_id):
 
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
-    log_msg = ('Revised prescription printout generated'
-               if protocol_event_id == 'prescription_printout_d15'
-               else 'Prescription printout generated')
+    log_msg = ('Revised prescription printout completed' if protocol_event_id == 'prescription_printout_d15'
+               else 'Prescription printout completed')
     write_patient_log(folder, homer_id, loginid, session_id, log_msg)
 
-    return jsonify({'ok': True, 'attachment': rel_path})
+    return jsonify({'ok': True})
 
 
 @bp.route('/api/patients/<homer_id>/attachment/<path:rel_path>', methods=['GET'])
@@ -2725,9 +2728,19 @@ def api_upload_attachment(homer_id):
                     break
     if not entry:
         return jsonify({'error': 'Event not found'}), 404
+    
+    # Use predefined filename based on protocol_event_id
+    protocol_event_id = entry.get('protocol_event_id', '')
+    pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
 
-    # Save PDF as attachments/<event_id>.pdf
-    attachment_rel = f'attachments/{event_id}.pdf'
+#     # Save PDF as attachments/<event_id>.pdf
+#     #save file name using predeifned
+#     attachment_path = get_patients_path(folder) / homer_id / pdf_path_mapping
+#     attachment_path.parent.mkdir(parents=True, exist_ok=True)
+#     pdf_file.save(str(attachment_path))
+    
+   ##js
+    attachment_rel = pdf_path_mapping  # e.g., "attachments/prescription_d01.pdf"
     if Config.USE_S3:
         from utils.s3_store import s3_upload_file
         import tempfile, os as _os
@@ -2744,8 +2757,13 @@ def api_upload_attachment(homer_id):
         attachment_path.parent.mkdir(parents=True, exist_ok=True)
         pdf_file.save(str(attachment_path))
 
+  
+    # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
+    friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
+    print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
+
     # Stamp fields on the entry
-    entry['attachment']         = attachment_rel
+    entry['attachment']         = pdf_path_mapping
     entry['attachment_caption'] = caption
 
     from utils.protocol_events import write_protocol_events
@@ -2805,9 +2823,59 @@ def api_download_attachment(homer_id, event_id):
     if not attachment_path.exists():
         return jsonify({'error': 'Attachment not found'}), 404
 
-    return send_file(str(attachment_path), mimetype='application/pdf',
-                     as_attachment=False,
-                     download_name=attachment_path.name)
+    # Get the friendly filename from protocol_event_id
+    events_data = read_protocol_events(folder, homer_id)
+    friendly_name = 'prescription_attachment.pdf'  # Default fallback
+    print(f'[DOWNLOAD DEBUG] event_id={event_id}')
+
+    if events_data:
+        # Search in complete events
+        for entry in events_data.get('complete', []):
+            if entry.get('id') == event_id:
+                protocol_event_id = entry.get('protocol_event_id', '')
+                friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                print(f'[DOWNLOAD DEBUG] Found in complete, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
+                break
+        # Search in free events if not found
+        if friendly_name == 'prescription_attachment.pdf':
+            for val in events_data.get('free', {}).values():
+                if isinstance(val, list):
+                    for entry in val:
+                        if entry.get('id') == event_id:
+                            protocol_event_id = entry.get('protocol_event_id', '')
+                            friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                            print(f'[DOWNLOAD DEBUG] Found in free, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
+                            break
+
+    print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
+
+    # Read the PDF file
+    with open(str(attachment_path), 'rb') as f:
+        pdf_data = f.read()
+
+    # Create response with the PDF data
+    from flask import make_response
+    response = make_response(pdf_data)
+
+    # Set headers explicitly for maximum compatibility
+    response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Length'] = len(pdf_data)
+    # RFC 6266 format: attachment; filename="filename.pdf"
+    response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
+
+    # Also set cache control to prevent caching
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+
+    print(f'[DOWNLOAD DEBUG] Response headers set:')
+    print(f'  Content-Type: application/pdf')
+    print(f'  Content-Length: {len(pdf_data)}')
+    print(f'  Content-Disposition: attachment; filename="{friendly_name}"')
+
+    return response
+#     return send_file(str(attachment_path), mimetype='application/pdf',
+#                      as_attachment=False,
+#                      download_name=attachment_path.name)
 
 
 @bp.route('/api/patients/<homer_id>/log-patient-call', methods=['POST'])
@@ -4847,7 +4915,56 @@ def auto_activate_experimental_api(patient_id):
 # ── Exercise catalogue ─────────────────────────────────────────────────────────
 
 _EXERCISES_PATH = Path(__file__).parent.parent / 'config' / 'homer_exercises.json'
+_EXERCISE_SS_PATH = Path(__file__).parent.parent / 'EXERCISE_SS'
 _exercises_cache: dict = {}
+
+# Screenshot mapping: exercise_id → relative path from EXERCISE_SS/
+_SCREENSHOT_MAP = {
+    # ADL exercises
+    'adl_1': 'ADL_SS/ADL_1.png', 'adl_2': 'ADL_SS/ADL_2.png', 'adl_3': 'ADL_SS/ADL_3.png',
+    'adl_4': 'ADL_SS/ADL_4.png', 'adl_5': 'ADL_SS/ADL_5.png', 'adl_6': 'ADL_SS/ADL_6.png',
+    'adl_7': 'ADL_SS/ADL_7.png', 'adl_8': 'ADL_SS/ADL_8.png',
+    # VCG2 - Unilateral
+    'vcg2_uni_1': 'VCG2_SS/VCG2_Unilateral_task_1.png', 'vcg2_uni_2': 'VCG2_SS/VCG2_Unilateral_task_2.png',
+    'vcg2_uni_3': 'VCG2_SS/VCG2_Unilateral_task_3.png', 'vcg2_uni_4': 'VCG2_SS/VCG2_Unilateral_task_4.png',
+    'vcg2_uni_5': 'VCG2_SS/VCG2_Unilateral_task_5.png', 'vcg2_uni_6': 'VCG2_SS/VCG2_Unilateral_task_6.png',
+    'vcg2_uni_7': 'VCG2_SS/VCG2_Unilateral_task_7.png', 'vcg2_uni_8': 'VCG2_SS/VCG2_Unilateral_task_8.png',
+    # VCG2 - Bilateral (IDs 9-18, but screenshots are task_1-10)
+    'vcg2_bil_9': 'VCG2_SS/VCG2_Bilateral_task_1.png', 'vcg2_bil_10': 'VCG2_SS/VCG2_Bilateral_task_2.png',
+    'vcg2_bil_11': 'VCG2_SS/VCG2_Bilateral_task_3.png', 'vcg2_bil_12': 'VCG2_SS/VCG2_Bilateral_task_4.png',
+    'vcg2_bil_13': 'VCG2_SS/VCG2_Bilateral_task_5.png', 'vcg2_bil_14': 'VCG2_SS/VCG2_Bilateral_task_6.png',
+    'vcg2_bil_15': 'VCG2_SS/VCG2_Bilateral_task_7.png', 'vcg2_bil_16': 'VCG2_SS/VCG2_Bilateral_task_8.png',
+    'vcg2_bil_17': 'VCG2_SS/VCG2_Bilateral_task_9.png', 'vcg2_bil_18': 'VCG2_SS/VCG2_Bilateral_task_10.png',
+    # VCG3 - Unilateral
+    'vcg3_uni_1': 'VCG3_SS/VCG3-Uni-task_1.png', 'vcg3_uni_2': 'VCG3_SS/VCG3-Uni-task_2.png',
+    'vcg3_uni_3': 'VCG3_SS/VCG3-Uni-task_3.png', 'vcg3_uni_4': 'VCG3_SS/VCG3-Uni-task_4.png',
+    'vcg3_uni_5': 'VCG3_SS/VCG3-Uni-task_5.png', 'vcg3_uni_6': 'VCG3_SS/VCG3-Uni-task_6.png',
+    'vcg3_uni_7': 'VCG3_SS/VCG3-Uni-task_7.png', 'vcg3_uni_8': 'VCG3_SS/VCG3-Uni-task_8.png',
+    'vcg3_uni_9': 'VCG3_SS/VCG3-Uni-task_9.png', 'vcg3_uni_10': 'VCG3_SS/VCG3-Uni-task_10.png',
+    # VCG3 - Bilateral
+    'vcg3_bil_1': 'VCG3_SS/VCG3-Bi-task_1.png', 'vcg3_bil_2': 'VCG3_SS/VCG3-Bi-task_2.png',
+    'vcg3_bil_3': 'VCG3_SS/VCG3-Bi-task_3.png', 'vcg3_bil_4': 'VCG3_SS/VCG3-Bi-task_4.png',
+    'vcg3_bil_5': 'VCG3_SS/VCG3-Bi-task_5.png', 'vcg3_bil_6': 'VCG3_SS/VCG3-Bi-task_6.png',
+    'vcg3_bil_7': 'VCG3_SS/VCG3-Bi-task_7.png', 'vcg3_bil_8': 'VCG3_SS/VCG3-Bi-task_8.png',
+    'vcg3_bil_9': 'VCG3_SS/VCG3-Bi-task_9.png', 'vcg3_bil_10': 'VCG3_SS/VCG3-Bi-task_10.png',
+    'vcg3_bil_11': 'VCG3_SS/VCG3-Bi-task_11.png', 'vcg3_bil_12': 'VCG3_SS/VCG3-Bi-task_12.png',
+    # VCG4-5 - Unilateral
+    'vcg45_uni_1': 'VCG4-5_SS/VCG4-5-Uni-task_1.png', 'vcg45_uni_2': 'VCG4-5_SS/VCG4-5-Uni-task_2.png',
+    'vcg45_uni_3': 'VCG4-5_SS/VCG4-5-Uni-task_3.png', 'vcg45_uni_4': 'VCG4-5_SS/VCG4-5-uni-task_4.png',
+    'vcg45_uni_5': 'VCG4-5_SS/VCG4-5-Uni-task_5.png', 'vcg45_uni_6': 'VCG4-5_SS/VCG4-5-Uni-task_6.png',
+    'vcg45_uni_7': 'VCG4-5_SS/VCG4-5-Uni-task_7.png', 'vcg45_uni_8': 'VCG4-5_SS/VCG4-5-Uni-task_8.png',
+    # VCG4-5 - Bilateral
+    'vcg45_bil_1': 'VCG4-5_SS/VCG4-5-Bi-task_1.png', 'vcg45_bil_2': 'VCG4-5_SS/VCG4-5-Bi-task_2.png',
+    'vcg45_bil_3': 'VCG4-5_SS/VCG4-5-Bi-task_3.png', 'vcg45_bil_4': 'VCG4-5_SS/VCG4-5-Bi-task_4.png',
+    'vcg45_bil_5': 'VCG4-5_SS/VCG4-5-Bi-task_5.png', 'vcg45_bil_6': 'VCG4-5_SS/VCG4-5-Bi-task_6.png',
+    'vcg45_bil_7': 'VCG4-5_SS/VCG4-5-Bi-task_7.png', 'vcg45_bil_8': 'VCG4-5_SS/VCG4-5-Bi-task_8.png',
+    'vcg45_bil_9': 'VCG4-5_SS/VCG4-5-Bi-task_9.png', 'vcg45_bil_10': 'VCG4-5_SS/VCG4-5-Bi-task_10.png',
+    'vcg45_bil_11': 'VCG4-5_SS/VCG4-5-Bi-task_11.png', 'vcg45_bil_12': 'VCG4-5_SS/VCG4-5-Bi-task_12.png',
+    'vcg45_bil_13': 'VCG4-5_SS/VCG4-5-Bi-task_13.png', 'vcg45_bil_14': 'VCG4-5_SS/VCG4-5-Bi-task_14.png',
+    'vcg45_bil_15': 'VCG4-5_SS/VCG4-5-Bi-task_15.png', 'vcg45_bil_16': 'VCG4-5_SS/VCG4-5-Bi-task_16.png',
+    'vcg45_bil_17': 'VCG4-5_SS/VCG4-5-Bi-task_17.png', 'vcg45_bil_18': 'VCG4-5_SS/VCG4-5-Bi-task_18.png',
+    'vcg45_bil_19': 'VCG4-5_SS/VCG4-5-Bi-task_19.png',
+}
 
 
 def _load_exercises() -> dict:
@@ -4934,6 +5051,231 @@ def api_get_prescription(homer_id, event_id):
     if data is None:
         return jsonify({'error': 'Prescription not found'}), 404
     return jsonify(data)
+
+
+# ── Prescription pamphlet helpers ──────────────────────────────────────────────
+
+def _make_qr_b64(url: str) -> str:
+    """Generate QR code image as base64 data URI."""
+    if not url or url.strip() == '':
+        return ''
+    try:
+        qr = qrcode.QRCode(version=1, box_size=4, border=2)
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ''
+
+
+def _make_screenshot_b64(exercise_id: str) -> str:
+    """Read exercise screenshot and return as base64 string. Tries .png then .jpg."""
+    rel = _SCREENSHOT_MAP.get(exercise_id)
+    if not rel:
+        return ''
+    candidates = [rel, rel[:-4] + '.jpg'] if rel.lower().endswith('.png') else [rel]
+    if Config.USE_S3:
+        from utils.s3_store import s3_get_bytes
+        for candidate in candidates:
+            data = s3_get_bytes(f'EXERCISE_SS/{candidate}')
+            if data:
+                try:
+                    return base64.b64encode(data).decode()
+                except Exception:
+                    return ''
+        return ''
+    for candidate in candidates:
+        path = _EXERCISE_SS_PATH / candidate
+        if path.exists():
+            try:
+                return base64.b64encode(path.read_bytes()).decode()
+            except Exception:
+                return ''
+    return ''
+
+
+def _get_field_labels(language: str) -> dict:
+    """Get translated labels for exercise fields."""
+    labels = {
+        'english': {
+            'description': 'Description',
+            'dosage': 'Dosage',
+            'items': 'Items Needed',
+            'adl_section': 'Activities of Daily Living (ADL)',
+            'vcg_section': 'Virtual Center of Gravity (VCG)',
+            'scan_video': 'Scan for Video',
+            'video_instruction': 'Watch the exercise video using your smartphone camera',
+        },
+        'tamil': {
+            'description': 'விளக்கம்',
+            'dosage': 'தீவிரம்',
+            'items': 'தேவையான பொருட்கள்',
+            'adl_section': 'நாளாந்த வாழ்க்கை நடவடிக்கைகள் (ADL)',
+            'vcg_section': 'மெய்ம் ஈர்ப்பு மையம் (VCG)',
+            'scan_video': 'வீடியோவுக்கு ஸ்கேன் செய்யவும்',
+            'video_instruction': 'உங்கள் ஸ்மார்ட்ஃபோன் கேமிரா ஐப் பயன்படுத்தி பயிற்சி வீடியோவைப் பாருங்கள்',
+        },
+        'telugu': {
+            'description': 'వివరణ',
+            'dosage': 'మోతాదు',
+            'items': 'అవసరమైన వస్తువులు',
+            'adl_section': 'రోజువారీ జీవన కార్యకలాపాలు (ADL)',
+            'vcg_section': 'వర్చువల్ గురుత్వాకర్షణ కేంద్రం (VCG)',
+            'scan_video': 'వీడియో కోసం స్కాన్ చేయండి',
+            'video_instruction': 'మీ స్మార్ట్‌ఫోన్ కెమెరా ఉపయోగించి వ్యాయామ వీడియోను చూడండి',
+        },
+        'kannada': {
+            'description': 'ವಿವರಣೆ',
+            'dosage': 'ಮಾತ್ರೆ',
+            'items': 'ಬೇಕಾದ ವಸ್ತುಗಳು',
+            'adl_section': 'ದೈನಂದಿನ ಜೀವನ ಚಟುವಟಿಕೆಗಳು (ADL)',
+            'vcg_section': 'ವರ್ಚುವಲ್ ಗುರುತ್ವಾಕರ್ಷಣ ಕೇಂದ್ರ (VCG)',
+            'scan_video': 'ವೀಡಿಯೋಗಾಗಿ ಸ್ಕ್ಯಾನ್ ಮಾಡಿ',
+            'video_instruction': 'ನಿಮ್ಮ ಸ್ಮಾರ್ಟ್‌ಫೋನ್ ಕ್ಯಾಮೆರಾವನ್ನು ಬಳಸಿ ವ್ಯಾಯಾಮ ವೀಡಿಯೋವನ್ನು ವೀಕ್ಷಿಸಿ',
+        },
+        'hindi': {
+            'description': 'विवरण',
+            'dosage': 'खुराक',
+            'items': 'आवश्यक वस्तुएं',
+            'adl_section': 'दैनिक जीवन कार्यकलाप (ADL)',
+            'vcg_section': 'वर्चुअल गुरुत्व केंद्र (VCG)',
+            'scan_video': 'वीडियो के लिए स्कैन करें',
+            'video_instruction': 'अपने स्मार्टफोन कैमरे का उपयोग करके व्यायाम वीडियो देखें',
+        },
+        'punjabi': {
+            'description': 'ਵਰਣਨ',
+            'dosage': 'ਖੁਰਾਕ',
+            'items': 'ਲੋੜੀਂਦੀਆਂ ਵਸਤੂਆਂ',
+            'adl_section': 'ਰੋਜ਼ਾਨਾ ਜੀਵਨ ਦੀਆਂ ਗਤੀਵਿਧੀਆਂ (ADL)',
+            'vcg_section': 'ਵਰਚੁਅਲ ਗੁਰੁਤਾ ਕੇਂਦਰ (VCG)',
+            'scan_video': 'ਵੀਡੀਓ ਲਈ ਸਕੈਨ ਕਰੋ',
+            'video_instruction': 'ਆਪਣੇ ਸਮਾਰਟ ਫੋਨ ਕੈਮਰੇ ਦੀ ਵਰਤੋਂ ਕਰਕੇ ਅਭਿਆਸ ਵੀਡੀਓ ਦੇਖੋ',
+        },
+    }
+    return labels.get(language, labels['english'])
+
+
+def _get_exercise_text(exercise: dict, language: str) -> dict:
+    """Extract exercise text in the requested language, with English fallback."""
+    if language == 'english' or language not in exercise:
+        return {
+            'name':        exercise.get('name', ''),
+            'description': exercise.get('description', ''),
+            'dosage':      exercise.get('dosage', ''),
+            'items':       exercise.get('items', ''),
+        }
+    lang_block = exercise.get(language, {})
+    return {
+        'name':        lang_block.get('name')        or exercise.get('name', ''),
+        'description': lang_block.get('description') or exercise.get('description', ''),
+        'dosage':      lang_block.get('dosage')      or exercise.get('dosage', ''),
+        'items':       lang_block.get('items')       or exercise.get('items', ''),
+    }
+
+
+@bp.route('/api/patients/<homer_id>/prescription-pamphlet', methods=['GET'])
+def api_prescription_pamphlet(homer_id):
+    """Generate and return HTML pamphlet for prescribed exercises in requested language."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    event_id = request.args.get('event_id')
+    language = request.args.get('language', 'english')
+
+    if not event_id:
+        return jsonify({'error': 'Missing event_id'}), 400
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    # Load all exercises
+    all_exercises = _load_exercises()
+
+    # Determine which day (d01 or d15) from protocol_events
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found'}), 404
+
+    day_match = None
+    prescribed_date = None
+    for section in ['incomplete', 'complete']:
+        for entry in events_data.get(section, []):
+            if entry.get('id') == event_id:
+                proto_id = entry.get('protocol_event_id', '')
+                if 'd15' in proto_id:
+                    day_match = 'd15'
+                else:
+                    day_match = 'd01'
+                # Get the date: use completion_date if available, else use scheduled_date
+                prescribed_date = entry.get('completion_date') or (entry.get('scheduled_date', ['', ''])[0] if entry.get('scheduled_date') else '')
+                break
+        if day_match:
+            break
+
+    if not day_match:
+        day_match = 'd01'  # Default to d01 if not found
+
+    # Read ADL prescription
+    adl_exercises_list = []
+    adl_rel_path = f'adl/adl_prescription_{day_match}.json'
+    adl_data = _read_prescription(folder, homer_id, adl_rel_path)
+    if adl_data and adl_data.get('prescribed_exercises'):
+        adl_lib = all_exercises.get('adl', {}).get('exercises', [])
+        for presc in adl_data['prescribed_exercises']:
+            ex_id = presc.get('exercise_id')
+            ex = next((e for e in adl_lib if e.get('id') == ex_id), None)
+            if ex:
+                text = _get_exercise_text(ex, language)
+                qr = _make_qr_b64(ex.get('youtube_url', ''))
+                screenshot = _make_screenshot_b64(ex_id)
+                adl_exercises_list.append({
+                    'name': text['name'],
+                    'description': text['description'],
+                    'dosage': text['dosage'],
+                    'items': text['items'],
+                    'screenshot': screenshot,
+                    'qr_code': qr,
+                })
+
+    # Read VCG prescription
+    vcg_exercises_list = []
+    vcg_rel_path = f'vcg_exercise/vcg_prescription_{day_match}.json'
+    vcg_data = _read_prescription(folder, homer_id, vcg_rel_path)
+    if vcg_data and vcg_data.get('prescribed_exercises'):
+        # Determine VCG group from the data if available, default to vcg2
+        vcg_group = vcg_data.get('vcg_group', 'vcg2')
+        vcg_lib = all_exercises.get('vcg', {}).get(vcg_group, {}).get('exercises', [])
+        for presc in vcg_data['prescribed_exercises']:
+            ex_id = presc.get('exercise_id')
+            ex = next((e for e in vcg_lib if e.get('id') == ex_id), None)
+            if ex:
+                text = _get_exercise_text(ex, language)
+                qr = _make_qr_b64(ex.get('youtube_url', ''))
+                screenshot = _make_screenshot_b64(ex_id)
+                vcg_exercises_list.append({
+                    'name': text['name'],
+                    'description': text['description'],
+                    'dosage': text['dosage'],
+                    'items': text['items'],
+                    'screenshot': screenshot,
+                    'qr_code': qr,
+                })
+
+    labels = _get_field_labels(language)
+
+    return render_template(
+        'prescription_pamphlet.html',
+        patient_id=homer_id,
+        prescribed_date=prescribed_date,
+        adl_exercises=adl_exercises_list,
+        vcg_exercises=vcg_exercises_list,
+        language=language,
+        labels=labels
+    )
 
 
 @bp.route('/api/patients/<homer_id>/agwatch-timing/<protocol_event_id>', methods=['GET'])

@@ -11,8 +11,6 @@ from utils.data_access import (
     write_device_inventory,
     read_sims,
     write_sims,
-    read_device_history,
-    write_device_history,
     mark_device_faulty,
     mark_device_not_faulty,
     write_device_log,
@@ -566,15 +564,22 @@ def api_device_inventory():
                 return info
         return None
 
-    # ── 28-day auto-reset for modems and laptops ─────────────────────────────
+    # ── 28-day auto-reset for all assigned device types ──────────────────────
     # Count from the patient's activationDate, not the assignment date.
+    # Pluto/mars: skip if faulty. Agwatch: skip if has_issue (lost watches have
+    # no active assignment anyway). Modems/laptops: unchanged behaviour.
     now_str = datetime.now().strftime('%Y-%m-%dT%H:%M')
-    for dtype in ('modems', 'laptops'):
+    for dtype in ('modems', 'laptops', 'pluto', 'mars', 'agwatch'):
         asgns = read_device_assignments(folder, dtype)
+        inv   = {d['id']: d for d in read_device_inventory(folder, dtype)}
         changed = False
         for a in asgns:
             if a.get('returned_date') is None:
                 try:
+                    dev = inv.get(a.get('device_id', ''), {})
+                    # Don't auto-return devices with active issues
+                    if dev.get('faulty') or dev.get('has_issue'):
+                        continue
                     homer_id = a.get('homer_id') or a.get('patient_id', '')
                     activation = (patient_map.get(homer_id) or {}).get('activationDate')
                     if not activation:
@@ -654,14 +659,14 @@ def api_device_inventory():
             'assigned_to': _assignment_info(d['id'], laptop_asgn),
         })
 
-    # sims — only compute expiry if linked modem has an active patient assignment
+    # sims — compute expiry for all SIMs regardless of modem assignment status
     today = date.today()
     result['sims'] = []
     for s in all_sims:
         entry = {k: v for k, v in s.items()}
         linked_modem = next((d['id'] for d in modem_inv if d.get('sim_id') == s['id']), None)
         entry['modem_id'] = linked_modem
-        if linked_modem and linked_modem in modem_active and s.get('expiryDate'):
+        if s.get('expiryDate'):
             try:
                 expiry = datetime.strptime(s['expiryDate'], '%Y-%m-%d').date()
                 diff   = (expiry - today).days
@@ -779,7 +784,7 @@ def api_add_device():
 
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', 0) or 0
-    write_device_log(folder, device_id, loginid, session_id, 'Added to inventory')
+    write_device_log(folder, device_id, loginid, session_id, 'Added to inventory', device_type=dtype)
     return jsonify({'status': 'success', 'device': new_device})
 
 
@@ -828,12 +833,12 @@ def api_toggle_clinic():
         for d in devices:
             if d['id'] != device_id and d.get('clinic_only'):
                 d['clinic_only'] = False
-                write_device_log(folder, d['id'], loginid, session_id, 'Clinic status cleared (replaced by another device)')
+                write_device_log(folder, d['id'], loginid, session_id, 'Clinic status cleared (replaced by another device)', device_type=dtype)
 
     target['clinic_only'] = new_clinic
     write_device_inventory(folder, dtype, {'devices': devices})
     action = 'Marked clinic-only' if new_clinic else 'Marked assignable (removed from clinic)'
-    write_device_log(folder, device_id, loginid, session_id, action)
+    write_device_log(folder, device_id, loginid, session_id, action, device_type=dtype)
     return jsonify({'status': 'success', 'clinic_only': new_clinic})
 
 
@@ -883,7 +888,39 @@ def api_toggle_issue():
     action = f'Issue {"reported" if has_issue else "resolved"}'
     if notes:
         action += f' — {notes}'
-    write_device_log(folder, device_id, loginid, session_id, action)
+    write_device_log(folder, device_id, loginid, session_id, action, device_type=dtype)
+    return jsonify({'status': 'success'})
+
+
+# ── Recharge SIM ─────────────────────────────────────────────────────────────
+
+@bp.route('/api/recharge-sim', methods=['POST'])
+def api_recharge_sim():
+    """Record a SIM recharge — updates rechargeDate, expiryDate, dataPlan. Admin only."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') != 'admin':
+        return jsonify({'error': 'Forbidden — admin only'}), 403
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    data   = request.get_json() or {}
+    sim_id = (data.get('sim_id') or '').strip()
+    if not sim_id:
+        return jsonify({'error': 'sim_id is required'}), 400
+
+    sims = read_sims(folder)
+    target = next((s for s in sims if s['id'] == sim_id), None)
+    if not target:
+        return jsonify({'error': 'SIM not found'}), 404
+
+    target['rechargeDate'] = data.get('rechargeDate') or None
+    target['expiryDate']   = data.get('expiryDate') or None
+    target['dataPlan']     = data.get('dataPlan') or None
+    target['updatedAt']    = datetime.now().isoformat()
+    write_sims(folder, sims)
     return jsonify({'status': 'success'})
 
 
@@ -929,7 +966,7 @@ def api_link_sim():
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', 0) or 0
     action = f'Linked SIM {sim_id}' if sim_id else 'Unlinked SIM'
-    write_device_log(folder, modem_id, loginid, session_id, action)
+    write_device_log(folder, modem_id, loginid, session_id, action, device_type='modems')
     return jsonify({'status': 'success'})
 
 
@@ -1016,19 +1053,6 @@ def api_swap_device():
     assignments.append(new_asgn)
     write_device_assignments(folder, dtype, assignments)
 
-    # Write replacement history record
-    history = read_device_history(folder)
-    history.append({
-        'id':            str(uuid.uuid4()),
-        'device_type':   dtype,
-        'old_device_id': old_device_id,
-        'new_device_id': new_device_id,
-        'patient_id':    homer_id,
-        'timestamp':     now_str,
-        'reason':        'Device Issue Replacement',
-    })
-    write_device_history(folder, history)
-
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', 0) or 0
     old_action = f'Issue reported; swapped to {new_device_id}'
@@ -1036,8 +1060,8 @@ def api_swap_device():
     if notes:
         old_action += f' — {notes}'
         new_action += f' — {notes}'
-    write_device_log(folder, old_device_id, loginid, session_id, old_action)
-    write_device_log(folder, new_device_id, loginid, session_id, new_action)
+    write_device_log(folder, old_device_id, loginid, session_id, old_action, device_type=dtype)
+    write_device_log(folder, new_device_id, loginid, session_id, new_action, device_type=dtype)
     return jsonify({'status': 'success', 'homer_id': homer_id})
 
 
@@ -1093,7 +1117,7 @@ def api_assign_device():
 
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', 0) or 0
-    write_device_log(folder, device_id, loginid, session_id, f'Assigned to {homer_id}')
+    write_device_log(folder, device_id, loginid, session_id, f'Assigned to {homer_id}', device_type=dtype)
     return jsonify({'status': 'success'})
 
 
@@ -1132,5 +1156,5 @@ def api_unassign_device():
 
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', 0) or 0
-    write_device_log(folder, device_id, loginid, session_id, f'Returned from {homer_id}')
+    write_device_log(folder, device_id, loginid, session_id, f'Returned from {homer_id}', device_type=dtype)
     return jsonify({'status': 'success'})

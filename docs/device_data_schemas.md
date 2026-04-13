@@ -13,17 +13,25 @@ data/<hospital>/devices/
 │   ├── mars.json
 │   ├── agwatch.json
 │   ├── modems.json
-│   └── laptops.json
+│   ├── laptops.json
+│   └── sims.json
 ├── assignments/
 │   ├── pluto.json
 │   ├── mars.json
 │   ├── agwatch.json
 │   ├── modems.json
 │   └── laptops.json
-├── logs/
-│   └── <device_id>.log
-├── sims.json
-└── device_history.json
+└── logs/
+    ├── pluto/
+    │   └── <device_id>.log
+    ├── mars/
+    │   └── <device_id>.log
+    ├── agwatch/
+    │   └── <device_id>.log
+    ├── modems/
+    │   └── <device_id>.log
+    └── laptops/
+        └── <device_id>.log
 ```
 
 ---
@@ -129,13 +137,13 @@ State is always **derived** — never stored directly. Derivation order (highest
 |-------|------|-------------|
 | `id` | string | Unique device identifier (e.g. `MDM-001`) |
 | `serial` | string | Physical serial number |
-| `sim_id` | UUID string or `null` | ID of the linked SIM card in `sims.json`; `null` = no SIM linked |
+| `sim_id` | UUID string or `null` | ID of the linked SIM card in `inventory/sims.json`; `null` = no SIM linked |
 | `inclusion_date` | `YYYY-MM-DD` | Date added to inventory |
 | `removal_date` | `YYYY-MM-DD` or `null` | Date permanently removed |
 
 **Notes:**
 - A SIM can only be linked to one modem at a time (enforced server-side).
-- SIM expiry details are only displayed when the modem has an active patient assignment.
+- SIM expiry is shown for all SIMs regardless of modem assignment status.
 
 ---
 
@@ -236,11 +244,11 @@ One file per device type. All assignment files share the same top-level key `"as
 
 **Active assignment:** `returned_date = null`. A device with any active assignment record is in the Assigned state.
 
-**28-day auto-reset (modems and laptops only):** On every `GET /devices/api/inventory` call, active modem and laptop assignments where the patient's `activationDate` is ≥ 28 days ago have `returned_date` set automatically. Assignment date is not used — the reset counts from the patient's activation.
+**28-day auto-reset (all device types):** On every `GET /devices/api/inventory` call, active assignments across all device types where the patient's `activationDate` is ≥ 28 days ago have `returned_date` set automatically. Assignment date is not used — the reset counts from the patient's activation. Devices with `faulty=true` (pluto/mars) or `has_issue=true` (agwatch) are skipped.
 
 ---
 
-## `sims.json`
+## `inventory/sims.json`
 
 ```json
 {
@@ -276,57 +284,27 @@ One file per device type. All assignment files share the same top-level key `"as
 | `notes` | string | Free-text notes |
 | `createdAt` | ISO 8601 datetime | When this SIM record was created |
 
-**SIM expiry badge logic** (only shown when modem has an active patient assignment):
+**SIM expiry badge logic** (shown for all SIMs regardless of modem assignment status):
 
 | Condition | Badge |
 |-----------|-------|
 | `expiryDate` not set | — |
-| Expired | red "Expired" |
+| Expired | red "Expired" + Recharge button |
 | ≤ 3 days remaining | red "Expires in Xd" |
 | ≤ 5 days remaining | amber "Expires in Xd" |
 | Active | green with expiry date |
 
-An amber banner appears at the top of the Devices page if any active SIM (on an assigned modem) expires within `reminderDays` days.
+An amber banner appears at the top of the Devices page if any SIM expires within `reminderDays` days.
 
----
-
-## `device_history.json`
-
-Records every device swap — when a faulty device is replaced and the patient follows to a new device.
-
-```json
-{
-  "history": [
-    {
-      "id": "uuid",
-      "device_type": "pluto",
-      "old_device_id": "PLT-001",
-      "new_device_id": "PLT-002",
-      "patient_id": "HOCMCV002",
-      "timestamp": "2026-04-08T12:00",
-      "reason": "Device Issue Replacement"
-    }
-  ]
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | UUID string | Unique history record ID |
-| `device_type` | string | `"pluto"`, `"mars"`, or `"agwatch"` |
-| `old_device_id` | string | Device that was faulted and replaced |
-| `new_device_id` | string | Replacement device assigned to the patient |
-| `patient_id` | string | Homer ID of the patient whose device was swapped |
-| `timestamp` | `YYYY-MM-DDTHH:MM` | When the swap was performed |
-| `reason` | string | Always `"Device Issue Replacement"` (currently) |
-
-A record is written by `POST /devices/api/swap-device` whenever an issue is reported on an assigned device and a swap device is selected.
+When `isExpired=true`, a **Recharge** button appears in the SIM row alongside the badge. Clicking it opens the Recharge SIM modal (fields: Recharge Date, Data Plan, Expiry Date auto-computed from plan). Calls `POST /devices/api/recharge-sim` (body: `{sim_id, rechargeDate, dataPlan, expiryDate}`).
 
 ---
 
 ## Device Log Files
 
-One log file per device, stored at `logs/<device_id>.log`.
+One log file per device, stored at `logs/<device_type>/<device_id>.log`.
+
+`<device_type>` is one of: `pluto`, `mars`, `agwatch`, `modems`, `laptops`.
 
 ```
 :Location: Ranipet
@@ -336,6 +314,8 @@ One log file per device, stored at `logs/<device_id>.log`.
 [2026-04-09T10:30:00]   RP-HS-ADMIN     #3    Issue reported; swapped to AGR-99 — Screen cracked
 [2026-04-09T11:00:00]   RP-HS-ADMIN     #3    Issue resolved
 ```
+
+Example path: `logs/agwatch/AGR-88.log`
 
 **Header lines** (written once at creation):
 
@@ -390,7 +370,8 @@ New records written by the API always use `homer_id`.
 | `/devices/api/add` | POST | Admin | Add a device or SIM to inventory |
 | `/devices/api/toggle-clinic` | POST | Admin | Toggle `clinic_only` on a pluto or mars device (one-per-type rule) |
 | `/devices/api/toggle-issue` | POST | Admin/Engineer | Mark or resolve a device issue; optional `notes` |
-| `/devices/api/swap-device` | POST | Admin/Engineer | Replace a faulty assigned device; patient follows to new device; writes history record |
+| `/devices/api/swap-device` | POST | Admin/Engineer | Replace a faulty assigned device; patient follows to new device; swap recorded in device log entries |
 | `/devices/api/link-sim` | POST | Admin | Link or unlink a SIM to a modem |
 | `/devices/api/assign-device` | POST | Admin | Manually assign a modem or laptop to a patient |
 | `/devices/api/unassign-device` | POST | Admin | Return a modem or laptop from a patient |
+| `/devices/api/recharge-sim` | POST | Admin | Record a SIM recharge — updates rechargeDate, expiryDate, dataPlan |

@@ -591,29 +591,50 @@
 
 <!-- Prescription Printout modal -->
 <div id="prescription-printout-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
-  <div class="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 overflow-y-auto max-h-[90vh]">
+  <div class="bg-white rounded-2xl shadow-xl max-w-3xl w-full p-6 overflow-y-auto max-h-[90vh]">
     <div class="flex items-center justify-between mb-4">
       <h3 id="prescription-printout-title" class="text-xl font-bold text-slate-800">Therapy Prescription Printout</h3>
       <button onclick="hideModal('prescription-printout-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
+
+    <!-- Patient info -->
     <div class="mb-4 px-4 py-3 bg-slate-50 rounded-xl">
       <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
       <p id="prescription-printout-homer-id" class="text-base font-semibold text-slate-800"></p>
     </div>
-    <!-- PDF preview area (TODO: render PDF here) -->
-    <div class="mb-6 flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 h-72 text-slate-400">
-      <i class="fas fa-file-pdf text-4xl mb-3 text-slate-300"></i>
-      <p class="text-sm font-medium">PDF preview</p>
-      <p class="text-xs mt-1">TODO: generate and render prescription PDF</p>
+
+    <!-- Language selector -->
+    <div class="mb-6">
+      <label class="block text-sm font-medium text-slate-700 mb-3">Language</label>
+      <div id="presc-printout-language-buttons" class="flex flex-wrap gap-2">
+        <!-- Buttons will be inserted here by JavaScript -->
+      </div>
     </div>
+
+    <!-- Pamphlet preview pane -->
+    <div id="presc-printout-preview"
+         class="mb-6 border rounded-xl bg-slate-50 overflow-hidden max-h-96 overflow-y-auto">
+      <p class="text-slate-400 text-center py-12 text-sm">Select a language to preview the pamphlet</p>
+    </div>
+
+    <!-- Error message -->
     <p id="prescription-printout-error" class="text-sm text-red-500 hidden mb-3"></p>
+
+    <!-- Action buttons -->
     <div class="flex gap-3">
-      <button type="button" onclick="hideModal('prescription-printout-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
-      <button type="button" id="prescription-printout-save" data-label="Save PDF" onclick="savePrescriptionPrintout()" class="px-4 py-3 border border-blue-200 text-blue-700 rounded-xl font-medium hover:bg-blue-50 flex items-center gap-2">
-        <i class="fas fa-download text-sm"></i> Save PDF
+      <button type="button" onclick="hideModal('prescription-printout-modal')"
+              class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">
+        Cancel
       </button>
-      <button type="button" id="prescription-printout-print" data-label="Print" onclick="printPrescriptionPrintout()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
+      <button type="button" id="prescription-printout-print" data-label="Print"
+              onclick="printPrescriptionPamphlet()"
+              class="flex-1 px-4 py-3 bg-green-500 text-white rounded-xl font-medium hover:bg-green-600 flex items-center justify-center gap-2">
         <i class="fas fa-print text-sm"></i> Print
+      </button>
+      <button type="button" id="prescription-printout-save" data-label="Save PDF"
+              onclick="savePrescriptionPrintout()"
+              class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
+        <i class="fas fa-download text-sm"></i> Save PDF
       </button>
     </div>
   </div>
@@ -1283,7 +1304,14 @@
 {% endblock %}
 
 {% block scripts %}
-<script>const PATIENT_HOMER_ID = {{ homer_id | tojson }};</script>
+<script>
+const PATIENT_HOMER_ID = {{ homer_id | tojson }};
+const PATIENT_PLACE = {{ place | tojson }};</script>
+<!-- For prescription printout PDF generation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="{{ url_for('static', filename='js/app/patient_detail.js') }}?v={{ js_version }}"></script>
 {% endblock %}

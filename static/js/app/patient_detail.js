@@ -3315,8 +3315,24 @@ async function loadVcgTab() {
 
 // ── Prescription Printout modal ────────────────────────────────────────────────
 
+const SITE_LANGUAGES = {
+  'Ranipet':  ['english', 'tamil', 'telugu'],
+  'Manipal':  ['english', 'kannada', 'hindi'],
+  'Ludhiana': ['english', 'punjabi', 'hindi'],
+};
+
+const LANGUAGE_NAMES = {
+  'english':  'English',
+  'tamil':    'தமிழ்',
+  'telugu':   'తెలుగు',
+  'kannada':  'ಕನ್ನಡ',
+  'hindi':    'हिंदी',
+  'punjabi':  'ਪੰਜਾਬੀ',
+};
+
 let _prescPrintoutEventId     = null;
 let _prescPrintoutProtocolId  = null;
+let _prescPrintoutLanguage    = 'english';
 
 function openPrescriptionPrintoutModal(ev) {
   _prescPrintoutEventId    = typeof ev === 'object' ? ev.id : ev;
@@ -3329,42 +3345,480 @@ function openPrescriptionPrintoutModal(ev) {
   document.getElementById('prescription-printout-title').textContent = title;
   document.getElementById('prescription-printout-homer-id').textContent = PATIENT_HOMER_ID;
   setError('prescription-printout-error', '');
+
+  // Create language buttons
+  const buttonsContainer = document.getElementById('presc-printout-language-buttons');
+  buttonsContainer.innerHTML = '';
+  const languages = SITE_LANGUAGES[PATIENT_PLACE] || ['english'];
+
+  languages.forEach(lang => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.language = lang;
+    btn.textContent = LANGUAGE_NAMES[lang] || lang;
+    btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                    'bg-slate-200 text-slate-700 hover:bg-slate-300';
+    btn.onclick = () => selectPrescriptionLanguage(lang);
+    buttonsContainer.appendChild(btn);
+  });
+
+  _prescPrintoutLanguage = 'english';
+
+  // Reset preview
+  document.getElementById('presc-printout-preview').innerHTML =
+    '<p class="text-slate-400 text-center py-12 text-sm">Select a language to preview the pamphlet</p>';
+
   showModal('prescription-printout-modal');
 }
 
-async function _completePrescriptionPrintout() {
-  const { ok, data } = await apiPost(
-    `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
-    { event_id: _prescPrintoutEventId, protocol_event_id: _prescPrintoutProtocolId }
-  );
-  if (!ok) {
-    setError('prescription-printout-error', data.error || 'Failed to record printout.');
-    return null;
+function selectPrescriptionLanguage(lang) {
+  _prescPrintoutLanguage = lang;
+
+  // Update button styles
+  document.querySelectorAll('#presc-printout-language-buttons button').forEach(btn => {
+    if (btn.dataset.language === lang) {
+      btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                      'bg-blue-500 text-white hover:bg-blue-600';
+    } else {
+      btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                      'bg-slate-200 text-slate-700 hover:bg-slate-300';
+    }
+  });
+
+  _loadPrescriptionPamphlet();
+}
+
+async function _loadPrescriptionPamphlet() {
+  if (!_prescPrintoutLanguage) {
+    document.getElementById('presc-printout-preview').innerHTML =
+      '<p class="text-slate-400 text-center py-12 text-sm">Select a language to preview the pamphlet</p>';
+    return;
   }
-  hideModal('prescription-printout-modal');
-  loadPatientEvents();
-  return data.attachment;
+
+  const preview = document.getElementById('presc-printout-preview');
+  preview.innerHTML = '<p class="text-slate-400 text-center py-12 text-sm">Loading pamphlet...</p>';
+
+  try {
+    const res = await fetch(
+      `/api/patients/${PATIENT_HOMER_ID}/prescription-pamphlet?event_id=${_prescPrintoutEventId}&language=${_prescPrintoutLanguage}`
+    );
+    if (!res.ok) {
+      preview.innerHTML = '<p class="text-red-500 text-center py-12 text-sm">Failed to load pamphlet</p>';
+      return;
+    }
+    const html = await res.text();
+    preview.innerHTML = html;
+  } catch (e) {
+    preview.innerHTML = '<p class="text-red-500 text-center py-12 text-sm">Error loading pamphlet</p>';
+  }
 }
 
 async function savePrescriptionPrintout() {
+  if (!_prescPrintoutLanguage) {
+    setError('prescription-printout-error', 'Please select a language first');
+    return;
+  }
+
   setLoading('prescription-printout-save', true);
-  const attachment = await _completePrescriptionPrintout();
-  setLoading('prescription-printout-save', false);
-  if (attachment) {
-    const a = document.createElement('a');
-    a.href = `/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`;
-    a.download = attachment.split('/').pop();
-    a.click();
+
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor
+    let jsPDFConstructor = null;
+    if (window.jsPDF && typeof window.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF;
+    } else if (window.jspdf && typeof window.jspdf === 'function') {
+      jsPDFConstructor = window.jspdf;
+    } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF.jsPDF;
+    } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
+      jsPDFConstructor = window.jspdf.jsPDF;
+    } else if (window.jsPDF && window.jsPDF.default && typeof window.jsPDF.default === 'function') {
+      jsPDFConstructor = window.jsPDF.default;
+    } else if (window.jspdf && window.jspdf.default && typeof window.jspdf.default === 'function') {
+      jsPDFConstructor = window.jspdf.default;
+    }
+
+    if (!jsPDFConstructor) {
+      throw new Error('jsPDF library not loaded. Please refresh the page and try again.');
+    }
+
+    console.log('Capturing full preview content...');
+
+    // Temporarily remove height constraints to capture all content
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
+
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
+
+    // Capture with html2canvas
+    const canvas = await html2canvas(previewDiv, {
+      scale: 1.5,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
+    });
+
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
+
+    console.log('Content captured, creating PDF with page breaks...');
+
+    // Create PDF from canvas
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDFConstructor('p', 'mm', 'a4');
+    const imgWidth = 210;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+    heightLeft -= 297;
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= 297;
+    }
+
+    // Convert PDF to blob
+    const pdfBlob = pdf.output('blob');
+
+    // Mark event complete FIRST (moves it from incomplete to complete)
+    console.log('Marking event as complete...');
+    const { ok: completeOk, data: completeData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+      }
+    );
+
+    if (!completeOk) {
+      throw new Error(completeData.error || 'Failed to mark event complete');
+    }
+
+    console.log('✓ Event marked as complete');
+
+    // NOW upload the attachment (event is now in complete list)
+    console.log('Uploading PDF attachment...');
+    const formData = new FormData();
+    formData.append('event_id', _prescPrintoutEventId);
+    formData.append('caption', `Exercise Prescription Printout (${_prescPrintoutLanguage})`);
+    formData.append('file', pdfBlob, `prescription_${_prescPrintoutLanguage}.pdf`);
+
+    const uploadUrl = `/api/patients/${PATIENT_HOMER_ID}/upload-attachment`;
+    console.log('Upload details:', {
+      url: uploadUrl,
+      method: 'POST',
+      event_id: _prescPrintoutEventId,
+      file_size: pdfBlob.size,
+      file_type: pdfBlob.type
+    });
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      body: formData,
+    });
+
+    console.log('Upload response status:', uploadRes.status, uploadRes.statusText);
+
+    if (!uploadRes.ok) {
+      let errorMsg = 'Failed to upload attachment';
+      try {
+        const errorData = await uploadRes.json();
+        errorMsg = errorData.error || errorMsg;
+        console.error('Upload error details:', errorData);
+      } catch (e) {
+        console.error('Upload failed with status:', uploadRes.status, uploadRes.statusText);
+      }
+      throw new Error(errorMsg);
+    }
+
+    console.log('✓ PDF uploaded successfully');
+
+    // Success: close modal and refresh events
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to save PDF');
+  } finally {
+    setLoading('prescription-printout-save', false);
   }
 }
 
-async function printPrescriptionPrintout() {
-  setLoading('prescription-printout-print', true);
-  const attachment = await _completePrescriptionPrintout();
-  setLoading('prescription-printout-print', false);
-  if (attachment) {
-    window.open(`/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`, '_blank');
+// ── Custom PDF Dialog Modal ────────────────────────────────────────
+
+let _pdfDialogSettings = {
+  pageSize: 'a4',
+  scale: 100,
+  margins: 10
+};
+
+function openPrescriptionPdfDialog() {
+  if (!_prescPrintoutLanguage) {
+    setError('prescription-printout-error', 'Please select a language first');
+    return;
   }
+
+  console.log('Opening PDF dialog...');
+
+  // Reset settings to defaults
+  _pdfDialogSettings = {
+    pageSize: 'a4',
+    scale: 100,
+    margins: 10
+  };
+
+  // Update UI
+  document.getElementById('pdf-page-size').value = 'a4';
+  document.getElementById('pdf-scale').value = 100;
+  document.getElementById('pdf-scale-value').textContent = '100%';
+  document.getElementById('pdf-margins').value = 10;
+
+  // Show preview
+  updatePdfPreview();
+
+  // Setup event listeners
+  document.getElementById('pdf-page-size').addEventListener('change', (e) => {
+    _pdfDialogSettings.pageSize = e.target.value;
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-scale').addEventListener('input', (e) => {
+    _pdfDialogSettings.scale = parseInt(e.target.value);
+    document.getElementById('pdf-scale-value').textContent = _pdfDialogSettings.scale + '%';
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-margins').addEventListener('change', (e) => {
+    _pdfDialogSettings.margins = parseInt(e.target.value) || 10;
+  });
+
+  // Show modal
+  showModal('prescription-pdf-dialog-modal');
+}
+
+function updatePdfPreview() {
+  const previewDiv = document.getElementById('presc-printout-preview');
+  const previewPane = document.getElementById('pdf-preview-pane');
+
+  if (!previewDiv) return;
+
+  // Clone preview content with current scale
+  const clone = previewDiv.cloneNode(true);
+  clone.style.transform = `scale(${_pdfDialogSettings.scale / 100})`;
+  clone.style.transformOrigin = 'top left';
+  clone.style.width = `${100 / (_pdfDialogSettings.scale / 100)}%`;
+
+  previewPane.innerHTML = '';
+  previewPane.appendChild(clone);
+}
+
+async function savePrescriptionPdfFromDialog() {
+  setLoading('prescription-pdf-save-dialog', true);
+
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor
+    let jsPDFConstructor = null;
+    if (window.jsPDF && typeof window.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF;
+    } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF.jsPDF;
+    } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
+      jsPDFConstructor = window.jspdf.jsPDF;
+    }
+
+    if (!jsPDFConstructor) {
+      throw new Error('jsPDF library not loaded. Please refresh and try again.');
+    }
+
+    console.log('Generating PDF with user settings...');
+
+    // Prepare element for capture
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
+
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
+
+    // Capture with html2canvas using user's scale setting
+    const canvas = await html2canvas(previewDiv, {
+      scale: _pdfDialogSettings.scale / 100,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
+    });
+
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
+
+    console.log('Canvas created, creating PDF...');
+
+    // Get page dimensions based on user settings
+    const pageSizes = {
+      a4: { width: 210, height: 297 },
+      letter: { width: 216, height: 279 },
+      a3: { width: 297, height: 420 }
+    };
+    const pageSize = pageSizes[_pdfDialogSettings.pageSize];
+    const margins = _pdfDialogSettings.margins;
+    const contentWidth = pageSize.width - (margins * 2);
+
+    // Create PDF
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDFConstructor('p', 'mm', _pdfDialogSettings.pageSize);
+
+    const imgHeight = (canvas.height * contentWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = margins;
+
+    pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+    heightLeft -= (pageSize.height - (margins * 2));
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+      heightLeft -= (pageSize.height - (margins * 2));
+    }
+
+    const pdfBlob = pdf.output('blob');
+    console.log('PDF created, size:', pdfBlob.size, 'bytes');
+
+    // Mark event complete
+    console.log('Marking event as complete...');
+    const { ok: completeOk, data: completeData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+      }
+    );
+
+    if (!completeOk) {
+      throw new Error(completeData.error || 'Failed to mark event complete');
+    }
+
+    console.log('Event marked complete, uploading PDF...');
+
+    // Upload attachment
+    const formData = new FormData();
+    formData.append('event_id', _prescPrintoutEventId);
+    formData.append('caption', `Exercise Prescription Printout (${_prescPrintoutLanguage})`);
+    formData.append('file', pdfBlob, `prescription_${_prescPrintoutLanguage}.pdf`);
+
+    const uploadRes = await fetch(`/api/patients/${PATIENT_HOMER_ID}/upload-attachment`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error('Failed to upload PDF');
+    }
+
+    console.log('PDF uploaded successfully');
+
+    // Success
+    hideModal('prescription-pdf-dialog-modal');
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to save PDF');
+  } finally {
+    setLoading('prescription-pdf-save-dialog', false);
+  }
+}
+
+function printPrescriptionPamphlet() {
+  const previewDiv = document.getElementById('presc-printout-preview');
+
+  // Check if pamphlet is loaded
+  if (!previewDiv.innerHTML || previewDiv.innerHTML.includes('Select a language') || previewDiv.innerHTML.includes('Loading')) {
+    setError('prescription-printout-error', 'Please select a language and wait for the preview to load first');
+    return;
+  }
+
+  // Create a new window for printing
+  const printWindow = window.open('', '', 'height=800,width=1000');
+
+  if (!printWindow) {
+    setError('prescription-printout-error', 'Pop-up window was blocked. Please allow pop-ups for this site.');
+    return;
+  }
+
+  // Get the HTML content from the preview
+  const htmlContent = previewDiv.innerHTML;
+
+  // Build the complete HTML document
+  const printHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Exercise Prescription Pamphlet</title>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+Devanagari:wght@400;500;600&family=Noto+Sans+Tamil:wght@400;500;600&family=Noto+Sans+Telugu:wght@400;500;600&family=Noto+Sans+Kannada:wght@400;500;600&family=Noto+Sans+Gurmukhi:wght@400;500;600&display=swap');
+
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+
+        body {
+          font-family: 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Gurmukhi', sans-serif;
+          line-height: 1.5;
+          color: #333;
+          padding: 20px;
+        }
+
+        @media print {
+          body { padding: 0; }
+          .container { max-width: 100%; padding: 0; }
+          .exercise-card { page-break-inside: avoid; page-break-before: always; }
+          .exercise-card.first-exercise { page-break-before: auto; }
+        }
+      </style>
+    </head>
+    <body>
+      ${htmlContent}
+    </body>
+    </html>
+  `;
+
+  // Write content directly to the new window (document.write is most reliable for print windows)
+  // @ts-ignore - document.write is deprecated but necessary for reliable print window population
+  printWindow.document.write(printHtml);
+  printWindow.document.close();
+
+  // Trigger print dialog immediately after content is written
+  setTimeout(() => {
+    printWindow.focus();
+    printWindow.print();
+  }, 100);
 }
 
 // ── Simple event modal (home visits, follow-up calls, training completion) ────

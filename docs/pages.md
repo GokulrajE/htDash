@@ -4,14 +4,14 @@
 
 ## URL Structure
 
-| Page           | URL                      | Blueprint                   |
-|----------------|--------------------------|-----------------------------|
-| Login          | `/login`                 | `routes/auth.py`            |
-| Dashboard      | `/`                      | `main.py`                   |
-| Patient list   | `/patients`              | `routes/user_management.py` |
-| Patient detail | `/patients/<homer_id>`   | `routes/user_management.py` |
-| Devices        | `/devices/`              | `routes/devices.py`         |
-| SIM cards      | `/sim_cards/`            | `routes/sim_cards.py`       |
+| Page           | URL                    | Blueprint                                                                                                      |
+| -------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Login          | `/login`               | `routes/auth.py`                                                                                               |
+| Dashboard      | `/`                    | `main.py`                                                                                                      |
+| Patient list   | `/patients`            | `routes/user_management.py`                                                                                    |
+| Patient detail | `/patients/<homer_id>` | `routes/user_management.py`                                                                                    |
+| Devices        | `/devices/`            | `routes/devices.py`                                                                                            |
+| SIM cards      | `/sim_cards/`          | `routes/sim_cards.py` (legacy — SIM management is integrated into the Devices page; `/sim_cards/` is not used) |
 
 ---
 
@@ -23,11 +23,11 @@
 
 ## User Permissions
 
-| User type   | Description |
-|-------------|-------------|
-| `admin`     | Global admin — sees all sites, all actions |
+| User type   | Description                                          |
+| ----------- | ---------------------------------------------------- |
+| `admin`     | Global admin — sees all sites, all actions           |
 | `therapist` | Site user — sees own site patients, clinical actions |
-| `engineer`  | Site user — device and technical actions |
+| `engineer`  | Site user — device and technical actions             |
 
 Actions list which user types are permitted. UI controls for disallowed actions are visible but disabled.
 
@@ -78,6 +78,7 @@ Below the stats: **Overdue** and **Upcoming** event panels showing protocol even
 Patient list for the user's visible site(s).
 
 #### Page elements
+
 - Search bar (filter by Homer ID)
 - **Add Patient** button (admin only)
 - Filter tabs (in order): All, Unassigned, Inactive, Active, Paused, Training Complete, A1 Complete, Pre-Discontinued, Broken Protocol, Discontinued, All Complete — each with count. "All" selected by default.
@@ -87,26 +88,26 @@ Patient list for the user's visible site(s).
 
 #### Patient state transitions
 
-| Current state      | Action                                         | Field set                                                       | Next state         |
-|--------------------|------------------------------------------------|-----------------------------------------------------------------|--------------------|
-| unassigned         | Assign group + Record A0                       | `group`, `a0CompletionDate`                                     | inactive           |
-| unassigned         | Pre-Discontinue                                | `discontinuationDate`                                           | pre_discontinued   |
-| inactive           | Activate                                       | `activationDate`                                                | active             |
-| inactive           | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
-| inactive           | *(today > a0 + 5 days)*                        | *(none — derived)*                                              | broken_protocol    |
-| broken_protocol    | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
-| active             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
-| active             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
-| active             | Robot issue visit — device swapped with no replacement available | `trainingPausedDate` set                                   | paused             |
-| active             | Adverse event — `training_blocked` checked     | `trainingPausedDate` set                                        | paused             |
-| paused             | All pause causes resolved (`can_resume_from` set on all; no `resolve_robot_issue_visit` stubs remain) | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active |
-| paused             | All pause causes resolved (`cumulativePauseDays` > 10)   | `cumulativePauseDays` incremented                          | broken_protocol    |
-| paused             | Complete `training_completion_d29` event       | `trainingCompletionDate`                                        | training_completed |
-| paused             | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
-| training_completed | Record A1                                      | `a1CompletionDate`                                              | a1_completed       |
-| training_completed | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
-| a1_completed       | Record A2                                      | `a2CompletionDate`                                              | all_completed      |
-| a1_completed       | Discontinue                                    | `discontinuationDate`                                           | discontinued       |
+| Current state      | Action                                                                                                | Field set                                                       | Next state         |
+| ------------------ | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------ |
+| unassigned         | Assign group + Record A0                                                                              | `group`, `a0CompletionDate`                                     | inactive           |
+| unassigned         | Pre-Discontinue                                                                                       | `discontinuationDate`                                           | pre_discontinued   |
+| inactive           | Activate                                                                                              | `activationDate`                                                | active             |
+| inactive           | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
+| inactive           | _(today > a0 + 5 days)_                                                                               | _(none — derived)_                                              | broken_protocol    |
+| broken_protocol    | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
+| active             | Complete `training_completion_d29` event                                                              | `trainingCompletionDate`                                        | training_completed |
+| active             | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
+| active             | Robot issue visit — device swapped with no replacement available                                      | `trainingPausedDate` set                                        | paused             |
+| active             | Adverse event — `training_blocked` checked                                                            | `trainingPausedDate` set                                        | paused             |
+| paused             | All pause causes resolved (`can_resume_from` set on all; no `resolve_robot_issue_visit` stubs remain) | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active             |
+| paused             | All pause causes resolved (`cumulativePauseDays` > 10)                                                | `cumulativePauseDays` incremented                               | broken_protocol    |
+| paused             | Complete `training_completion_d29` event                                                              | `trainingCompletionDate`                                        | training_completed |
+| paused             | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
+| training_completed | Record A1                                                                                             | `a1CompletionDate`                                              | a1_completed       |
+| training_completed | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
+| a1_completed       | Record A2                                                                                             | `a2CompletionDate`                                              | all_completed      |
+| a1_completed       | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
 
 **Actions:** [Add Patient](#add-patient), [Assign Group](#assign-group), [Pre-Discontinue](#pre-discontinue)
 
@@ -123,29 +124,28 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 
 - **Tab bar** (JS-driven switching):
 
-  | Tab            | Shown for           |
-  |----------------|---------------------|
-  | Overview       | All                 |
-  | Devices        | Experimental only   |
-  | VCG            | Control only        |
-  | ADL            | All                 |
-  | Call Logs      | All                 |
-  | Adverse Events | All                 |
-  | Watch Records  | All                 |
-  | Robot Issues   | Experimental only   |
-  | Timeline       | All                 |
+  | Tab            | Shown for         |
+  | -------------- | ----------------- |
+  | Overview       | All               |
+  | Devices        | Experimental only |
+  | VCG            | Control only      |
+  | ADL            | All               |
+  | Call Logs      | All               |
+  | Adverse Events | All               |
+  | Watch Records  | All               |
+  | Robot Issues   | Experimental only |
+  | Timeline       | All               |
 
-- **Overview tab** (default):
-  0. **Pause alert banner** — shown only when `status === 'paused'`. Full-width amber strip (red when ≥ 8 days total) injected above the Patient Info / Key Dates grid. Contains:
-     - "Training Paused" heading with pause icon
-     - "Paused since: \<date\>" and "Days paused so far: X / 10"
-     - A **segmented progress bar** over 10 days: one colour slice per closed past epoch (from `pauseHistory` closed entries) plus a distinct colour for the current open epoch. Each slice width = its `days` / 10. Turns red at ≥ 8 days total.
-     - Reason pills: "Robot issue pending" (if any `resolve_robot_issue_visit` stubs exist in `incomplete`) and/or "Adverse event pending" (if any `adverse_event_followup` stubs exist in `incomplete`)
-     - The "days paused so far" is `cumulativePauseDays` (closed epochs) + `(today − trainingPausedDate).days` (current open epoch). Banner is hidden for all other statuses.
-  0b. **Pause history card** — rendered as a `col-span-5` card inside the Patient Info / Key Dates grid, appearing as a second row spanning the full width. Hidden when `pauseHistory` is empty; shown as soon as any pause epoch exists. Shows a compact table of all pause epochs from `pauseHistory`:
-     - Columns: Epoch # | Start date | End date | Days | Reasons
-     - The current open epoch shows "Ongoing" for End and "—" for Days.
-  1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date, Pluto ID *(experimental group)*, Mars ID *(experimental group)*, AG Watch Right ID *(both groups)*, AG Watch Left ID *(both groups)*,
+- **Overview tab** (default): 0. **Pause alert banner** — shown only when `status === 'paused'`. Full-width amber strip (red when ≥ 8 days total) injected above the Patient Info / Key Dates grid. Contains:
+  - "Training Paused" heading with pause icon
+  - "Paused since: \<date\>" and "Days paused so far: X / 10"
+  - A **segmented progress bar** over 10 days: one colour slice per closed past epoch (from `pauseHistory` closed entries) plus a distinct colour for the current open epoch. Each slice width = its `days` / 10. Turns red at ≥ 8 days total.
+  - Reason pills: "Robot issue pending" (if any `resolve_robot_issue_visit` stubs exist in `incomplete`) and/or "Adverse event pending" (if any `adverse_event_followup` stubs exist in `incomplete`)
+  - The "days paused so far" is `cumulativePauseDays` (closed epochs) + `(today − trainingPausedDate).days` (current open epoch). Banner is hidden for all other statuses.
+    0b. **Pause history card** — rendered as a `col-span-5` card inside the Patient Info / Key Dates grid, appearing as a second row spanning the full width. Hidden when `pauseHistory` is empty; shown as soon as any pause epoch exists. Shows a compact table of all pause epochs from `pauseHistory`:
+  - Columns: Epoch # | Start date | End date | Days | Reasons
+  - The current open epoch shows "Ongoing" for End and "—" for Days.
+  1. **Patient Info card** — Homer ID, Hospital ID, Group, Training Side, Status, Enrolment Date, Pluto ID _(experimental group)_, Mars ID _(experimental group)_, AG Watch Right ID _(both groups)_, AG Watch Left ID _(both groups)_,
   2. **Key Dates card** — A0, Activation, Training Completion, A1, A2, Discontinuation dates. A separate **Days card** sits alongside showing days elapsed since activation (Day 1 = activation date). Displays `—` until activated. Hidden for terminal states (discontinued, all_completed, pre_discontinued). Calculated client-side in `patient_detail.js`.
   3. **Events panels** — Three columns: Completed | Overdue | Upcoming. Fetched from `GET /api/patients/<homer_id>/events`.
      - **Completed** — compact vertical timeline, most recent first. Green circle markers on a vertical line. Shows event name + completion date. Read-only.
@@ -162,18 +162,18 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - Alternating row backgrounds for readability.
 
   **Split layout** (3-column CSS grid: `1fr 20px 1fr`):
-  - *Left column* (right-aligned): event name (bold), scheduled date (`start – end` for windowed, single date if `start == end`, `—` if `null`; omitted for synthetic events), **Day N** relative to `activationDate` (negative for events before activation; omitted if patient not yet activated), **transition badge** (bottom-left, see below).
-  - *Centre column*: circle marker + connecting vertical line.
-  - *Right column*: completion datetime, filed-at timestamp, then extra event-specific fields in order: Pluto Device, Mars Device, Demo Done, Right Watch, Left Watch, Prescription File, any additional fields, **Notes always last**. Empty/false fields are omitted.
+  - _Left column_ (right-aligned): event name (bold), scheduled date (`start – end` for windowed, single date if `start == end`, `—` if `null`; omitted for synthetic events), **Day N** relative to `activationDate` (negative for events before activation; omitted if patient not yet activated), **transition badge** (bottom-left, see below).
+  - _Centre column_: circle marker + connecting vertical line.
+  - _Right column_: completion datetime, filed-at timestamp, then extra event-specific fields in order: Pluto Device, Mars Device, Demo Done, Right Watch, Left Watch, Prescription File, any additional fields, **Notes always last**. Empty/false fields are omitted.
 
   **Transition badges** — a small pill shown at the bottom-left of the left column whenever that event caused a patient state transition. Derived client-side by `_deriveTransitions(patient, events)` — never stored. At most one badge per event.
 
-  | Badge | Colour | Condition |
-  |---|---|---|
-  | Training paused | amber | Event `id` appears in any `pauseHistory[*].reasons[*].event_id` |
-  | Training resumed | green | Event `id` matches a closed `pauseHistory[*].end_event_id` |
-  | Protocol broken | red | Event `completion_date` (date only) matches `brokenProtocolDate` |
-  | Discontinued | slate | Event `completion_date` (date only) matches `discontinuationDate` |
+  | Badge            | Colour | Condition                                                         |
+  | ---------------- | ------ | ----------------------------------------------------------------- |
+  | Training paused  | amber  | Event `id` appears in any `pauseHistory[*].reasons[*].event_id`   |
+  | Training resumed | green  | Event `id` matches a closed `pauseHistory[*].end_event_id`        |
+  | Protocol broken  | red    | Event `completion_date` (date only) matches `brokenProtocolDate`  |
+  | Discontinued     | slate  | Event `completion_date` (date only) matches `discontinuationDate` |
 
   `_deriveTransitions(patient, events)` returns a `Map<event_id, badge>` built once when the timeline renders. Synthetic events (Enrolled, A0) never carry badges.
 
@@ -184,7 +184,7 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - `GET /api/patients/<homer_id>/agwatch-timing/adl_agwatch_timing_d03` (or `d15`)
   - If `prescription_printout_d01` (or `d15`) is complete, a **Download PDF** link appears in the card header.
 
-- **VCG tab** *(control patients only)* — same layout as ADL tab, using teal headers (day 01 = teal-400, day 15 = teal-600). Data fetched via:
+- **VCG tab** _(control patients only)_ — same layout as ADL tab, using teal headers (day 01 = teal-400, day 15 = teal-600). Data fetched via:
   - `GET /api/patients/<homer_id>/prescription/vcg_prescription_d01` (or `d15`)
   - `GET /api/patients/<homer_id>/agwatch-timing/vcg_agwatch_timing_d03` (or `d15`)
 
@@ -197,7 +197,6 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - Assembly: data fetched from `GET /api/patients/<homer_id>/events` (which returns all `free` arrays); assembled per-AE by joining on `ae_id` across event types — no separate endpoint required
 
 - **Stub tabs** — Devices, Call Logs, Watch Records, Robot Issues show "Coming soon"
-
 
 **Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [File Adverse Event](#file-adverse-event-adverse_event), [Adverse Event Follow-up Call](#adverse-event-follow-up-call-adverse_event_followup), [Adverse Event Follow-up Visit](#adverse-event-follow-up-visit-adverse_event_followup_visit), [Adverse Event Clinical Visit](#adverse-event-clinical-visit-adverse_event_clinical_visit), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
 
@@ -213,16 +212,17 @@ Device Management page. Shows all devices for the current site grouped by type. 
 - **SIM expiry banner** — amber alert strip shown when any SIM has `daysUntilExpiry ≤ 5`.
 - Six device sections rendered as cards:
 
-| Section | Device type | Notes |
-|---------|-------------|-------|
-| Pluto Devices | `pluto` | Robot devices; experimental patients only |
-| Mars Devices | `mars` | Robot devices; experimental patients only |
-| Actigraph Watches | `agwatch` | Split into Right Watch / Left Watch sub-tables |
-| Modems | `modems` | Shows linked SIM info |
-| SIM Cards | `sims` | Shows expiry badge with countdown |
-| Laptops | `laptops` | Assignable to patients |
+| Section           | Device type | Notes                                          |
+| ----------------- | ----------- | ---------------------------------------------- |
+| Pluto Devices     | `pluto`     | Robot devices; experimental patients only      |
+| Mars Devices      | `mars`      | Robot devices; experimental patients only      |
+| Actigraph Watches | `agwatch`   | Split into Right Watch / Left Watch sub-tables |
+| Modems            | `modems`    | Shows linked SIM info                          |
+| SIM Cards         | `sims`      | Shows expiry badge with countdown              |
+| Laptops           | `laptops`   | Assignable to patients                         |
 
 Each device row (Pluto/Mars/Agwatch/Laptops) shows:
+
 - Device ID, Serial, Status badge, Assigned Patient (link to patient detail)
 - **Actions column** (admin or engineer): Report Issue / Resolve Issue toggle; clinic toggle (admin only)
 
@@ -230,6 +230,7 @@ Status badges: **Available** (green) · **Assigned** (blue) · **Clinic Only** (
 
 SIM row columns: Phone number, Network, Linked Modem, Recharge Date, Expiry Status badge.
 SIM expiry badge: **Active** (green) · **Expires in Xd** amber (≤5d) · **Expires in Xd** red (≤3d) · **Expired** (red).
+When a SIM is expired, a **Recharge** button appears inline in the Expiry Status cell. Clicking it opens the Recharge SIM modal (Recharge Date, Data Plan, Expiry Date auto-computed from plan).
 
 Agwatch section header has **Right Watch** and **Left Watch** add buttons (admin only).
 
@@ -251,7 +252,7 @@ Agwatch section header has **Right Watch** and **Left Watch** add buttons (admin
 
 - **Add Device** (Pluto/Mars) — admin only. Modal: device type selector, ID, serial. `POST /devices/api/add`
 - **Add Watch** — admin only. Separate "Right Watch" / "Left Watch" buttons. Modal: ID, serial, limb pre-filled (read-only). `POST /devices/api/add` with `device_type: agwatch`.
-- **Add Modem** — admin only. Modal: ID, serial, optional SIM dropdown (unlinked SIMs only). `POST /devices/api/add` with `device_type: modem`.
+- **Add Modem** — admin only. Modal: ID, serial. SIM is linked post-creation via Link SIM. `POST /devices/api/add` with `device_type: modem`.
 - **Add SIM** — admin only. Modal: phone number, network, recharge date, expiry date, reminder days. `POST /devices/api/add` with `device_type: sim`.
 - **Add Laptop** — admin only. Modal: ID, serial. `POST /devices/api/add` with `device_type: laptop`.
 - **Link SIM** — admin only. Per-modem button. Dropdown of available SIMs (unlinked or currently linked). `POST /devices/api/link-sim`.
@@ -267,6 +268,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Successful login
+
 - Trigger: User submits correct credentials
 - Allowed users: all
 - Modal fields: none (standard login form)
@@ -278,6 +280,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Failed login
+
 - Trigger: User submits incorrect credentials
 - Server actions: none
 - Log message: none
@@ -285,6 +288,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Add Patient
+
 - Trigger: "Add Patient" button on `/patients`
 - Allowed users: `admin`
 - Modal fields:
@@ -300,6 +304,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Assign Group
+
 - Trigger: "Assign Group" button on patient card (unassigned patients)
 - Allowed users: `admin`
 - Modal fields:
@@ -313,6 +318,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Pre-Discontinue
+
 - Trigger: "Pre-DC" button on patient card (unassigned patients)
 - Allowed users: `admin`, `therapist`
 - Modal fields:
@@ -325,6 +331,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Activate
+
 - Trigger:
   - Clicking the `activation` event row on patient detail (inactive patients).
   - Takes the user to patients details page where the modal is implemented.
@@ -349,6 +356,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Record A1 Assessment
+
 - Trigger: "Record A1" button on patient detail (training_completed patients)
 - Allowed users: `admin`
 - Modal fields:
@@ -360,6 +368,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Record A2 Assessment
+
 - Trigger: "Record A2" button on patient detail (a1_completed patients)
 - Allowed users: `admin`
 - Modal fields:
@@ -371,6 +380,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Discontinue
+
 - Trigger: "Discontinue" button on patient detail
 - Allowed users: `admin`
 - Applicable states: `inactive`, `broken_protocol`, `active`, `paused`, `training_completed`, `a1_completed`
@@ -384,14 +394,15 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### ADL Prescription (`adl_prescription_d01`)
+
 - Trigger: `adl_prescription_d01` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - Modal fields:
   - Event Date (read-only — auto-populated from the `activation` event's `completion_date`)
   - **Exercise search bar** — live-filters the ADL exercise list fetched from `GET /api/exercises?type=adl`; clicking a result adds it to the selected list; already-selected exercises are excluded from search results
   - **Selected exercises list** (scrollable if long) — each exercise exists in one of two states:
-    - *Editing state* (entered when first added, or when Edit is pressed): exercise name + × (remove) button; Blocks field (number, required); Repetitions field (number, required); Notes field (textarea, optional); **Save** button — commits values and collapses to compact view
-    - *Compact state* (entered after Save is pressed): exercise name · `<blocks> blocks × <reps> reps`; **Edit** button (re-expands to editing state pre-filled with saved values); × button (removes exercise)
+    - _Editing state_ (entered when first added, or when Edit is pressed): exercise name + × (remove) button; Blocks field (number, required); Repetitions field (number, required); Notes field (textarea, optional); **Save** button — commits values and collapses to compact view
+    - _Compact state_ (entered after Save is pressed): exercise name · `<blocks> blocks × <reps> reps`; **Edit** button (re-expands to editing state pre-filled with saved values); × button (removes exercise)
     - The modal's **Save Prescription** button is **disabled** while any exercise card is in editing state — the therapist must Save or remove all cards before submitting
   - General Notes (textarea, optional)
 - Server actions:
@@ -402,6 +413,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### VCG Prescription (`vcg_prescription_d01`)
+
 - Trigger: `vcg_prescription_d01` event row on patient detail (control patients only, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - Modal fields:
@@ -418,6 +430,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Prescription Printout (`prescription_printout_d01`)
+
 - Trigger: `prescription_printout_d01` event row on patient detail (both groups, day 1 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `adl_prescription_d01` (both groups); `vcg_prescription_d01` (control only)
@@ -436,6 +449,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Revised Prescription Printout (`prescription_printout_d15`)
+
 - Trigger: `prescription_printout_d15` event row on patient detail (both groups, day 15 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `adl_prescription_d15` (both groups); `vcg_prescription_d15` (control only)
@@ -454,6 +468,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### ADL Prescription Revision (`adl_prescription_d15`)
+
 - Trigger: `adl_prescription_d15` event row on patient detail (both groups, day 15 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `home_visit_d15` (both groups)
@@ -468,6 +483,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### VCG Prescription Revision (`vcg_prescription_d15`)
+
 - Trigger: `vcg_prescription_d15` event row on patient detail (control patients only, day 15 after activation)
 - Allowed users: `admin`, `therapist`
 - `depends_on`: `home_visit_d15`
@@ -483,6 +499,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Home Visit (`home_visit_d02`, `home_visit_d03`, `home_visit_d15`)
+
 - Trigger: respective event row on patient detail
 - Allowed users: `admin`, `therapist`
 - Modal: `home-visit-modal` (dedicated; not shared)
@@ -500,6 +517,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Follow-up Call (`followup_call_d07`, `followup_call_d21`)
+
 - Trigger: respective event row on patient detail
 - Allowed users: `admin`, `therapist`
 - Modal: `followup-call-modal` (dedicated; not shared with home visits)
@@ -521,6 +539,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Patient Call
+
 - Trigger: "Log Patient Call" button in the tab bar on patient detail (active patients)
 - Allowed users: `admin`, `therapist`
 - Modal: `patient-call-modal`
@@ -547,6 +566,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### AG Watch Timings (`adl_agwatch_timing_d03`, `adl_agwatch_timing_d15`, `vcg_agwatch_timing_d03`, `vcg_agwatch_timing_d15`)
+
 - Trigger: respective event row on patient detail
 - `adl_agwatch_timing_d03` / `adl_agwatch_timing_d15` — both groups; `vcg_agwatch_timing_d03` / `vcg_agwatch_timing_d15` — control only
 - Allowed users: `admin`, `therapist`
@@ -579,6 +599,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Training Completion Visit (`training_completion_d29`)
+
 - Trigger: `training_completion_d29` event row on patient detail (`active` or `paused` patients, day 29)
 - Allowed users: `admin`, `therapist`
 - Modal: `simple-event-modal` (shared)
@@ -594,7 +615,8 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Device Setup (`exp_device_install`)
-- Trigger: 
+
+- Trigger:
   - Clicking the `exp_device_install` event row on patient detail (experimental, inactive patients).
   - Takes the user to patients details page where the modal is implemented.
 - Allowed users: `admin`, `engineer`
@@ -607,12 +629,13 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Server actions:
   - Move `exp_device_install` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `pluto_id`, `mars_id`, `demo_done`, `notes`
   - Append assignment record to `devices/assignments/pluto.json` and `devices/assignments/mars.json`
-  - Append to `devices/logs/<pluto_id>.log` and `devices/logs/<mars_id>.log`
+  - Append to `devices/logs/pluto/<pluto_id>.log` and `devices/logs/mars/<mars_id>.log`
 - Log message: `Device setup completed — Pluto: <pluto_id>, Mars: <mars_id>`
 
 ---
 
 ### File Adverse Event (`adverse_event`)
+
 - Trigger: `adverse_event` event row on patient detail — only appears when a stub exists in `incomplete` (created by a triggering event: activation, home visit, follow-up call, or patient call)
 - Allowed users: `admin`, `therapist`
 - Modal: `adverse-event-modal`
@@ -637,6 +660,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Robot Issue — Engineer Call (`robot_issue_call`)
+
 - Trigger: `robot_issue_call` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created directly by triggering modals (activation, home visit, patient call, follow-up call) when the "robot issue" toggle is checked. There is no intermediate `robot_issue` event.
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
@@ -659,6 +683,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Robot Issue — Engineer Visit (`robot_issue_visit`)
+
 - Trigger: `robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue call outcome is "visit required")
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
@@ -693,6 +718,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Adverse Event Follow-up Call (`adverse_event_followup`)
+
 - Trigger: `adverse_event_followup` event row on patient detail — only appears when a stub exists in `incomplete`
 - Allowed users: `admin`, `therapist`
 - Modal: `adverse-event-followup-modal`
@@ -722,6 +748,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Resolve Robot Issue — Replacement Visit (`resolve_robot_issue_visit`)
+
 - Trigger: `resolve_robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue visit swaps a device with no replacement available)
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
@@ -758,6 +785,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Adverse Event Follow-up Visit (`adverse_event_followup_visit`)
+
 - Trigger: `adverse_event_followup_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a follow-up visit is scheduled.
 - Allowed users: `admin`, `therapist`
 - Cancellable: yes — a **Cancel Visit** button is shown in the modal footer. Clicking it prompts for a cancellation reason (textarea, required). Cancellation moves the stub to the top-level `cancelled` array in `protocol_events.json` with `cancelled_at` timestamp and `cancellation_reason`. No further stubs are created.
@@ -782,6 +810,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Adverse Event Clinical Visit (`adverse_event_clinical_visit`)
+
 - Trigger: `adverse_event_clinical_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a clinical visit is scheduled.
 - Allowed users: `admin`, `therapist`
 - Cancellable: yes — same cancellation behaviour as `adverse_event_followup_visit` (reason required, stored as `cancellation_reason`)
@@ -806,6 +835,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 ---
 
 ### Watch Record (`watch_record`)
+
 - Trigger:
   - `watch_record` event row on patient detail — covers three cases:
     1. **Activation-seeded**: first entry, seeded at activation with `triggered_by = {type: "activation", ...}` and `scheduled_date = [activationDate, activationDate]`; immediately overdue
@@ -832,8 +862,8 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Move `watch_record` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `ag_watch_right: {old_id, old_lost, new_id}`, `ag_watch_left: {old_id, old_lost, new_id}`, `sync_datetime`, `worn_datetime`, `next_followup_days`, `notes`; `triggered_by` already present if entry was claimed
   - Update `agWatchRightID` and `agWatchLeftID` in `<homer_id>.json`
   - For each limb: close the existing open assignment record (`returned_date = completion_date`); if `old_lost: true`, also set `lost: true` on that assignment record and set `lost_date` on the inventory record
-  - For each new watch assigned: append a new assignment record to `devices/assignments/agwatch.json`; write device log `Assigned to <homer_id> (<limb>)`
-  - For each lost watch: write device log `Lost — reported by <homer_id>`
+  - For each new watch assigned: append a new assignment record to `devices/assignments/agwatch.json`; write device log `Assigned to <homer_id> (<limb>)` to `devices/logs/agwatch/<watch_id>.log`
+  - For each lost watch: write device log `Lost — reported by <homer_id>` to `devices/logs/agwatch/<watch_id>.log`
   - Seed next `watch_record` entry in `incomplete` with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`
 - Log message: `Watch record filed`
 
@@ -846,6 +876,7 @@ Each action is defined once here. Pages above reference which actions apply to t
 **Context:** When a robot issue causes a training pause but the patient completes training (day 29) before the `resolve_robot_issue_visit` stub is filled, the stub is auto-discarded (robot is returned on day 29). However, the device may still be physically faulty — it has not been repaired and cannot be safely assigned to a new patient.
 
 **Required feature:** A **"Repair Device"** action in the Devices page, available to `engineer` and `admin`, that:
+
 - Lists Pluto/Mars devices flagged as faulty (i.e. their last robot issue was not formally resolved before training completion)
 - Allows the engineer to record:
   - Repair date
@@ -861,6 +892,7 @@ This ensures the device inventory accurately reflects availability for new patie
 **Context:** When a device is swapped with `swap_type: "fault_driven"` in `robot_issue_visit` or `resolve_robot_issue_visit`, a pending fault report stub is created in `devices/fault_reports/<type>.json` with `resolution: null`. The engineer needs to complete this report when they have had time to diagnose the fault.
 
 **Required feature:** A **"Complete Fault Report"** action in the Devices page, available to `engineer` and `admin`, that:
+
 - Lists all pending fault report stubs (where `resolution: null`)
 - For each stub, allows the engineer to record:
   - Fault description — what was wrong with the device
@@ -876,6 +908,7 @@ This ensures the device inventory accurately reflects availability for new patie
 **Context:** Once an adverse event is filed, the description and action taken are locked. There is currently no way to correct a clerical error.
 
 **Required feature:** An **"Amend"** action on each AE card in the Adverse Events tab, available to `admin` only, that:
+
 - Opens a small modal with editable description and action taken fields pre-filled
 - Requires an amendment reason (textarea, required)
 - On save: updates the record in `free.adverse_event` and appends an `amendments` list entry recording the original values, the reason, and the amendment timestamp
@@ -886,6 +919,7 @@ This ensures the device inventory accurately reflects availability for new patie
 **Context:** The current Adverse Events tab assembles a per-AE history for monitoring purposes. As the study grows, therapists have requested a dedicated free-form notes area per patient — not tied to a specific event.
 
 **Required feature:** A **Clinical Notes** tab on the patient detail page, available to `admin` and `therapist`, with:
+
 - A chronological list of free-text notes, each with author, date, and text
 - An "Add Note" button opening a simple modal with a textarea (required)
 - Notes stored in `free.clinical_notes` array
