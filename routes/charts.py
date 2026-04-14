@@ -410,6 +410,9 @@ def patient_activity(homer_id):
                                 dates_with_data.append(dt.strftime("%Y-%m-%d"))
                             except ValueError:
                                 pass
+                    print(f"[patient_activity] {homer_id}/{device_dir}: Found {len(dates_with_data)} dates with data files in {dates_folder}")
+                else:
+                    print(f"[patient_activity] {homer_id}/{device_dir}: Dates folder does not exist: {dates_folder}")
 
                 # Config details — prescribed mechanism times
                 mechanisms = Config.PLUTO_MECHANISMS if device_dir == "Pluto" else Config.MARS_MECHANISMS
