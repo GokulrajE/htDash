@@ -449,6 +449,7 @@ async function submitDiscontinue() {
 
 let _completeEventsCache = null;  // null = not yet loaded
 let _callLogsCache      = null;  // null = not yet loaded
+let _patientDiscontinued = false;  // true if patient has discontinuationDate
 
 async function loadPatientEvents() {
   const completedEl = document.getElementById('patient-completed-events');
@@ -465,6 +466,15 @@ async function loadPatientEvents() {
     eventsCache = [...overdue, ...upcoming];
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
+
+    // Set discontinued flag and show banner if patient is discontinued
+    _patientDiscontinued = !!patientData?.discontinuationDate;
+    const discontinuedBanner = document.getElementById('discontinued-readonly-banner');
+    if (_patientDiscontinued && discontinuedBanner) {
+      discontinuedBanner.classList.remove('hidden');
+    } else if (!_patientDiscontinued && discontinuedBanner) {
+      discontinuedBanner.classList.add('hidden');
+    }
     _renderPauseReasonPills();
     renderTimelineTab();
     renderAdverseEventsTab();
@@ -542,6 +552,9 @@ const _FIELD_LABELS = {
   ag_watch_left:       'Left Watch',
   pluto_id:            'Pluto Device',
   mars_id:             'Mars Device',
+  modem_id:            'Modem Device',
+  laptop_id:           'Laptop Device',
+  sim_id:              'SIM Card',
   demo_done:           'Demo Done',
   prescription_file:   'Prescription File',
   duration_minutes:    'Duration',
@@ -2276,6 +2289,8 @@ const EVENT_OPENERS = {
   followup_call_d07:         (ev) => openFollowupCallModal(ev),
   followup_call_d21:         (ev) => openFollowupCallModal(ev),
   training_completion_d29:   (ev) => openSimpleEventModal(ev),
+  adl_agwatch_timing_d01:    (ev) => openAgwatchTimingModal(ev),
+  adl_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
@@ -2319,7 +2334,7 @@ function patientEventRow(ev) {
 
   const blocked   = ev.blocked_by && ev.blocked_by.length > 0;
   const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
-  const clickable = hasOpener && !blocked && !isUpcoming;
+  const clickable = hasOpener && !blocked && !isUpcoming && !_patientDiscontinued;
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
@@ -2362,20 +2377,41 @@ async function openDeviceSetupModal(ev) {
 
   const plutoSel = document.getElementById('device-setup-pluto');
   const marsSel  = document.getElementById('device-setup-mars');
+  const modemSel = document.getElementById('device-setup-modem');
+  const laptopSel = document.getElementById('device-setup-laptop');
+  const simSel = document.getElementById('device-setup-sim');
+
   plutoSel.innerHTML = '<option value="">Loading…</option>';
   marsSel.innerHTML  = '<option value="">Loading…</option>';
+  modemSel.innerHTML = '<option value="">Loading…</option>';
+  laptopSel.innerHTML = '<option value="">Loading…</option>';
+  simSel.innerHTML = '<option value="">Loading…</option>';
   showModal('device-setup-modal');
 
   try {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
-    const { pluto, mars } = await res.json();
+    if (!res.ok) throw new Error('Failed to fetch devices');
+    const data = await res.json();
+    const { pluto, mars, modem, laptop, sims } = data;
+
     plutoSel.innerHTML = '<option value="">Select Pluto device…</option>' +
       pluto.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
     marsSel.innerHTML  = '<option value="">Select Mars device…</option>' +
       mars.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    modemSel.innerHTML = '<option value="">Select Modem device…</option>' +
+      modem.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    laptopSel.innerHTML = '<option value="">Select Laptop device…</option>' +
+      laptop.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    simSel.innerHTML = '<option value="">Select SIM card…</option>' +
+      (sims || []).map(s => `<option value="${s.id}">${s.phoneNumber || s.id}</option>`).join('');
+
     if (!pluto.length) plutoSel.innerHTML = '<option value="">No devices available</option>';
     if (!mars.length)  marsSel.innerHTML  = '<option value="">No devices available</option>';
+    if (!modem.length) modemSel.innerHTML = '<option value="">No devices available</option>';
+    if (!laptop.length) laptopSel.innerHTML = '<option value="">No devices available</option>';
+    if (!(sims || []).length) simSel.innerHTML = '<option value="">No SIM cards available</option>';
   } catch (e) {
+    console.error('Error loading devices:', e);
     setError('device-setup-error', 'Failed to load available devices.');
   }
 }
@@ -2384,18 +2420,24 @@ async function submitDeviceSetup() {
   const eventDate = document.getElementById('device-setup-date').value;
   const plutoId   = document.getElementById('device-setup-pluto').value;
   const marsId    = document.getElementById('device-setup-mars').value;
+  const modemId   = document.getElementById('device-setup-modem').value;
+  const laptopId  = document.getElementById('device-setup-laptop').value;
+  const simId     = document.getElementById('device-setup-sim').value;
   const demoDone  = document.getElementById('device-setup-demo').checked;
   const notes     = document.getElementById('device-setup-notes').value;
 
   if (!eventDate) { setError('device-setup-error', 'Please select an event date.'); return; }
   if (!plutoId)   { setError('device-setup-error', 'Please select a Pluto device.'); return; }
   if (!marsId)    { setError('device-setup-error', 'Please select a Mars device.'); return; }
+  if (!modemId)   { setError('device-setup-error', 'Please select a Modem device.'); return; }
+  if (!laptopId)  { setError('device-setup-error', 'Please select a Laptop device.'); return; }
+  if (!simId)     { setError('device-setup-error', 'Please select a SIM card.'); return; }
   if (!_validateAttachment('device-setup', 'device-setup-error')) return;
 
   setLoading('device-setup-submit', true);
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/exp_device_install`,
-    { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, demoDone, notes }
+    { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, modemId, laptopId, simId, demoDone, notes }
   );
   if (!ok) { setLoading('device-setup-submit', false); setError('device-setup-error', data.error || 'Failed to complete device setup.'); return; }
 
@@ -2862,19 +2904,31 @@ async function submitVcgPrescription() {
 let _adlTabLoaded = false;
 let _vcgTabLoaded = false;
 
-function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath, timingData) {
-  const exMap     = Object.fromEntries(exercises.map(e => [e.id, e]));
-  const timingMap = Object.fromEntries(
-    (timingData?.timings || []).map(t => [t.exercise_id, t])
+function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath, timingDataList) {
+  const exMap = Object.fromEntries(exercises.map(e => [e.id, e]));
+
+  // Build a timing map for each timing dataset in the array
+  const timingMaps = (timingDataList || []).map(td =>
+    td ? Object.fromEntries((td.timings || []).map(t => [t.exercise_id, t])) : {}
   );
+
+  // Determine day labels based on array length (e.g., ['D01','D02','D03'] or ['D15'])
+  const dayTags = timingDataList?.length === 1 ? ['D15'] : ['D01', 'D02', 'D03'];
+
   const rows = (data.prescribed_exercises || []).map((pe, i) => {
     const name = exMap[pe.exercise_id]?.name || pe.exercise_id;
     const notesHtml = pe.notes
       ? `<p class="text-xs text-slate-400 mt-0.5 italic">${pe.notes}</p>` : '';
-    const t = timingMap[pe.exercise_id];
-    const timingHtml = t
-      ? `<p class="text-xs font-mono text-slate-400 mt-0.5">${t.start ? t.start.split('T')[1] : '—'} → ${t.end ? t.end.split('T')[1] : '—'}</p>`
-      : '';
+
+    // Build timing HTML for each day
+    const timingLines = timingMaps.map((tmap, idx) => {
+      const t = tmap[pe.exercise_id];
+      if (!t) return '';
+      const start = t.start ? t.start.split('T')[1].slice(0, 5) : '—';
+      const end = t.end ? t.end.split('T')[1].slice(0, 5) : '—';
+      return `<p class="text-xs font-mono text-slate-400">${dayTags[idx]}: ${start} → ${end}</p>`;
+    }).join('');
+
     return `
       <div class="flex items-start gap-3 py-2.5 border-b border-slate-100 last:border-b-0">
         <span class="w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">${i + 1}</span>
@@ -2884,7 +2938,7 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
         </div>
         <div class="flex-shrink-0 text-right">
           <p class="text-xs font-medium text-slate-500 whitespace-nowrap">${pe.blocks} blocks × ${pe.repetitions} reps</p>
-          ${timingHtml}
+          ${timingLines}
         </div>
       </div>`;
   }).join('');
@@ -2985,6 +3039,42 @@ async function _renderDeviceGraphs(container) {
       const totalMins  = d.data.reduce((s, v) => s + (v || 0), 0).toFixed(1);
       const avgMins    = actualDays ? (totalMins / actualDays).toFixed(1) : '—';
 
+      // Check if there are actual CSV date files available for this device (dates_with_data)
+      // If dates_with_data is missing, empty, or not an array, show "No data available"
+      const hasDatesWithData = Array.isArray(d.dates_with_data) && d.dates_with_data.length > 0;
+      console.log(`[Device ${deviceKey}] API Response:`, {
+        dates_with_data: d.dates_with_data,
+        is_array: Array.isArray(d.dates_with_data),
+        length: d.dates_with_data?.length,
+        hasDatesWithData,
+        actualDays
+      });
+      console.log(`[Device ${deviceKey}] Condition check:`, { hasDatesWithData, willShowGraph: hasDatesWithData, willShowNoData: !hasDatesWithData });
+
+      if (!hasDatesWithData) {
+        console.log(`[Device ${deviceKey}] Showing "No data available" message because hasDatesWithData is false`);
+        const card = document.createElement('div');
+        card.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
+        card.innerHTML = `
+          <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-100" style="background:${cfg.bg}">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shadow-sm" style="background:${cfg.color}">
+              <i class="fas fa-robot text-white text-sm"></i>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-slate-800">${cfg.label}</h3>
+              <p class="text-xs text-slate-500">${d.start_date} → ${d.end_date} &nbsp;·&nbsp; Training side: <strong>${d.training_side}</strong></p>
+            </div>
+          </div>
+          <div class="flex flex-col items-center justify-center py-16 text-slate-400 bg-white">
+            <i class="fas fa-inbox text-3xl mb-3 opacity-40"></i>
+            <p class="font-semibold text-slate-500">No data available</p>
+            <p class="text-sm mt-1 text-slate-400">No activity recorded for this device during this period.</p>
+          </div>`;
+        container.appendChild(card);
+        continue;
+      }
+      console.log(`[Device ${deviceKey}] Showing graph because hasDatesWithData is true`);
+
       // Prescribed mechanism chips
       const mechChips = Object.entries(d.prescribed || {}).map(([mech, mins]) =>
         `<div class="flex flex-col items-center px-3 py-2 rounded-xl border ${cfg.badgeBorder} ${cfg.badgeBg} min-w-[56px]">
@@ -3049,8 +3139,8 @@ async function _renderDeviceGraphs(container) {
             <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Daily Activity</span>
             <div class="flex items-center gap-4 text-xs text-slate-400">
               <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${cfg.color}"></span>Actual</span>
-              <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-0" style="border-top:2px dashed #f87171"></span>Target</span>
-              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full border-2" style="background:${cfg.color};border-color:white;box-shadow:0 0 0 2px ${cfg.color}"></span>Click dot for breakdown</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-0" style="border-top:2px dotted #f87171"></span>Target</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full border-2" style="background:${cfg.color};border-color:white;box-shadow:0 0 0 2px ${cfg.color}"></span>Hover dot for breakdown</span>
             </div>
           </div>
           <div style="position:relative;height:220px">
@@ -3096,7 +3186,7 @@ async function _renderDeviceGraphs(container) {
               label: 'Target',
               data: d.labels.map(() => d.target),
               borderColor: '#f87171',
-              borderDash: [6, 4],
+              borderDash: [2, 2],
               borderWidth: 2,
               pointRadius: 0,
               fill: false,
@@ -3121,9 +3211,9 @@ async function _renderDeviceGraphs(container) {
                 label: c => c.dataset.label === 'Target'
                   ? `  Target: ${c.parsed.y} min`
                   : `  Actual: ${c.parsed.y !== null ? c.parsed.y + ' min' : 'No session'}`,
-                afterBody: items => {
-                  const lbl = d.labels[items[0].dataIndex];
-                  return d.dates_with_data.includes(lbl) ? ['  ↓ Click to see breakdown'] : [];
+                afterBody: () => {
+                  // Hide the dot info comment box completely
+                  return [];
                 },
               },
             },
@@ -3140,12 +3230,41 @@ async function _renderDeviceGraphs(container) {
               title: { display: true, text: 'Minutes', font: { size: 11 }, color: '#94a3b8' },
             },
           },
-          onClick: (evt, elements) => {
-            if (!elements.length) return;
-            const idx = elements[0].index;
-            const clickedDate = d.labels[idx];
-            if (!d.dates_with_data.includes(clickedDate)) return;
-            _loadDeviceDetail(clickedDate, deviceKey, cfg.label, cfg.color, shortLabels[idx]);
+          onHover: (evt, elements) => {
+            if (!elements || !elements.length) {
+              // Hide detail panel when not hovering
+              const panel = document.getElementById(`devices-detail-${deviceKey}`);
+              if (panel) panel.classList.add('hidden');
+              return;
+            }
+
+            const hoveredElement = elements.find(el => el.datasetIndex === 0);
+            if (!hoveredElement) return;
+
+            const idx = hoveredElement.index;
+            if (idx === undefined || idx === null) return;
+
+            const hoveredDate = d.labels[idx];
+            const actualValue = d.data[idx];
+            const displayDate = shortLabels[idx];
+
+            console.log('Hovered date:', hoveredDate, 'Actual value:', actualValue, 'Has data:', d.dates_with_data.includes(hoveredDate));
+
+            // Show detail only if the date has a data file (CSV exists in Dates folder)
+            if (d.dates_with_data.includes(hoveredDate)) {
+              _loadDeviceDetail(hoveredDate, deviceKey, cfg.label, cfg.color, displayDate);
+            } else {
+              // Show "No data available" message when hovering over a point with no data
+              const panel = document.getElementById(`devices-detail-${deviceKey}`);
+              if (panel) {
+                panel.classList.remove('hidden');
+                panel.innerHTML = `
+                  <div class="px-6 py-6 flex flex-col items-center justify-center">
+                    <i class="fas fa-inbox text-2xl mb-2 text-slate-300"></i>
+                    <p class="text-sm text-slate-400 text-center">No data available for ${displayDate || hoveredDate}</p>
+                  </div>`;
+              }
+            }
           },
         },
       });
@@ -3187,18 +3306,45 @@ async function _syncActivity() {
   }
 }
 
-async function _loadDeviceDetail(date, deviceKey, deviceLabel, color) {
+async function _loadDeviceDetail(date, deviceKey, deviceLabel, color, displayDate) {
   const panel = document.getElementById(`devices-detail-${deviceKey}`);
-  if (!panel) return;
+  if (!panel) {
+    console.warn(`Panel not found: devices-detail-${deviceKey}`);
+    return;
+  }
+
   panel.classList.remove('hidden');
   panel.innerHTML = `<div class="flex items-center justify-center py-6 text-slate-400 text-sm">
     <i class="fas fa-spinner fa-spin mr-2"></i>Loading…</div>`;
 
   try {
-    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/activity/${date}/${deviceKey}`);
-    const d   = await res.json();
-    if (!res.ok || d.error) {
-      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${d.error || 'No data'}</p>`;
+    // Ensure date is in YYYY-MM-DD format
+    let dateParam = date;
+    if (date && typeof date === 'string' && date.includes('T')) {
+      // Extract just the date part if it's ISO datetime
+      dateParam = date.split('T')[0];
+    }
+
+    const url = `/api/patients/${PATIENT_HOMER_ID}/activity/${dateParam}/${deviceKey}`;
+    console.log('Fetching device detail:', url, 'Original date:', date, 'Param:', dateParam);
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      console.error('API error:', res.status, errorData);
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${errorData.error || 'No data available'}</p>`;
+      return;
+    }
+
+    const d = await res.json();
+    if (d.error) {
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${d.error}</p>`;
+      return;
+    }
+
+    if (!d.mechanisms || !d.durations || !d.target) {
+      console.warn('Invalid data structure:', d);
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">Invalid data structure</p>`;
       return;
     }
 
@@ -3206,8 +3352,8 @@ async function _loadDeviceDetail(date, deviceKey, deviceLabel, color) {
     const bars = d.mechanisms.map((mech, i) => {
       const used    = d.durations[i] || 0;
       const tgt     = d.target[i]    || 0;
-      const pctUsed = Math.round((used / maxVal) * 100);
-      const pctTgt  = Math.round((tgt  / maxVal) * 100);
+      const pctUsed = maxVal > 0 ? Math.round((used / maxVal) * 100) : 0;
+      const pctTgt  = maxVal > 0 ? Math.round((tgt  / maxVal) * 100) : 0;
       return `<div class="flex items-center gap-3">
         <span class="w-14 text-right text-xs font-medium text-slate-600 shrink-0">${mech}</span>
         <div class="flex-1 relative h-5 bg-slate-100 rounded-full overflow-hidden">
@@ -3221,13 +3367,14 @@ async function _loadDeviceDetail(date, deviceKey, deviceLabel, color) {
     panel.innerHTML = `
       <div class="px-6 py-4">
         <div class="flex items-center justify-between mb-3">
-          <p class="text-xs font-semibold text-slate-600">${deviceLabel} — ${date}</p>
+          <p class="text-xs font-semibold text-slate-600">${deviceLabel} — ${displayDate || date}</p>
           <span class="text-xs text-slate-400">Bar = used &nbsp;|&nbsp; <span class="text-red-400 font-bold">|</span> = target</span>
         </div>
         <div class="space-y-2">${bars}</div>
       </div>`;
   } catch (e) {
-    panel.innerHTML = `<p class="text-sm text-red-400 text-center py-4">Failed to load breakdown.</p>`;
+    console.error('Failed to load device detail:', e);
+    panel.innerHTML = `<p class="text-sm text-red-400 text-center py-4">Failed to load breakdown: ${e.message}</p>`;
   }
 }
 
@@ -3237,16 +3384,20 @@ async function loadAdlTab() {
   if (!container) return;
 
   try {
-    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t01Res, t02Res, t03Res, t15Res] = await Promise.all([
       fetch('/api/exercises?type=adl'),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d01`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d02`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d03`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t01       = t01Res.ok ? await t01Res.json() : null;
+    const t02       = t02Res.ok ? await t02Res.json() : null;
     const t03       = t03Res.ok ? await t03Res.json() : null;
     const t15       = t15Res.ok ? await t15Res.json() : null;
 
@@ -3260,8 +3411,8 @@ async function loadAdlTab() {
       const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d01');
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-600 text-white',  printD15?.attachment, t15);
-      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-blue-400 text-white', printD1?.attachment,  t03);
+      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-600 text-white',  printD15?.attachment, [t15]);
+      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-blue-400 text-white', printD1?.attachment,  [t01, t02, t03]);
       container.innerHTML = html;
     }
     _adlTabLoaded = true;
@@ -4426,8 +4577,10 @@ async function openAgwatchTimingModal(ev) {
   const dateOnly  = schedDate ? schedDate.split('T')[0] : new Date().toISOString().split('T')[0];
   document.getElementById('agwatch-session-date').value = dateOnly;
 
-  // Load session bounds from the corresponding home visit complete entry
+  // Load session bounds from the corresponding home visit or activation complete entry
   const _AGWATCH_SESSION_SOURCE = {
+    adl_agwatch_timing_d01: 'activation',
+    adl_agwatch_timing_d02: 'home_visit_d02',
     adl_agwatch_timing_d03: 'home_visit_d03',
     vcg_agwatch_timing_d03: 'home_visit_d03',
     adl_agwatch_timing_d15: 'home_visit_d15',
@@ -4588,12 +4741,15 @@ async function loadPatient() {
       return;
     }
     renderOverview(patientData);
-    // Show "Log Call" button for admin/therapist on activated patients
+    // Show "Log Call" button for admin/therapist on activated patients (but not if discontinued)
     const logCallBtn = document.getElementById('log-call-btn');
-    if (logCallBtn && patientData.activationDate &&
+    if (logCallBtn && patientData.activationDate && !patientData.discontinuationDate &&
         (userPrivilege === 'admin' || userPrivilege === 'therapist')) {
       logCallBtn.classList.remove('hidden');
       logCallBtn.classList.add('flex');
+    } else if (logCallBtn) {
+      logCallBtn.classList.add('hidden');
+      logCallBtn.classList.remove('flex');
     }
 
     // Show "Discontinue" button for admin when patient is not yet discontinued/completed

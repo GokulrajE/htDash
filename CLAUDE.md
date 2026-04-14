@@ -584,3 +584,84 @@ npm install puppeteer  # Install in project root
 - ✅ No client-side library bloat
 - ✅ Faster user experience (one-click PDF)
 - ✅ More reliable (server-side, not browser-dependent)
+
+### Enhancements Implemented ✅ (April 2026)
+
+#### 1. ADL AGWatch Timing Day 01 & 02
+**Status:** ✅ Complete
+
+Added Day 1 and Day 2 timing events alongside existing Day 3. Therapists can now record exercise start/end times for all 3 home visit days.
+- `adl_agwatch_timing_d01`: Records timing from activation event
+- `adl_agwatch_timing_d02`: Records timing from home_visit_d02 event
+- ADL tab displays all 3 days of timing per exercise row: `exercise_name | blocks/reps | D01: HH:MM → HH:MM | D02: HH:MM → HH:MM | D03: HH:MM → HH:MM`
+
+**Files Modified:**
+- `config/study_protocol.json` — Added 2 events to `shared[]`
+- `routes/user_management.py` — Added 2 entries to `_AGWATCH_TIMING_CONFIG`
+- `static/js/app/patient_detail.js` — Updated EVENT_OPENERS, session source mapping, loadAdlTab(), _prescriptionCard()
+
+#### 2. Discontinued Patient Read-Only Mode
+**Status:** ✅ Complete
+
+Once a patient is discontinued (`discontinuationDate` set), the entire record becomes read-only. No events can be opened, no changes are allowed, and a banner informs the user.
+- Red banner displays: "Patient is discontinued — record is read-only. No further changes are allowed."
+- All event rows non-clickable (no modal opens on click)
+- All complete-event API routes return 403 if patient is discontinued
+
+**Files Modified:**
+- `templates/patient_detail.html` — Added discontinued-readonly-banner
+- `static/js/app/patient_detail.js` — Added `_patientDiscontinued` flag, banner display logic, clickability guard
+- `routes/user_management.py` — Added `discontinuationDate` guard to 15+ complete-event routes
+
+#### 3. Device Setup Modal Extension
+**Status:** ✅ Complete
+
+Extended device setup (`exp_device_install`) to include modem, laptop, and SIM card assignments alongside Pluto and Mars.
+- Modem (required) — device assignment
+- Laptop (required) — device assignment
+- SIM Card (required) — assigned to modem for connectivity
+- All devices create assignment records
+
+**Files Modified:**
+- `routes/user_management.py` — Extended `api_available_devices`, updated `api_complete_device_install` with SIM assignment logic
+- `templates/patient_detail.html` — Added modem, laptop, and SIM select fields
+- `static/js/app/patient_detail.js` — Updated `openDeviceSetupModal()` to fetch available SIMs, `submitDeviceSetup()` with SIM validation, field labels
+ ## Issues pd-ds
+### Issues Fixed ✅
+
+1. **Patient Call Button Hidden on Discontinue** — When a patient is discontinued, the "Patient Call" button is now hidden and inaccessible
+   - Updated button visibility logic to check `discontinuationDate`
+   - Button only shows for activated patients that are NOT discontinued
+
+2. **SIM Card Assignment to Modem** — SIM is now properly assigned to the modem in device inventory
+   - Updated `api_complete_device_install` to update modem's `sim_id` field
+   - Creates device log entry for SIM assignment
+   - SIM persists in modem inventory
+
+### Daily Activity Graph Enhancements ✅ Complete
+
+1. **Target Line Changed to Dotted** — Target line now uses dotted style (`borderDash: [2, 2]`)
+   - Visual legend updated to show dotted line
+   - Applies to all device activity graphs (Pluto, Mars)
+
+2. **Hover to Show Device Details** — Device detail graph now shows on hover instead of click
+   - Changed from `onClick` to `onHover` event handler
+   - Only triggers on actual data points (not target line or empty dates)
+   - Tooltip hidden when actual value is zero or null
+   - Detail panel appears immediately on mouse hover over data points
+   - Shows zero values correctly in breakdown chart (not old data)
+
+3. **No Data Handling** — Graph is hidden and message is shown when device has no data
+   - **No data at all:** Shows "No data available" card instead of empty graph; maintains device header and styling
+   - **Hovering over empty date:** Detail panel displays "No data available for [date]" message with inbox icon
+   - Only loads detail breakdown when hovering over dates with actual CSV data files
+   - Detail panel hides when not hovering or when hovering over dates without data
+
+4. **Tooltip Improvements**
+   - Comment box info hidden (no "Hover to see breakdown" message)
+   - Shows actual value and target cleanly
+   - Improved interaction feedback without extra text
+   - Fixed error when hovering with proper null/undefined checks
+
+**Files Modified:**
+- `static/js/app/patient_detail.js` — Updated `_renderDeviceGraphs()` and `_loadDeviceDetail()` functions
