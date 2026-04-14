@@ -600,6 +600,19 @@ Added Day 1 and Day 2 timing events alongside existing Day 3. Therapists can now
 - `routes/user_management.py` — Added 2 entries to `_AGWATCH_TIMING_CONFIG`
 - `static/js/app/patient_detail.js` — Updated EVENT_OPENERS, session source mapping, loadAdlTab(), _prescriptionCard()
 
+#### 1b. VCG AGWatch Timing Day 01 & 02
+**Status:** ✅ Complete
+
+Added Day 1 and Day 2 timing events for VCG exercises alongside existing Day 3. Control patients can now record VCG exercise start/end times for all 4 days (Day 1, 2, 3, and 15).
+- `vcg_agwatch_timing_d01`: Records timing from activation event
+- `vcg_agwatch_timing_d02`: Records timing from home_visit_d02 event
+- VCG tab displays all 4 days of timing per exercise row: `exercise_name | blocks/reps | D01: HH:MM → HH:MM | D02: HH:MM → HH:MM | D03: HH:MM → HH:MM | D15: HH:MM → HH:MM`
+
+**Files Modified:**
+- `config/study_protocol.json` — Added 2 events to `control[]` section (vcg_agwatch_timing_d01, vcg_agwatch_timing_d02)
+- `routes/user_management.py` — Added 2 entries to `_AGWATCH_TIMING_CONFIG` for VCG d01 and d02
+- `static/js/app/patient_detail.js` — Added EVENT_OPENERS entries, session source mapping for VCG d01/d02, updated loadVcgTab() to fetch all 4 timing days
+
 #### 2. Discontinued Patient Read-Only Mode
 **Status:** ✅ Complete
 

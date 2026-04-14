@@ -2293,6 +2293,8 @@ const EVENT_OPENERS = {
   adl_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d01:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
   watch_record:              (ev) => openWatchRecordModal(ev),
@@ -3430,16 +3432,20 @@ async function loadVcgTab() {
   const groupLabel = VCG_GROUP_LABELS[vcgGroup] || vcgGroup || '';
 
   try {
-    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t01Res, t02Res, t03Res, t15Res] = await Promise.all([
       fetch(`/api/exercises?type=vcg&group=${vcgGroup}`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d01`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d02`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d03`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t01       = t01Res.ok ? await t01Res.json() : null;
+    const t02       = t02Res.ok ? await t02Res.json() : null;
     const t03       = t03Res.ok ? await t03Res.json() : null;
     const t15       = t15Res.ok ? await t15Res.json() : null;
 
@@ -3454,8 +3460,8 @@ async function loadVcgTab() {
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       const suffix = groupLabel ? ` · <span class="font-normal opacity-70">${groupLabel}</span>` : '';
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-600 text-white',  printD15?.attachment, t15);
-      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-teal-400 text-white', printD1?.attachment,  t03);
+      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-600 text-white',  printD15?.attachment, [t15]);
+      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-teal-400 text-white', printD1?.attachment,  [t01, t02, t03]);
       container.innerHTML = html;
     }
     _vcgTabLoaded = true;
@@ -4582,6 +4588,8 @@ async function openAgwatchTimingModal(ev) {
     adl_agwatch_timing_d01: 'activation',
     adl_agwatch_timing_d02: 'home_visit_d02',
     adl_agwatch_timing_d03: 'home_visit_d03',
+    vcg_agwatch_timing_d01: 'activation',
+    vcg_agwatch_timing_d02: 'home_visit_d02',
     vcg_agwatch_timing_d03: 'home_visit_d03',
     adl_agwatch_timing_d15: 'home_visit_d15',
     vcg_agwatch_timing_d15: 'home_visit_d15',

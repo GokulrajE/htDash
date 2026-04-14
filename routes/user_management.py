@@ -2766,6 +2766,18 @@ _AGWATCH_TIMING_CONFIG = {
         'ex_type':            'adl',
         'session_source':     'home_visit_d15',
     },
+    'vcg_agwatch_timing_d01': {
+        'prescription_event': 'vcg_prescription_d01',
+        'timing_file':        'vcg_exercise/vcg_agwatch_timing_d01.json',
+        'ex_type':            'vcg',
+        'session_source':     'activation',
+    },
+    'vcg_agwatch_timing_d02': {
+        'prescription_event': 'vcg_prescription_d01',
+        'timing_file':        'vcg_exercise/vcg_agwatch_timing_d02.json',
+        'ex_type':            'vcg',
+        'session_source':     'home_visit_d02',
+    },
     'vcg_agwatch_timing_d03': {
         'prescription_event': 'vcg_prescription_d01',
         'timing_file':        'vcg_exercise/vcg_agwatch_timing_d03.json',
