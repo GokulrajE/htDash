@@ -678,3 +678,20 @@ Extended device setup (`exp_device_install`) to include modem, laptop, and SIM c
 
 **Files Modified:**
 - `static/js/app/patient_detail.js` — Updated `_renderDeviceGraphs()` and `_loadDeviceDetail()` functions
+
+### Task need to implement : Fix UI update issues and improve prescription modal behavior
+Fix 3 UI issues:
+
+1. Call Log History:
+- Not updating after save (needs refresh)
+- Should update immediately after save
+
+2. Resume/Pause History:
+- Same issue
+- Update UI instantly after action
+
+3. Prescription Modal:
+- Disable Print & Save initially
+- Enable only after language selection
+- On Print → auto Save first
+- Add proper validation

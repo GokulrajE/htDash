@@ -476,6 +476,9 @@ async function loadPatientEvents() {
       discontinuedBanner.classList.add('hidden');
     }
     _renderPauseReasonPills();
+    // Re-render pause banner and history table with updated patient data
+    renderPauseBanner(patientData);
+    renderPauseHistoryTable(patientData);
     renderTimelineTab();
     renderAdverseEventsTab();
     renderWatchRecordsTab();
@@ -3494,6 +3497,9 @@ let _prescPrintoutLanguage    = 'english';
 function openPrescriptionPrintoutModal(ev) {
   _prescPrintoutEventId    = typeof ev === 'object' ? ev.id : ev;
   _prescPrintoutProtocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
+  // After setting _prescPrintoutLanguage = 'english', disable buttons
+document.getElementById('prescription-printout-print').disabled = true;
+document.getElementById('prescription-printout-save').disabled = true;
 
   const title = _prescPrintoutProtocolId === 'prescription_printout_d15'
     ? 'Revised Therapy Prescription Printout'
@@ -3541,6 +3547,9 @@ function selectPrescriptionLanguage(lang) {
                       'bg-slate-200 text-slate-700 hover:bg-slate-300';
     }
   });
+     // After loading pamphlet, enable buttons
+  document.getElementById('prescription-printout-print').disabled = false;
+  document.getElementById('prescription-printout-save').disabled = false;
 
   _loadPrescriptionPamphlet();
 }
@@ -3860,9 +3869,15 @@ async function savePrescriptionPdfFromDialog() {
   }
 }
 
-function printPrescriptionPamphlet() {
+async function printPrescriptionPamphlet() {
   const previewDiv = document.getElementById('presc-printout-preview');
-
+  // Check if we need to save first
+    const event = _completeEventsCache?.find(e => e.id === _prescPrintoutEventId);
+    if (!event) {
+      // Event not yet complete - auto save first
+      await savePrescriptionPrintout();
+      // After save, proceed with print
+    }
   // Check if pamphlet is loaded
   if (!previewDiv.innerHTML || previewDiv.innerHTML.includes('Select a language') || previewDiv.innerHTML.includes('Loading')) {
     setError('prescription-printout-error', 'Please select a language and wait for the preview to load first');
@@ -3928,6 +3943,7 @@ function printPrescriptionPamphlet() {
     printWindow.focus();
     printWindow.print();
   }, 100);
+ 
 }
 
 // ── Simple event modal (home visits, follow-up calls, training completion) ────
@@ -4328,6 +4344,26 @@ async function savePatientCall() {
 
   saveBtn.disabled = false;
   hideModal('patient-call-modal');
+
+  // Update cache and re-render immediately without re-fetching
+  const newCall = {
+    id: data.id,
+    completion_date: dateVal,
+    duration_minutes: parseInt(duration),
+    notes,
+    call_type,
+    reason: therapistInitiated ? reason : undefined,
+    attachment: data.attachment,
+    attachment_caption: data.attachment_caption,
+  };
+
+  if (!_callLogsCache) _callLogsCache = { patient_calls: [], followup_calls: [] };
+  if (!_callLogsCache.patient_calls) _callLogsCache.patient_calls = [];
+  _callLogsCache.patient_calls.push(newCall);
+
+  const container = document.getElementById('call-logs-content');
+  if (container) _renderCallLogs(container, _callLogsCache);
+
   await loadPatientEvents();
 }
 
