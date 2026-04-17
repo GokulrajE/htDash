@@ -59,6 +59,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-pane').forEach(pane => {
     pane.classList.toggle('hidden', pane.id !== `tab-${tab}`);
   });
+  if (tab === 'devices')   loadDevicesTab();
   if (tab === 'adl')      loadAdlTab();
   if (tab === 'vcg')      loadVcgTab();
   if (tab === 'calls')         renderCallLogsTab();
@@ -448,6 +449,7 @@ async function submitDiscontinue() {
 
 let _completeEventsCache = null;  // null = not yet loaded
 let _callLogsCache      = null;  // null = not yet loaded
+let _patientDiscontinued = false;  // true if patient has discontinuationDate
 
 async function loadPatientEvents() {
   const completedEl = document.getElementById('patient-completed-events');
@@ -464,6 +466,15 @@ async function loadPatientEvents() {
     eventsCache = [...overdue, ...upcoming];
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
+
+    // Set discontinued flag and show banner if patient is discontinued
+    _patientDiscontinued = !!patientData?.discontinuationDate;
+    const discontinuedBanner = document.getElementById('discontinued-readonly-banner');
+    if (_patientDiscontinued && discontinuedBanner) {
+      discontinuedBanner.classList.remove('hidden');
+    } else if (!_patientDiscontinued && discontinuedBanner) {
+      discontinuedBanner.classList.add('hidden');
+    }
     _renderPauseReasonPills();
     renderTimelineTab();
     renderAdverseEventsTab();
@@ -541,6 +552,9 @@ const _FIELD_LABELS = {
   ag_watch_left:       'Left Watch',
   pluto_id:            'Pluto Device',
   mars_id:             'Mars Device',
+  modem_id:            'Modem Device',
+  laptop_id:           'Laptop Device',
+  sim_id:              'SIM Card',
   demo_done:           'Demo Done',
   prescription_file:   'Prescription File',
   duration_minutes:    'Duration',
@@ -2275,8 +2289,12 @@ const EVENT_OPENERS = {
   followup_call_d07:         (ev) => openFollowupCallModal(ev),
   followup_call_d21:         (ev) => openFollowupCallModal(ev),
   training_completion_d29:   (ev) => openSimpleEventModal(ev),
+  adl_agwatch_timing_d01:    (ev) => openAgwatchTimingModal(ev),
+  adl_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d01:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
   watch_record:              (ev) => openWatchRecordModal(ev),
@@ -2318,7 +2336,7 @@ function patientEventRow(ev) {
 
   const blocked   = ev.blocked_by && ev.blocked_by.length > 0;
   const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
-  const clickable = hasOpener && !blocked && !isUpcoming;
+  const clickable = hasOpener && !blocked && !isUpcoming && !_patientDiscontinued;
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
@@ -2361,20 +2379,41 @@ async function openDeviceSetupModal(ev) {
 
   const plutoSel = document.getElementById('device-setup-pluto');
   const marsSel  = document.getElementById('device-setup-mars');
+  const modemSel = document.getElementById('device-setup-modem');
+  const laptopSel = document.getElementById('device-setup-laptop');
+  const simSel = document.getElementById('device-setup-sim');
+
   plutoSel.innerHTML = '<option value="">Loading…</option>';
   marsSel.innerHTML  = '<option value="">Loading…</option>';
+  modemSel.innerHTML = '<option value="">Loading…</option>';
+  laptopSel.innerHTML = '<option value="">Loading…</option>';
+  simSel.innerHTML = '<option value="">Loading…</option>';
   showModal('device-setup-modal');
 
   try {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
-    const { pluto, mars } = await res.json();
+    if (!res.ok) throw new Error('Failed to fetch devices');
+    const data = await res.json();
+    const { pluto, mars, modem, laptop, sims } = data;
+
     plutoSel.innerHTML = '<option value="">Select Pluto device…</option>' +
       pluto.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
     marsSel.innerHTML  = '<option value="">Select Mars device…</option>' +
       mars.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    modemSel.innerHTML = '<option value="">Select Modem device…</option>' +
+      modem.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    laptopSel.innerHTML = '<option value="">Select Laptop device…</option>' +
+      laptop.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    simSel.innerHTML = '<option value="">Select SIM card…</option>' +
+      (sims || []).map(s => `<option value="${s.id}">${s.phoneNumber || s.id}</option>`).join('');
+
     if (!pluto.length) plutoSel.innerHTML = '<option value="">No devices available</option>';
     if (!mars.length)  marsSel.innerHTML  = '<option value="">No devices available</option>';
+    if (!modem.length) modemSel.innerHTML = '<option value="">No devices available</option>';
+    if (!laptop.length) laptopSel.innerHTML = '<option value="">No devices available</option>';
+    if (!(sims || []).length) simSel.innerHTML = '<option value="">No SIM cards available</option>';
   } catch (e) {
+    console.error('Error loading devices:', e);
     setError('device-setup-error', 'Failed to load available devices.');
   }
 }
@@ -2383,18 +2422,24 @@ async function submitDeviceSetup() {
   const eventDate = document.getElementById('device-setup-date').value;
   const plutoId   = document.getElementById('device-setup-pluto').value;
   const marsId    = document.getElementById('device-setup-mars').value;
+  const modemId   = document.getElementById('device-setup-modem').value;
+  const laptopId  = document.getElementById('device-setup-laptop').value;
+  const simId     = document.getElementById('device-setup-sim').value;
   const demoDone  = document.getElementById('device-setup-demo').checked;
   const notes     = document.getElementById('device-setup-notes').value;
 
   if (!eventDate) { setError('device-setup-error', 'Please select an event date.'); return; }
   if (!plutoId)   { setError('device-setup-error', 'Please select a Pluto device.'); return; }
   if (!marsId)    { setError('device-setup-error', 'Please select a Mars device.'); return; }
+  if (!modemId)   { setError('device-setup-error', 'Please select a Modem device.'); return; }
+  if (!laptopId)  { setError('device-setup-error', 'Please select a Laptop device.'); return; }
+  if (!simId)     { setError('device-setup-error', 'Please select a SIM card.'); return; }
   if (!_validateAttachment('device-setup', 'device-setup-error')) return;
 
   setLoading('device-setup-submit', true);
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/exp_device_install`,
-    { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, demoDone, notes }
+    { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, modemId, laptopId, simId, demoDone, notes }
   );
   if (!ok) { setLoading('device-setup-submit', false); setError('device-setup-error', data.error || 'Failed to complete device setup.'); return; }
 
@@ -2861,19 +2906,31 @@ async function submitVcgPrescription() {
 let _adlTabLoaded = false;
 let _vcgTabLoaded = false;
 
-function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath, timingData) {
-  const exMap     = Object.fromEntries(exercises.map(e => [e.id, e]));
-  const timingMap = Object.fromEntries(
-    (timingData?.timings || []).map(t => [t.exercise_id, t])
+function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath, timingDataList) {
+  const exMap = Object.fromEntries(exercises.map(e => [e.id, e]));
+
+  // Build a timing map for each timing dataset in the array
+  const timingMaps = (timingDataList || []).map(td =>
+    td ? Object.fromEntries((td.timings || []).map(t => [t.exercise_id, t])) : {}
   );
+
+  // Determine day labels based on array length (e.g., ['D01','D02','D03'] or ['D15'])
+  const dayTags = timingDataList?.length === 1 ? ['D15'] : ['D01', 'D02', 'D03'];
+
   const rows = (data.prescribed_exercises || []).map((pe, i) => {
     const name = exMap[pe.exercise_id]?.name || pe.exercise_id;
     const notesHtml = pe.notes
       ? `<p class="text-xs text-slate-400 mt-0.5 italic">${pe.notes}</p>` : '';
-    const t = timingMap[pe.exercise_id];
-    const timingHtml = t
-      ? `<p class="text-xs font-mono text-slate-400 mt-0.5">${t.start ? t.start.split('T')[1] : '—'} → ${t.end ? t.end.split('T')[1] : '—'}</p>`
-      : '';
+
+    // Build timing HTML for each day
+    const timingLines = timingMaps.map((tmap, idx) => {
+      const t = tmap[pe.exercise_id];
+      if (!t) return '';
+      const start = t.start ? t.start.split('T')[1].slice(0, 5) : '—';
+      const end = t.end ? t.end.split('T')[1].slice(0, 5) : '—';
+      return `<p class="text-xs font-mono text-slate-400">${dayTags[idx]}: ${start} → ${end}</p>`;
+    }).join('');
+
     return `
       <div class="flex items-start gap-3 py-2.5 border-b border-slate-100 last:border-b-0">
         <span class="w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">${i + 1}</span>
@@ -2883,7 +2940,7 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
         </div>
         <div class="flex-shrink-0 text-right">
           <p class="text-xs font-medium text-slate-500 whitespace-nowrap">${pe.blocks} blocks × ${pe.repetitions} reps</p>
-          ${timingHtml}
+          ${timingLines}
         </div>
       </div>`;
   }).join('');
@@ -2920,22 +2977,429 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
     </div>`;
 }
 
+// ── Devices Tab (activity graph) ──────────────────────────────────────────────
+
+let _devicesTabLoaded = false;
+let _devicesCharts = {};  // device → Chart instance
+
+async function loadDevicesTab() {
+  if (_devicesTabLoaded) return;
+  _devicesTabLoaded = true;
+  const container = document.getElementById('devices-tab-content');
+  if (!container) return;
+
+  // Only show graph for experimental patients
+  if (patientData?.group !== 'experimental') {
+    container.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-slate-400">
+      <i class="fas fa-mobile-alt text-3xl mb-3"></i>
+      <p class="font-medium">No robot devices for control patients</p>
+    </div>`;
+    return;
+  }
+
+  await _renderDeviceGraphs(container);
+}
+
+async function _renderDeviceGraphs(container) {
+  container.innerHTML = `<div class="flex items-center justify-center py-12 text-slate-400">
+    <i class="fas fa-spinner fa-spin mr-2"></i><span>Loading device data…</span></div>`;
+
+  try {
+    const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/activity`);
+    const data = await res.json();
+    const hasData = data.pluto || data.mars;
+
+    const syncBtn = `<button onclick="_syncActivity()"
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-700 text-white rounded-lg hover:bg-slate-800 active:scale-95 transition-all">
+      <i class="fas fa-sync-alt text-[10px]"></i> Sync from S3
+    </button>`;
+
+    if (!hasData) {
+      container.innerHTML = `
+        <div class="flex items-center justify-end mb-4">${syncBtn}</div>
+        <div class="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-2xl border border-slate-200">
+          <i class="fas fa-chart-line text-4xl mb-4 opacity-40"></i>
+          <p class="font-semibold text-slate-500">No device data available yet</p>
+          <p class="text-sm mt-1 text-slate-400">Use "Sync from S3" to download the latest data.</p>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = `<div class="flex items-center justify-end mb-1">${syncBtn}</div>`;
+
+    const DEVICE_CFG = {
+      pluto: { label: 'Pluto',  color: '#2563eb', bg: '#eff6ff', accent: '#1d4ed8', iconColor: 'text-blue-600',  badgeBg: 'bg-blue-50',  badgeBorder: 'border-blue-200',  badgeText: 'text-blue-700'  },
+      mars:  { label: 'Mars',   color: '#059669', bg: '#f0fdf4', accent: '#047857', iconColor: 'text-emerald-600', badgeBg: 'bg-emerald-50', badgeBorder: 'border-emerald-200', badgeText: 'text-emerald-700' },
+    };
+
+    for (const [deviceKey, cfg] of Object.entries(DEVICE_CFG)) {
+      const d = data[deviceKey];
+      if (!d) continue;
+
+      // Stat: days with data, total minutes, avg
+      const actualDays = d.data.filter(v => v !== null && v > 0).length;
+      const totalMins  = d.data.reduce((s, v) => s + (v || 0), 0).toFixed(1);
+      const avgMins    = actualDays ? (totalMins / actualDays).toFixed(1) : '—';
+
+      // Check if there are actual CSV date files available for this device (dates_with_data)
+      // If dates_with_data is missing, empty, or not an array, show "No data available"
+      const hasDatesWithData = Array.isArray(d.dates_with_data) && d.dates_with_data.length > 0;
+      console.log(`[Device ${deviceKey}] API Response:`, {
+        dates_with_data: d.dates_with_data,
+        is_array: Array.isArray(d.dates_with_data),
+        length: d.dates_with_data?.length,
+        hasDatesWithData,
+        actualDays
+      });
+      console.log(`[Device ${deviceKey}] Condition check:`, { hasDatesWithData, willShowGraph: hasDatesWithData, willShowNoData: !hasDatesWithData });
+
+      if (!hasDatesWithData) {
+        console.log(`[Device ${deviceKey}] Showing "No data available" message because hasDatesWithData is false`);
+        const card = document.createElement('div');
+        card.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
+        card.innerHTML = `
+          <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-100" style="background:${cfg.bg}">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shadow-sm" style="background:${cfg.color}">
+              <i class="fas fa-robot text-white text-sm"></i>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-slate-800">${cfg.label}</h3>
+              <p class="text-xs text-slate-500">${d.start_date} → ${d.end_date} &nbsp;·&nbsp; Training side: <strong>${d.training_side}</strong></p>
+            </div>
+          </div>
+          <div class="flex flex-col items-center justify-center py-16 text-slate-400 bg-white">
+            <i class="fas fa-inbox text-3xl mb-3 opacity-40"></i>
+            <p class="font-semibold text-slate-500">No data available</p>
+            <p class="text-sm mt-1 text-slate-400">No activity recorded for this device during this period.</p>
+          </div>`;
+        container.appendChild(card);
+        continue;
+      }
+      console.log(`[Device ${deviceKey}] Showing graph because hasDatesWithData is true`);
+
+      // Prescribed mechanism chips
+      const mechChips = Object.entries(d.prescribed || {}).map(([mech, mins]) =>
+        `<div class="flex flex-col items-center px-3 py-2 rounded-xl border ${cfg.badgeBorder} ${cfg.badgeBg} min-w-[56px]">
+          <span class="text-[11px] font-bold ${cfg.badgeText} tracking-wide">${mech}</span>
+          <span class="text-base font-bold ${cfg.badgeText} leading-tight">${mins}</span>
+          <span class="text-[10px] text-slate-400 -mt-0.5">min/day</span>
+        </div>`
+      ).join('');
+
+      const mismatchBanner = d.mismatch ? `
+        <!-- Mismatch warning -->
+        <div class="flex items-start gap-3 px-6 py-3 bg-orange-50 border-b border-orange-200">
+          <i class="fas fa-exclamation-triangle text-orange-500 mt-0.5 shrink-0"></i>
+          <div>
+            <p class="text-sm font-semibold text-orange-800">Config date mismatch (${d.mismatch.diff_days > 0 ? '+' : ''}${d.mismatch.diff_days} day${Math.abs(d.mismatch.diff_days) !== 1 ? 's' : ''})</p>
+            <p class="text-xs text-orange-600 mt-0.5">Config StartDate: <strong>${d.mismatch.config_start}</strong> · Activation date: <strong>${d.mismatch.activation}</strong>. The graph window may not align with actual therapy dates.</p>
+          </div>
+        </div>` : '';
+
+      const card = document.createElement('div');
+      card.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
+      card.innerHTML = `
+        <!-- Card header -->
+        <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-100" style="background:${cfg.bg}">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center shadow-sm" style="background:${cfg.color}">
+            <i class="fas fa-robot text-white text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-slate-800">${cfg.label}</h3>
+            <p class="text-xs text-slate-500">${d.start_date} → ${d.end_date} &nbsp;·&nbsp; Training side: <strong>${d.training_side}</strong></p>
+          </div>
+          <div class="ml-auto flex items-center gap-4 text-right">
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Total</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${totalMins}<span class="text-xs font-normal text-slate-400 ml-0.5">min</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Avg/day</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${avgMins}<span class="text-xs font-normal text-slate-400 ml-0.5">min</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Active days</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${actualDays}<span class="text-xs font-normal text-slate-400 ml-0.5">/ 30</span></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Prescription row -->
+        <div class="px-6 py-4 border-b border-slate-100 bg-slate-50">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Prescribed Mechanisms</span>
+            <span class="text-xs text-slate-400">Daily target: <strong style="color:${cfg.color}">${d.target} min total</strong></span>
+          </div>
+          <div class="flex flex-wrap gap-2">${mechChips}</div>
+        </div>
+
+        ${mismatchBanner}
+
+        <!-- Chart -->
+        <div class="px-6 pt-5 pb-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Daily Activity</span>
+            <div class="flex items-center gap-4 text-xs text-slate-400">
+              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${cfg.color}"></span>Actual</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-0" style="border-top:2px dotted #f87171"></span>Target</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full border-2" style="background:${cfg.color};border-color:white;box-shadow:0 0 0 2px ${cfg.color}"></span>Hover dot for breakdown</span>
+            </div>
+          </div>
+          <div style="position:relative;height:220px">
+            <canvas id="devices-chart-${deviceKey}"></canvas>
+          </div>
+        </div>
+
+        <!-- Breakdown panel (hidden until dot clicked) -->
+        <div id="devices-detail-${deviceKey}" class="hidden border-t border-slate-100"></div>`;
+
+      container.appendChild(card);
+
+      const ctx = document.getElementById(`devices-chart-${deviceKey}`).getContext('2d');
+      if (_devicesCharts[deviceKey]) _devicesCharts[deviceKey].destroy();
+
+      // Format labels as short dates for display
+      const shortLabels = d.labels.map(lbl => {
+        const dt = new Date(lbl);
+        return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+      });
+
+      _devicesCharts[deviceKey] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: shortLabels,
+          datasets: [
+            {
+              label: 'Session (min)',
+              data: d.data,
+              borderColor: cfg.color,
+              backgroundColor: cfg.color + '22',
+              borderWidth: 2.5,
+              pointRadius: d.labels.map(lbl => d.dates_with_data.includes(lbl) ? 5 : 3),
+              pointBackgroundColor: d.labels.map(lbl =>
+                d.dates_with_data.includes(lbl) ? cfg.color : cfg.color + '88'),
+              pointHoverRadius: 7,
+              fill: true,
+              tension: 0.3,
+              spanGaps: false,
+              order: 2,
+            },
+            {
+              label: 'Target',
+              data: d.labels.map(() => d.target),
+              borderColor: '#f87171',
+              borderDash: [2, 2],
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false,
+              tension: 0,
+              order: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              padding: 10,
+              titleFont: { size: 12 },
+              bodyFont: { size: 12 },
+              callbacks: {
+                title: items => d.labels[items[0].dataIndex],
+                label: c => c.dataset.label === 'Target'
+                  ? `  Target: ${c.parsed.y} min`
+                  : `  Actual: ${c.parsed.y !== null ? c.parsed.y + ' min' : 'No session'}`,
+                afterBody: () => {
+                  // Hide the dot info comment box completely
+                  return [];
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 0 },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              ticks: { font: { size: 11 }, stepSize: 10 },
+              title: { display: true, text: 'Minutes', font: { size: 11 }, color: '#94a3b8' },
+            },
+          },
+          onHover: (evt, elements) => {
+            if (!elements || !elements.length) {
+              // Hide detail panel when not hovering
+              const panel = document.getElementById(`devices-detail-${deviceKey}`);
+              if (panel) panel.classList.add('hidden');
+              return;
+            }
+
+            const hoveredElement = elements.find(el => el.datasetIndex === 0);
+            if (!hoveredElement) return;
+
+            const idx = hoveredElement.index;
+            if (idx === undefined || idx === null) return;
+
+            const hoveredDate = d.labels[idx];
+            const actualValue = d.data[idx];
+            const displayDate = shortLabels[idx];
+
+            console.log('Hovered date:', hoveredDate, 'Actual value:', actualValue, 'Has data:', d.dates_with_data.includes(hoveredDate));
+
+            // Show detail only if the date has a data file (CSV exists in Dates folder)
+            if (d.dates_with_data.includes(hoveredDate)) {
+              _loadDeviceDetail(hoveredDate, deviceKey, cfg.label, cfg.color, displayDate);
+            } else {
+              // Show "No data available" message when hovering over a point with no data
+              const panel = document.getElementById(`devices-detail-${deviceKey}`);
+              if (panel) {
+                panel.classList.remove('hidden');
+                panel.innerHTML = `
+                  <div class="px-6 py-6 flex flex-col items-center justify-center">
+                    <i class="fas fa-inbox text-2xl mb-2 text-slate-300"></i>
+                    <p class="text-sm text-slate-400 text-center">No data available for ${displayDate || hoveredDate}</p>
+                  </div>`;
+              }
+            }
+          },
+        },
+      });
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="flex items-center justify-center py-12 text-red-500 text-sm gap-2">
+      <i class="fas fa-exclamation-circle"></i> Failed to load device data.
+    </div>`;
+  }
+}
+
+async function _syncActivity() {
+  const container = document.getElementById('devices-tab-content');
+  if (!container) return;
+  container.innerHTML = `<div class="flex items-center justify-center py-10 text-slate-400">
+    <i class="fas fa-sync-alt fa-spin mr-2"></i><span>Syncing from S3…</span></div>`;
+  try {
+    const r = await fetch(`/api/patients/${PATIENT_HOMER_ID}/sync-activity`, { method: 'POST' });
+    const res = await r.json();
+    if (!r.ok || res.error) {
+      container.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-slate-400">
+        <i class="fas fa-exclamation-circle text-2xl mb-3 text-red-400"></i>
+        <p class="text-sm text-red-500">${res.error || 'Sync failed'}</p>
+        <button onclick="_renderDeviceGraphs(document.getElementById('devices-tab-content'))"
+          class="mt-4 px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200">
+          Try viewing existing data
+        </button>
+      </div>`;
+      return;
+    }
+    _devicesTabLoaded = false;
+    Object.values(_devicesCharts).forEach(c => c.destroy());
+    _devicesCharts = {};
+    await _renderDeviceGraphs(container);
+  } catch (e) {
+    container.innerHTML = `<div class="flex items-center justify-center py-10 text-red-500 text-sm">
+      <i class="fas fa-exclamation-circle mr-2"></i>Network error during sync.
+    </div>`;
+  }
+}
+
+async function _loadDeviceDetail(date, deviceKey, deviceLabel, color, displayDate) {
+  const panel = document.getElementById(`devices-detail-${deviceKey}`);
+  if (!panel) {
+    console.warn(`Panel not found: devices-detail-${deviceKey}`);
+    return;
+  }
+
+  panel.classList.remove('hidden');
+  panel.innerHTML = `<div class="flex items-center justify-center py-6 text-slate-400 text-sm">
+    <i class="fas fa-spinner fa-spin mr-2"></i>Loading…</div>`;
+
+  try {
+    // Ensure date is in YYYY-MM-DD format
+    let dateParam = date;
+    if (date && typeof date === 'string' && date.includes('T')) {
+      // Extract just the date part if it's ISO datetime
+      dateParam = date.split('T')[0];
+    }
+
+    const url = `/api/patients/${PATIENT_HOMER_ID}/activity/${dateParam}/${deviceKey}`;
+    console.log('Fetching device detail:', url, 'Original date:', date, 'Param:', dateParam);
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      console.error('API error:', res.status, errorData);
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${errorData.error || 'No data available'}</p>`;
+      return;
+    }
+
+    const d = await res.json();
+    if (d.error) {
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${d.error}</p>`;
+      return;
+    }
+
+    if (!d.mechanisms || !d.durations || !d.target) {
+      console.warn('Invalid data structure:', d);
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">Invalid data structure</p>`;
+      return;
+    }
+
+    const maxVal = Math.max(...d.durations, ...d.target, 1);
+    const bars = d.mechanisms.map((mech, i) => {
+      const used    = d.durations[i] || 0;
+      const tgt     = d.target[i]    || 0;
+      const pctUsed = maxVal > 0 ? Math.round((used / maxVal) * 100) : 0;
+      const pctTgt  = maxVal > 0 ? Math.round((tgt  / maxVal) * 100) : 0;
+      return `<div class="flex items-center gap-3">
+        <span class="w-14 text-right text-xs font-medium text-slate-600 shrink-0">${mech}</span>
+        <div class="flex-1 relative h-5 bg-slate-100 rounded-full overflow-hidden">
+          <div class="absolute inset-y-0 left-0 rounded-full" style="width:${pctUsed}%;background:${color}88"></div>
+          <div class="absolute inset-y-0 w-0.5 bg-red-400" style="left:${pctTgt}%"></div>
+        </div>
+        <span class="text-xs text-slate-500 w-28 shrink-0">${used} / ${tgt} min</span>
+      </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <div class="px-6 py-4">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-xs font-semibold text-slate-600">${deviceLabel} — ${displayDate || date}</p>
+          <span class="text-xs text-slate-400">Bar = used &nbsp;|&nbsp; <span class="text-red-400 font-bold">|</span> = target</span>
+        </div>
+        <div class="space-y-2">${bars}</div>
+      </div>`;
+  } catch (e) {
+    console.error('Failed to load device detail:', e);
+    panel.innerHTML = `<p class="text-sm text-red-400 text-center py-4">Failed to load breakdown: ${e.message}</p>`;
+  }
+}
+
 async function loadAdlTab() {
   if (_adlTabLoaded) return;
   const container = document.getElementById('adl-tab-content');
   if (!container) return;
 
   try {
-    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t01Res, t02Res, t03Res, t15Res] = await Promise.all([
       fetch('/api/exercises?type=adl'),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d01`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d02`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d03`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t01       = t01Res.ok ? await t01Res.json() : null;
+    const t02       = t02Res.ok ? await t02Res.json() : null;
     const t03       = t03Res.ok ? await t03Res.json() : null;
     const t15       = t15Res.ok ? await t15Res.json() : null;
 
@@ -2949,8 +3413,8 @@ async function loadAdlTab() {
       const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d01');
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-600 text-white',  printD15?.attachment, t15);
-      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-blue-400 text-white', printD1?.attachment,  t03);
+      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-600 text-white',  printD15?.attachment, [t15]);
+      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-blue-400 text-white', printD1?.attachment,  [t01, t02, t03]);
       container.innerHTML = html;
     }
     _adlTabLoaded = true;
@@ -2968,16 +3432,20 @@ async function loadVcgTab() {
   const groupLabel = VCG_GROUP_LABELS[vcgGroup] || vcgGroup || '';
 
   try {
-    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t01Res, t02Res, t03Res, t15Res] = await Promise.all([
       fetch(`/api/exercises?type=vcg&group=${vcgGroup}`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d01`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d02`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d03`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t01       = t01Res.ok ? await t01Res.json() : null;
+    const t02       = t02Res.ok ? await t02Res.json() : null;
     const t03       = t03Res.ok ? await t03Res.json() : null;
     const t15       = t15Res.ok ? await t15Res.json() : null;
 
@@ -2992,8 +3460,8 @@ async function loadVcgTab() {
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       const suffix = groupLabel ? ` · <span class="font-normal opacity-70">${groupLabel}</span>` : '';
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-600 text-white',  printD15?.attachment, t15);
-      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-teal-400 text-white', printD1?.attachment,  t03);
+      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-600 text-white',  printD15?.attachment, [t15]);
+      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-teal-400 text-white', printD1?.attachment,  [t01, t02, t03]);
       container.innerHTML = html;
     }
     _vcgTabLoaded = true;
@@ -3004,8 +3472,24 @@ async function loadVcgTab() {
 
 // ── Prescription Printout modal ────────────────────────────────────────────────
 
+const SITE_LANGUAGES = {
+  'Ranipet':  ['english', 'tamil', 'telugu'],
+  'Manipal':  ['english', 'kannada', 'hindi'],
+  'Ludhiana': ['english', 'punjabi', 'hindi'],
+};
+
+const LANGUAGE_NAMES = {
+  'english':  'English',
+  'tamil':    'தமிழ்',
+  'telugu':   'తెలుగు',
+  'kannada':  'ಕನ್ನಡ',
+  'hindi':    'हिंदी',
+  'punjabi':  'ਪੰਜਾਬੀ',
+};
+
 let _prescPrintoutEventId     = null;
 let _prescPrintoutProtocolId  = null;
+let _prescPrintoutLanguage    = 'english';
 
 function openPrescriptionPrintoutModal(ev) {
   _prescPrintoutEventId    = typeof ev === 'object' ? ev.id : ev;
@@ -3018,42 +3502,432 @@ function openPrescriptionPrintoutModal(ev) {
   document.getElementById('prescription-printout-title').textContent = title;
   document.getElementById('prescription-printout-homer-id').textContent = PATIENT_HOMER_ID;
   setError('prescription-printout-error', '');
+
+  // Create language buttons
+  const buttonsContainer = document.getElementById('presc-printout-language-buttons');
+  buttonsContainer.innerHTML = '';
+  const languages = SITE_LANGUAGES[PATIENT_PLACE] || ['english'];
+
+  languages.forEach(lang => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.language = lang;
+    btn.textContent = LANGUAGE_NAMES[lang] || lang;
+    btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                    'bg-slate-200 text-slate-700 hover:bg-slate-300';
+    btn.onclick = () => selectPrescriptionLanguage(lang);
+    buttonsContainer.appendChild(btn);
+  });
+
+  _prescPrintoutLanguage = 'english';
+
+  // Reset preview
+  document.getElementById('presc-printout-preview').innerHTML =
+    '<p class="text-slate-400 text-center py-12 text-sm">Select a language to preview the pamphlet</p>';
+
   showModal('prescription-printout-modal');
 }
 
-async function _completePrescriptionPrintout() {
-  const { ok, data } = await apiPost(
-    `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
-    { event_id: _prescPrintoutEventId, protocol_event_id: _prescPrintoutProtocolId }
-  );
-  if (!ok) {
-    setError('prescription-printout-error', data.error || 'Failed to record printout.');
-    return null;
+function selectPrescriptionLanguage(lang) {
+  _prescPrintoutLanguage = lang;
+
+  // Update button styles
+  document.querySelectorAll('#presc-printout-language-buttons button').forEach(btn => {
+    if (btn.dataset.language === lang) {
+      btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                      'bg-blue-500 text-white hover:bg-blue-600';
+    } else {
+      btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                      'bg-slate-200 text-slate-700 hover:bg-slate-300';
+    }
+  });
+
+  _loadPrescriptionPamphlet();
+}
+
+async function _loadPrescriptionPamphlet() {
+  if (!_prescPrintoutLanguage) {
+    document.getElementById('presc-printout-preview').innerHTML =
+      '<p class="text-slate-400 text-center py-12 text-sm">Select a language to preview the pamphlet</p>';
+    return;
   }
-  hideModal('prescription-printout-modal');
-  loadPatientEvents();
-  return data.attachment;
+
+  const preview = document.getElementById('presc-printout-preview');
+  preview.innerHTML = '<p class="text-slate-400 text-center py-12 text-sm">Loading pamphlet...</p>';
+
+  try {
+    const res = await fetch(
+      `/api/patients/${PATIENT_HOMER_ID}/prescription-pamphlet?event_id=${_prescPrintoutEventId}&language=${_prescPrintoutLanguage}`
+    );
+    if (!res.ok) {
+      preview.innerHTML = '<p class="text-red-500 text-center py-12 text-sm">Failed to load pamphlet</p>';
+      return;
+    }
+    const html = await res.text();
+    preview.innerHTML = html;
+  } catch (e) {
+    preview.innerHTML = '<p class="text-red-500 text-center py-12 text-sm">Error loading pamphlet</p>';
+  }
 }
 
 async function savePrescriptionPrintout() {
+  if (!_prescPrintoutLanguage) {
+    setError('prescription-printout-error', 'Please select a language first');
+    return;
+  }
+
   setLoading('prescription-printout-save', true);
-  const attachment = await _completePrescriptionPrintout();
-  setLoading('prescription-printout-save', false);
-  if (attachment) {
-    const a = document.createElement('a');
-    a.href = `/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`;
-    a.download = attachment.split('/').pop();
-    a.click();
+
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+    const htmlContent = previewDiv.innerHTML;
+
+    console.log('Sending HTML to server for server-side PDF rendering...');
+
+    // Send HTML to server for server-side PDF generation with Puppeteer
+    const { ok: renderOk, data: renderData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/generate-prescription-pdf`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+        html_content: htmlContent,
+        caption: `Exercise Prescription Printout (${_prescPrintoutLanguage})`
+      }
+    );
+
+    if (!renderOk) {
+      throw new Error(renderData.error || 'Failed to generate PDF');
+    }
+
+    console.log('✓ PDF generated and saved successfully');
+
+    // Success: close modal and refresh events
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to generate and save PDF');
+  } finally {
+    setLoading('prescription-printout-save', false);
   }
 }
 
-async function printPrescriptionPrintout() {
-  setLoading('prescription-printout-print', true);
-  const attachment = await _completePrescriptionPrintout();
-  setLoading('prescription-printout-print', false);
-  if (attachment) {
-    window.open(`/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`, '_blank');
+/* OLD CLIENT-SIDE PDF CODE (DISABLED - using server-side rendering now)
+async function savePrescriptionPrintout_OLD() {
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor - DISABLED (old code below for reference)
+    let jsPDFConstructor = null;
+    if (window.jsPDF && typeof window.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF;
+    } else if (window.jspdf && typeof window.jspdf === 'function') {
+      jsPDFConstructor = window.jspdf;
+    } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF.jsPDF;
+    } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
+      jsPDFConstructor = window.jspdf.jsPDF;
+    } else if (window.jsPDF && window.jsPDF.default && typeof window.jsPDF.default === 'function') {
+      jsPDFConstructor = window.jsPDF.default;
+    } else if (window.jspdf && window.jspdf.default && typeof window.jspdf.default === 'function') {
+      jsPDFConstructor = window.jspdf.default;
+    }
+
+    if (!jsPDFConstructor) {
+      throw new Error('jsPDF library not loaded. Please refresh the page and try again.');
+    }
+
+    console.log('Capturing full preview content...');
+
+    // Temporarily remove height constraints to capture all content
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
+
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
+
+    // Capture with html2canvas
+    const canvas = await html2canvas(previewDiv, {
+      scale: 1.5,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
+    });
+
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
+
+}
+*/
+
+// ── Custom PDF Dialog Modal ────────────────────────────────────────
+
+let _pdfDialogSettings = {
+  pageSize: 'a4',
+  scale: 100,
+  margins: 10
+};
+
+function openPrescriptionPdfDialog() {
+  if (!_prescPrintoutLanguage) {
+    setError('prescription-printout-error', 'Please select a language first');
+    return;
   }
+
+  console.log('Opening PDF dialog...');
+
+  // Reset settings to defaults
+  _pdfDialogSettings = {
+    pageSize: 'a4',
+    scale: 100,
+    margins: 10
+  };
+
+  // Update UI
+  document.getElementById('pdf-page-size').value = 'a4';
+  document.getElementById('pdf-scale').value = 100;
+  document.getElementById('pdf-scale-value').textContent = '100%';
+  document.getElementById('pdf-margins').value = 10;
+
+  // Show preview
+  updatePdfPreview();
+
+  // Setup event listeners
+  document.getElementById('pdf-page-size').addEventListener('change', (e) => {
+    _pdfDialogSettings.pageSize = e.target.value;
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-scale').addEventListener('input', (e) => {
+    _pdfDialogSettings.scale = parseInt(e.target.value);
+    document.getElementById('pdf-scale-value').textContent = _pdfDialogSettings.scale + '%';
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-margins').addEventListener('change', (e) => {
+    _pdfDialogSettings.margins = parseInt(e.target.value) || 10;
+  });
+
+  // Show modal
+  showModal('prescription-pdf-dialog-modal');
+}
+
+function updatePdfPreview() {
+  const previewDiv = document.getElementById('presc-printout-preview');
+  const previewPane = document.getElementById('pdf-preview-pane');
+
+  if (!previewDiv) return;
+
+  // Clone preview content with current scale
+  const clone = previewDiv.cloneNode(true);
+  clone.style.transform = `scale(${_pdfDialogSettings.scale / 100})`;
+  clone.style.transformOrigin = 'top left';
+  clone.style.width = `${100 / (_pdfDialogSettings.scale / 100)}%`;
+
+  previewPane.innerHTML = '';
+  previewPane.appendChild(clone);
+}
+
+async function savePrescriptionPdfFromDialog() {
+  setLoading('prescription-pdf-save-dialog', true);
+
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor
+    let jsPDFConstructor = null;
+    if (window.jsPDF && typeof window.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF;
+    } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF.jsPDF;
+    } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
+      jsPDFConstructor = window.jspdf.jsPDF;
+    }
+
+    if (!jsPDFConstructor) {
+      throw new Error('jsPDF library not loaded. Please refresh and try again.');
+    }
+
+    console.log('Generating PDF with user settings...');
+
+    // Prepare element for capture
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
+
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
+
+    // Capture with html2canvas using user's scale setting
+    const canvas = await html2canvas(previewDiv, {
+      scale: _pdfDialogSettings.scale / 100,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
+    });
+
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
+
+    console.log('Canvas created, creating PDF...');
+
+    // Get page dimensions based on user settings
+    const pageSizes = {
+      a4: { width: 210, height: 297 },
+      letter: { width: 216, height: 279 },
+      a3: { width: 297, height: 420 }
+    };
+    const pageSize = pageSizes[_pdfDialogSettings.pageSize];
+    const margins = _pdfDialogSettings.margins;
+    const contentWidth = pageSize.width - (margins * 2);
+
+    // Create PDF
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDFConstructor('p', 'mm', _pdfDialogSettings.pageSize);
+
+    const imgHeight = (canvas.height * contentWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = margins;
+
+    pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+    heightLeft -= (pageSize.height - (margins * 2));
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+      heightLeft -= (pageSize.height - (margins * 2));
+    }
+
+    const pdfBlob = pdf.output('blob');
+    console.log('PDF created, size:', pdfBlob.size, 'bytes');
+
+    // Mark event complete
+    console.log('Marking event as complete...');
+    const { ok: completeOk, data: completeData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+      }
+    );
+
+    if (!completeOk) {
+      throw new Error(completeData.error || 'Failed to mark event complete');
+    }
+
+    console.log('Event marked complete, uploading PDF...');
+
+    // Upload attachment
+    const formData = new FormData();
+    formData.append('event_id', _prescPrintoutEventId);
+    formData.append('caption', `Exercise Prescription Printout (${_prescPrintoutLanguage})`);
+    formData.append('file', pdfBlob, `prescription_${_prescPrintoutLanguage}.pdf`);
+
+    const uploadRes = await fetch(`/api/patients/${PATIENT_HOMER_ID}/upload-attachment`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error('Failed to upload PDF');
+    }
+
+    console.log('PDF uploaded successfully');
+
+    // Success
+    hideModal('prescription-pdf-dialog-modal');
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to save PDF');
+  } finally {
+    setLoading('prescription-pdf-save-dialog', false);
+  }
+}
+
+function printPrescriptionPamphlet() {
+  const previewDiv = document.getElementById('presc-printout-preview');
+
+  // Check if pamphlet is loaded
+  if (!previewDiv.innerHTML || previewDiv.innerHTML.includes('Select a language') || previewDiv.innerHTML.includes('Loading')) {
+    setError('prescription-printout-error', 'Please select a language and wait for the preview to load first');
+    return;
+  }
+
+  // Create a new window for printing
+  const printWindow = window.open('', '', 'height=800,width=1000');
+
+  if (!printWindow) {
+    setError('prescription-printout-error', 'Pop-up window was blocked. Please allow pop-ups for this site.');
+    return;
+  }
+
+  // Get the HTML content from the preview
+  const htmlContent = previewDiv.innerHTML;
+
+  // Build the complete HTML document
+  const printHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Exercise Prescription Pamphlet</title>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+Devanagari:wght@400;500;600&family=Noto+Sans+Tamil:wght@400;500;600&family=Noto+Sans+Telugu:wght@400;500;600&family=Noto+Sans+Kannada:wght@400;500;600&family=Noto+Sans+Gurmukhi:wght@400;500;600&display=swap');
+
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+
+        body {
+          font-family: 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Gurmukhi', sans-serif;
+          line-height: 1.5;
+          color: #333;
+          padding: 20px;
+        }
+
+        @media print {
+          body { padding: 0; }
+          .container { max-width: 100%; padding: 0; }
+          .exercise-card { page-break-inside: avoid; page-break-before: always; }
+          .exercise-card.first-exercise { page-break-before: auto; }
+        }
+      </style>
+    </head>
+    <body>
+      ${htmlContent}
+    </body>
+    </html>
+  `;
+
+  // Write content directly to the new window (document.write is most reliable for print windows)
+  // @ts-ignore - document.write is deprecated but necessary for reliable print window population
+  printWindow.document.write(printHtml);
+  printWindow.document.close();
+
+  // Trigger print dialog immediately after content is written
+  setTimeout(() => {
+    printWindow.focus();
+    printWindow.print();
+  }, 100);
 }
 
 // ── Simple event modal (home visits, follow-up calls, training completion) ────
@@ -3709,9 +4583,13 @@ async function openAgwatchTimingModal(ev) {
   const dateOnly  = schedDate ? schedDate.split('T')[0] : new Date().toISOString().split('T')[0];
   document.getElementById('agwatch-session-date').value = dateOnly;
 
-  // Load session bounds from the corresponding home visit complete entry
+  // Load session bounds from the corresponding home visit or activation complete entry
   const _AGWATCH_SESSION_SOURCE = {
+    adl_agwatch_timing_d01: 'activation',
+    adl_agwatch_timing_d02: 'home_visit_d02',
     adl_agwatch_timing_d03: 'home_visit_d03',
+    vcg_agwatch_timing_d01: 'activation',
+    vcg_agwatch_timing_d02: 'home_visit_d02',
     vcg_agwatch_timing_d03: 'home_visit_d03',
     adl_agwatch_timing_d15: 'home_visit_d15',
     vcg_agwatch_timing_d15: 'home_visit_d15',
@@ -3871,12 +4749,15 @@ async function loadPatient() {
       return;
     }
     renderOverview(patientData);
-    // Show "Log Call" button for admin/therapist on activated patients
+    // Show "Log Call" button for admin/therapist on activated patients (but not if discontinued)
     const logCallBtn = document.getElementById('log-call-btn');
-    if (logCallBtn && patientData.activationDate &&
+    if (logCallBtn && patientData.activationDate && !patientData.discontinuationDate &&
         (userPrivilege === 'admin' || userPrivilege === 'therapist')) {
       logCallBtn.classList.remove('hidden');
       logCallBtn.classList.add('flex');
+    } else if (logCallBtn) {
+      logCallBtn.classList.add('hidden');
+      logCallBtn.classList.remove('flex');
     }
 
     // Show "Discontinue" button for admin when patient is not yet discontinued/completed

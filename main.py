@@ -40,9 +40,12 @@ app.register_blueprint(devices_bp, url_prefix='/devices')
 app.register_blueprint(sim_cards_bp, url_prefix='/sim_cards')
 app.register_blueprint(time_records_bp, url_prefix='/time_records')
 
+import time as _time
+_JS_VERSION = str(int(_time.time()))  # changes on every server restart
+
 @app.context_processor
 def inject_globals():
-    return dict(use_local_storage=Config.USE_LOCAL_STORAGE)
+    return dict(use_local_storage=Config.USE_LOCAL_STORAGE, js_version=_JS_VERSION)
 
 
 @app.after_request
@@ -71,6 +74,13 @@ def login():
 @app.route('/dashboard')
 def dashboard():
     return redirect(url_for('index'))
+
+@app.route('/devices')
+def devices():
+    from flask import session as flask_session
+    if not flask_session.get('login_place'):
+        return redirect(url_for('login'))
+    return render_template('devices.html', active_page='devices')
 
 if __name__ == '__main__':
     # Ensure necessary directories exist

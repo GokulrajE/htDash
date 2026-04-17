@@ -37,3 +37,7 @@ Thumbs.db
 
 # Patient and clinical data
 data/
+#nodejs
+node_modules/
+META-DATA/
+EXERCISE_SS/

@@ -4,10 +4,10 @@ from utils.data_access import (
     get_patients_for_user, derive_status, get_hospital_folder, find_patient_folder,
     read_patient_meta, write_patient_meta, create_patient_folders, generate_homer_id,
     create_patient_log, write_patient_log, get_patients_path,
-    get_available_devices, read_device_inventory, read_device_assignments,
+    get_available_devices, read_device_inventory, write_device_inventory, read_device_assignments,
     write_device_assignments, write_device_log, mark_device_lost,
     mark_device_faulty, mark_device_not_faulty,
-    read_fault_reports, write_fault_reports,
+    read_fault_reports, write_fault_reports, read_sims,
 )
 from utils.protocol_events import (
     create_protocol_events, populate_activation_dates,
@@ -25,6 +25,9 @@ from utils.file_handlers import FileHandler as FH
 from utils.s3_operations import S3Operations
 from utils.data_processors import DataProcessor
 import uuid
+import qrcode
+import io
+import base64
 
 
 bp = Blueprint("user_management", __name__)
@@ -43,7 +46,7 @@ def patients_page():
 def patient_detail_page(homer_id):
     if not flask_session.get('login_place'):
         return redirect(url_for('login'))
-    return render_template('patient_detail.html', homer_id=homer_id, active_page='patients')
+    return render_template('patient_detail.html', homer_id=homer_id, place=flask_session.get('login_place'), active_page='patients')
 
 
 @bp.route('/api/patients/<homer_id>', methods=['GET'])
@@ -235,7 +238,7 @@ def api_patient_events(homer_id):
 
 @bp.route('/api/patients/<homer_id>/available-devices', methods=['GET'])
 def api_available_devices(homer_id):
-    """Return available Pluto/Mars devices plus the patient's current assignments."""
+    """Return available Pluto/Mars/Modem/Laptop/Agwatch devices plus the patient's current assignments."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     folder = find_patient_folder(flask_session['login_place'], homer_id)
@@ -247,11 +250,40 @@ def api_available_devices(homer_id):
         current = next((a for a in assignments if a.get('returned_date') is None), None)
         return current['device_id'] if current else None
 
+    # Get modem list with SIM info
+    modems = get_available_devices(folder, 'modems')
+    try:
+        all_sims = read_sims(folder)
+        sim_map = {s['id']: s for s in all_sims}
+    except Exception:
+        sim_map = {}
+
+    modems_with_sim = []
+    for modem in modems:
+        modem_dict = modem.copy() if isinstance(modem, dict) else {'id': modem}
+        sim_id = modem_dict.get('sim_id')
+        if sim_id and sim_id in sim_map:
+            modem_dict['sim_phone'] = sim_map[sim_id].get('phoneNumber', '')
+        modems_with_sim.append(modem_dict)
+
+    # Get available SIMs (not yet assigned to any modem)
+    try:
+        all_sims = read_sims(folder)
+        available_sims = [s for s in all_sims if not s.get('assigned_date')]
+    except Exception:
+        available_sims = []
+
     return jsonify({
         'pluto':         get_available_devices(folder, 'pluto'),
         'mars':          get_available_devices(folder, 'mars'),
+        'modem':         modems_with_sim,
+        'laptop':        get_available_devices(folder, 'laptops'),
+        'agwatch':       get_available_devices(folder, 'agwatch'),
+        'sims':          available_sims,
         'current_pluto': current_device_id('pluto'),
         'current_mars':  current_device_id('mars'),
+        'current_modem': current_device_id('modems'),
+        'current_laptop': current_device_id('laptops'),
     })
 
 
@@ -293,11 +325,19 @@ def api_complete_device_install(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
     data = request.get_json() or {}
     event_id   = data.get('event_id')
     event_date = data.get('eventDate', '').strip()
     pluto_id   = data.get('plutoId', '').strip()
     mars_id    = data.get('marsId', '').strip()
+    modem_id   = data.get('modemId', '').strip()
+    laptop_id  = data.get('laptopId', '').strip()
+    sim_id     = data.get('simId', '').strip()
     demo_done  = bool(data.get('demoDone', False))
     notes      = data.get('notes', '').strip()
 
@@ -307,6 +347,12 @@ def api_complete_device_install(homer_id):
         return jsonify({'error': 'Pluto device is required.'}), 400
     if not mars_id:
         return jsonify({'error': 'Mars device is required.'}), 400
+    if not modem_id:
+        return jsonify({'error': 'Modem device is required.'}), 400
+    if not laptop_id:
+        return jsonify({'error': 'Laptop device is required.'}), 400
+    if not sim_id:
+        return jsonify({'error': 'SIM card is required.'}), 400
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
@@ -330,6 +376,9 @@ def api_complete_device_install(homer_id):
         'filed_at':        filed_at,
         'pluto_id':        pluto_id,
         'mars_id':         mars_id,
+        'modem_id':        modem_id,
+        'laptop_id':       laptop_id,
+        'sim_id':          sim_id,
         'demo_done':       demo_done,
         'notes':           notes,
     }
@@ -344,7 +393,7 @@ def api_complete_device_install(homer_id):
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    for device_type, device_id in (('pluto', pluto_id), ('mars', mars_id)):
+    for device_type, device_id in (('pluto', pluto_id), ('mars', mars_id), ('modems', modem_id), ('laptops', laptop_id)):
         assignments = read_device_assignments(folder, device_type)
         assignments.append({
             'id':            str(uuid.uuid4()),
@@ -359,8 +408,22 @@ def api_complete_device_install(homer_id):
         write_device_log(folder, device_id, loginid, session_id,
                          f'Assigned to {homer_id}')
 
+    # Assign SIM to modem in device inventory
+    try:
+        modem_inventory = read_device_inventory(folder, 'modems')
+        for modem in modem_inventory:
+            if modem.get('id') == modem_id:
+                modem['sim_id'] = sim_id
+                modem['sim_assigned_date'] = event_date
+                break
+        write_device_inventory(folder, 'modems', modem_inventory)
+        write_device_log(folder, sim_id, loginid, session_id, f'Assigned to modem {modem_id}')
+    except Exception as e:
+        # Log but don't fail if SIM assignment has issues
+        write_patient_log(folder, homer_id, loginid, session_id, f'Warning: SIM assignment failed - {str(e)}')
+
     write_patient_log(folder, homer_id, loginid, session_id,
-                      f'Device setup completed — Pluto: {pluto_id}, Mars: {mars_id}')
+                      f'Device setup completed — Pluto: {pluto_id}, Mars: {mars_id}, Modem: {modem_id}, Laptop: {laptop_id}, SIM: {sim_id}')
 
     return jsonify({'ok': True})
 
@@ -729,16 +792,22 @@ def _generate_placeholder_pdf(homer_id: str, title: str) -> bytes:
 
 @bp.route('/api/patients/<homer_id>/complete-event/prescription-printout', methods=['POST'])
 def api_complete_prescription_printout(homer_id):
-    """Generate prescription PDF, save it, and mark the printout event complete."""
+    """Mark prescription printout event complete. PDF attachment is uploaded separately."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
     data              = request.get_json() or {}
     event_id          = data.get('event_id')
     protocol_event_id = data.get('protocol_event_id', '')
+    language          = data.get('language', 'english')  # For logging purposes
 
     if protocol_event_id not in _PRINTOUT_PDF_FILES:
         return jsonify({'error': 'Invalid protocol event ID.'}), 400
@@ -757,22 +826,26 @@ def api_complete_prescription_printout(homer_id):
     if not entry:
         return jsonify({'error': 'Event not found in incomplete list.'}), 404
 
+    # Mark event complete (attachment will be added separately via upload-attachment endpoint)
     # Generate and save the PDF
     rel_path = _PRINTOUT_PDF_FILES[protocol_event_id]
-    pdf_path = get_patients_path(folder) / homer_id / rel_path
-    pdf_path.parent.mkdir(parents=True, exist_ok=True)
     title = ('Revised Therapy Prescription Printout'
              if protocol_event_id == 'prescription_printout_d15'
              else 'Therapy Prescription Printout')
     pdf_bytes = _generate_placeholder_pdf(homer_id, title)
-    pdf_path.write_bytes(pdf_bytes)
+    if Config.USE_S3:
+        from utils.s3_store import s3_upload_bytes
+        s3_upload_bytes(f"{folder}/patients/{homer_id}/{rel_path}", pdf_bytes, content_type='application/pdf')
+    else:
+        pdf_path = get_patients_path(folder) / homer_id / rel_path
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(pdf_bytes)
 
     now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     complete_entry = {
         **entry,
         'completion_date': now,
         'filed_at':        now,
-        'attachment':      rel_path,
     }
 
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
@@ -783,26 +856,169 @@ def api_complete_prescription_printout(homer_id):
 
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
-    log_msg = ('Revised prescription printout generated'
-               if protocol_event_id == 'prescription_printout_d15'
-               else 'Prescription printout generated')
+    log_msg = ('Revised prescription printout completed' if protocol_event_id == 'prescription_printout_d15'
+               else 'Prescription printout completed')
     write_patient_log(folder, homer_id, loginid, session_id, log_msg)
 
-    return jsonify({'ok': True, 'attachment': rel_path})
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/patients/<homer_id>/generate-prescription-pdf', methods=['POST'])
+def api_generate_prescription_pdf(homer_id):
+    """Generate prescription pamphlet PDF server-side using Puppeteer."""
+    import subprocess
+    import tempfile
+    import platform
+
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
+    data = request.get_json() or {}
+    event_id = data.get('event_id')
+    protocol_event_id = data.get('protocol_event_id', '')
+    language = data.get('language', 'english')
+    html_content = data.get('html_content', '')
+    caption = data.get('caption', '')
+
+    if not html_content:
+        return jsonify({'error': 'No HTML content provided'}), 400
+    if protocol_event_id not in _PRINTOUT_PDF_FILES:
+        return jsonify({'error': 'Invalid protocol event ID'}), 400
+    if not caption:
+        return jsonify({'error': 'Caption is required'}), 400
+
+    try:
+        # Create temporary files for HTML input and PDF output
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as html_file:
+            html_file.write(html_content)
+            html_input_path = html_file.name
+
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as pdf_file:
+            pdf_output_path = pdf_file.name
+
+        try:
+            # Get the path to the render_pdf.js script
+            script_path = Path(__file__).parent.parent / 'scripts' / 'render_pdf.js'
+
+            # Determine Node command based on OS
+            node_cmd = 'node.exe' if platform.system() == 'Windows' else 'node'
+
+            # Call Puppeteer script to render HTML to PDF
+            result = subprocess.run(
+                [node_cmd, str(script_path), html_input_path, pdf_output_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                return jsonify({
+                    'error': f'PDF rendering failed: {result.stderr}'
+                }), 500
+
+            # Read the generated PDF
+            with open(pdf_output_path, 'rb') as f:
+                pdf_bytes = f.read()
+
+            # Save PDF to patient folder (same location as upload-attachment)
+            pdf_rel_path = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+
+            if Config.USE_S3:
+                from utils.s3_store import s3_upload_bytes
+                s3_upload_bytes(
+                    f"{folder}/patients/{homer_id}/{pdf_rel_path}",
+                    pdf_bytes,
+                    content_type='application/pdf'
+                )
+            else:
+                pdf_full_path = get_patients_path(folder) / homer_id / pdf_rel_path
+                pdf_full_path.parent.mkdir(parents=True, exist_ok=True)
+                pdf_full_path.write_bytes(pdf_bytes)
+
+            # Mark event complete
+            events_data = read_protocol_events(folder, homer_id)
+            if not events_data:
+                return jsonify({'error': 'Protocol events not found'}), 404
+
+            incomplete = events_data.get('incomplete', [])
+            entry = next(
+                (e for e in incomplete
+                 if e.get('protocol_event_id') == protocol_event_id
+                 and (event_id is None or e.get('id') == event_id)),
+                None
+            )
+            if not entry:
+                return jsonify({'error': 'Event not found in incomplete list'}), 404
+
+            now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            complete_entry = {
+                **entry,
+                'completion_date': now,
+                'filed_at': now,
+                'attachment': pdf_rel_path,
+                'attachment_caption': caption,
+            }
+
+            events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+            events_data.setdefault('complete', []).append(complete_entry)
+
+            write_protocol_events(folder, homer_id, events_data)
+
+            # Log the event
+            loginid = flask_session.get('loginid', 'unknown')
+            session_id = flask_session.get('session_id', -1)
+            log_msg = (f'Prescription printout ({language}) generated and saved as PDF')
+            write_patient_log(folder, homer_id, loginid, session_id, log_msg)
+
+            return jsonify({'ok': True})
+
+        finally:
+            # Clean up temporary files
+            try:
+                os.unlink(html_input_path)
+            except:
+                pass
+            try:
+                os.unlink(pdf_output_path)
+            except:
+                pass
+
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'PDF rendering timed out'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
 @bp.route('/api/patients/<homer_id>/attachment/<path:rel_path>', methods=['GET'])
 def api_get_attachment(homer_id, rel_path):
     """Serve a file from the patient's attachments folder."""
+    from flask import send_file
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+    if Config.USE_S3:
+        from utils.s3_store import s3_get_bytes
+        import io, posixpath
+        key = f"{folder}/patients/{homer_id}/{rel_path}"
+        data = s3_get_bytes(key)
+        if data is None:
+            return jsonify({'error': 'File not found'}), 404
+        filename = posixpath.basename(rel_path)
+        return send_file(io.BytesIO(data), as_attachment=True, download_name=filename)
     file_path = get_patients_path(folder) / homer_id / rel_path
     if not file_path.exists() or not file_path.is_file():
         return jsonify({'error': 'File not found'}), 404
-    from flask import send_file
     return send_file(file_path, as_attachment=True, download_name=file_path.name)
 
 
@@ -836,6 +1052,11 @@ def api_complete_simple_event(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     data              = request.get_json() or {}
     event_id          = data.get('event_id')
@@ -942,6 +1163,11 @@ def api_complete_home_visit(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     body              = request.get_json() or {}
     event_id          = body.get('event_id')
@@ -1073,6 +1299,11 @@ def api_complete_adverse_event(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     body                      = request.get_json() or {}
     event_id                  = body.get('event_id')
@@ -1222,6 +1453,11 @@ def api_complete_adverse_event_followup(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     body            = request.get_json() or {}
     event_id        = body.get('event_id')
@@ -1422,6 +1658,11 @@ def api_complete_ae_followup_visit(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
     body            = request.get_json() or {}
     event_id        = body.get('event_id')
     visit_start     = (body.get('visit_start') or '').strip()
@@ -1514,6 +1755,11 @@ def api_complete_ae_clinical_visit(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     body            = request.get_json() or {}
     event_id        = body.get('event_id')
@@ -1665,6 +1911,11 @@ def api_complete_robot_issue_call(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
     body            = request.get_json() or {}
     event_id        = body.get('event_id')
     completion_date = (body.get('completion_date') or '').strip()
@@ -1753,6 +2004,11 @@ def api_complete_robot_issue_visit(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     body            = request.get_json() or {}
     event_id        = body.get('event_id')
@@ -1941,6 +2197,11 @@ def api_complete_resolve_robot_issue_visit(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     body                  = request.get_json() or {}
     event_id              = body.get('event_id')
@@ -2193,6 +2454,11 @@ def api_complete_followup_call(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
     body               = request.get_json() or {}
     event_id           = body.get('event_id')
     protocol_event_id  = (body.get('protocol_event_id') or '').strip()
@@ -2339,6 +2605,11 @@ def api_complete_watch_record(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
     data               = request.get_json() or {}
     event_id           = data.get('event_id')
     ag_right_new       = data.get('ag_watch_right_new')   # str or None
@@ -2471,6 +2742,18 @@ def api_complete_watch_record(homer_id):
 # ── AG Watch Timing endpoints ──────────────────────────────────────────────────
 
 _AGWATCH_TIMING_CONFIG = {
+    'adl_agwatch_timing_d01': {
+        'prescription_event': 'adl_prescription_d01',
+        'timing_file':        'adl/adl_agwatch_timing_d01.json',
+        'ex_type':            'adl',
+        'session_source':     'activation',
+    },
+    'adl_agwatch_timing_d02': {
+        'prescription_event': 'adl_prescription_d01',
+        'timing_file':        'adl/adl_agwatch_timing_d02.json',
+        'ex_type':            'adl',
+        'session_source':     'home_visit_d02',
+    },
     'adl_agwatch_timing_d03': {
         'prescription_event': 'adl_prescription_d01',
         'timing_file':        'adl/adl_agwatch_timing_d03.json',
@@ -2482,6 +2765,18 @@ _AGWATCH_TIMING_CONFIG = {
         'timing_file':        'adl/adl_agwatch_timing_d15.json',
         'ex_type':            'adl',
         'session_source':     'home_visit_d15',
+    },
+    'vcg_agwatch_timing_d01': {
+        'prescription_event': 'vcg_prescription_d01',
+        'timing_file':        'vcg_exercise/vcg_agwatch_timing_d01.json',
+        'ex_type':            'vcg',
+        'session_source':     'activation',
+    },
+    'vcg_agwatch_timing_d02': {
+        'prescription_event': 'vcg_prescription_d01',
+        'timing_file':        'vcg_exercise/vcg_agwatch_timing_d02.json',
+        'ex_type':            'vcg',
+        'session_source':     'home_visit_d02',
     },
     'vcg_agwatch_timing_d03': {
         'prescription_event': 'vcg_prescription_d01',
@@ -2549,6 +2844,11 @@ def api_complete_agwatch_timing(homer_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
     data              = request.get_json() or {}
     event_id          = data.get('event_id')
@@ -2618,8 +2918,6 @@ def api_complete_agwatch_timing(homer_id):
 
     # Write the timing file
     timing_rel = cfg['timing_file']
-    timing_path = get_patients_path(folder) / homer_id / timing_rel
-    timing_path.parent.mkdir(parents=True, exist_ok=True)
     filed_at  = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     loginid   = flask_session.get('loginid', 'unknown')
     timing_content = {
@@ -2636,10 +2934,16 @@ def api_complete_agwatch_timing(homer_id):
         ],
         'notes': notes,
     }
-    tmp = timing_path.with_suffix('.tmp')
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(timing_content, f, indent=2)
-    os.replace(tmp, timing_path)
+    if Config.USE_S3:
+        from utils.s3_store import s3_write_json
+        s3_write_json(f"{folder}/patients/{homer_id}/{timing_rel}", timing_content)
+    else:
+        timing_path = get_patients_path(folder) / homer_id / timing_rel
+        timing_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = timing_path.with_suffix('.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(timing_content, f, indent=2)
+        os.replace(tmp, timing_path)
 
     # Mark event complete
     complete_entry = {
@@ -2708,15 +3012,47 @@ def api_upload_attachment(homer_id):
                     break
     if not entry:
         return jsonify({'error': 'Event not found'}), 404
+    
+    # Use predefined filename based on protocol_event_id
+    protocol_event_id = entry.get('protocol_event_id', '')
+    pdf_path_mapping = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
 
-    # Save PDF as attachments/<event_id>.pdf
-    attachment_rel  = f'attachments/{event_id}.pdf'
-    attachment_path = get_patients_path(folder) / homer_id / attachment_rel
-    attachment_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf_file.save(str(attachment_path))
+#     # Save PDF as attachments/<event_id>.pdf
+#     #save file name using predeifned
+#     attachment_path = get_patients_path(folder) / homer_id / pdf_path_mapping
+#     attachment_path.parent.mkdir(parents=True, exist_ok=True)
+#     pdf_file.save(str(attachment_path))
+    
+   ##js
+    attachment_rel = pdf_path_mapping  # e.g., "attachments/prescription_d01.pdf"
+    if Config.USE_S3:
+        from utils.s3_store import s3_upload_file
+        import tempfile, os as _os
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+            pdf_file.save(tmp.name)
+            tmp_path = tmp.name
+        try:
+            s3_upload_file(tmp_path, f"{folder}/patients/{homer_id}/{attachment_rel}",
+                           content_type='application/pdf')
+        finally:
+            _os.unlink(tmp_path)
+    else:
+        attachment_path = get_patients_path(folder) / homer_id / attachment_rel
+        attachment_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_file.save(str(attachment_path))
+
+  
+    # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
+    friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
+    print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
+
+  
+    # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
+    friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
+    print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
 
     # Stamp fields on the entry
-    entry['attachment']         = attachment_rel
+    entry['attachment']         = pdf_path_mapping
     entry['attachment_caption'] = caption
 
     from utils.protocol_events import write_protocol_events
@@ -2739,13 +3075,96 @@ def api_download_attachment(homer_id, event_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    attachment_path = get_patients_path(folder) / homer_id / 'attachments' / f'{event_id}.pdf'
+    # Look up the actual attachment path stored on the event
+    events_data = read_protocol_events(folder, homer_id)
+    attachment_rel = None
+    if events_data:
+        entry = next((e for e in events_data.get('complete', []) if e.get('id') == event_id), None)
+        if not entry:
+            for val in events_data.get('free', {}).values():
+                if isinstance(val, list):
+                    entry = next((e for e in val if e.get('id') == event_id), None)
+                    if entry:
+                        break
+        if entry:
+            attachment_rel = entry.get('attachment')
+    # Fall back to legacy path
+    if not attachment_rel:
+        attachment_rel = f'attachments/{event_id}.pdf'
+
+    if Config.USE_S3:
+        from utils.s3_store import s3_get_bytes
+        import io
+        key = f"{folder}/patients/{homer_id}/{attachment_rel}"
+        data = s3_get_bytes(key)
+        if data is None:
+            return jsonify({'error': 'Attachment not found'}), 404
+        import posixpath
+        filename = posixpath.basename(attachment_rel)
+        return send_file(
+            io.BytesIO(data),
+            mimetype='application/pdf',
+            as_attachment=False,
+            download_name=filename,
+        )
+
+    attachment_path = get_patients_path(folder) / homer_id / attachment_rel
     if not attachment_path.exists():
         return jsonify({'error': 'Attachment not found'}), 404
 
-    return send_file(str(attachment_path), mimetype='application/pdf',
-                     as_attachment=False,
-                     download_name=f'{homer_id}_{event_id}.pdf')
+    # Get the friendly filename from protocol_event_id
+    events_data = read_protocol_events(folder, homer_id)
+    friendly_name = 'prescription_attachment.pdf'  # Default fallback
+    print(f'[DOWNLOAD DEBUG] event_id={event_id}')
+
+    if events_data:
+        # Search in complete events
+        for entry in events_data.get('complete', []):
+            if entry.get('id') == event_id:
+                protocol_event_id = entry.get('protocol_event_id', '')
+                friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                print(f'[DOWNLOAD DEBUG] Found in complete, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
+                break
+        # Search in free events if not found
+        if friendly_name == 'prescription_attachment.pdf':
+            for val in events_data.get('free', {}).values():
+                if isinstance(val, list):
+                    for entry in val:
+                        if entry.get('id') == event_id:
+                            protocol_event_id = entry.get('protocol_event_id', '')
+                            friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
+                            print(f'[DOWNLOAD DEBUG] Found in free, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
+                            break
+
+    print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
+
+    # Read the PDF file
+    with open(str(attachment_path), 'rb') as f:
+        pdf_data = f.read()
+
+    # Create response with the PDF data
+    from flask import make_response
+    response = make_response(pdf_data)
+
+    # Set headers explicitly for maximum compatibility
+    response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Length'] = len(pdf_data)
+    # RFC 6266 format: attachment; filename="filename.pdf"
+    response.headers['Content-Disposition'] = f'attachment; filename="{friendly_name}"'
+
+    # Also set cache control to prevent caching
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+
+    print(f'[DOWNLOAD DEBUG] Response headers set:')
+    print(f'  Content-Type: application/pdf')
+    print(f'  Content-Length: {len(pdf_data)}')
+    print(f'  Content-Disposition: attachment; filename="{friendly_name}"')
+
+    return response
+#     return send_file(str(attachment_path), mimetype='application/pdf',
+#                      as_attachment=False,
+#                      download_name=attachment_path.name)
 
 
 @bp.route('/api/patients/<homer_id>/log-patient-call', methods=['POST'])
@@ -2938,6 +3357,11 @@ def api_complete_training(homer_id):
     patient = read_patient_meta(folder, homer_id)
     if not patient:
         return jsonify({'error': 'Patient not found'}), 404
+
+    # Check if patient is discontinued
+    if patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
     if derive_status(patient) != 'active':
         return jsonify({'error': 'Patient must be active to complete training'}), 409
     patient['trainingCompletionDate'] = training_date
@@ -4785,7 +5209,56 @@ def auto_activate_experimental_api(patient_id):
 # ── Exercise catalogue ─────────────────────────────────────────────────────────
 
 _EXERCISES_PATH = Path(__file__).parent.parent / 'config' / 'homer_exercises.json'
+_EXERCISE_SS_PATH = Path(__file__).parent.parent / 'EXERCISE_SS'
 _exercises_cache: dict = {}
+
+# Screenshot mapping: exercise_id → relative path from EXERCISE_SS/
+_SCREENSHOT_MAP = {
+    # ADL exercises
+    'adl_1': 'ADL_SS/ADL_1.png', 'adl_2': 'ADL_SS/ADL_2.png', 'adl_3': 'ADL_SS/ADL_3.png',
+    'adl_4': 'ADL_SS/ADL_4.png', 'adl_5': 'ADL_SS/ADL_5.png', 'adl_6': 'ADL_SS/ADL_6.png',
+    'adl_7': 'ADL_SS/ADL_7.png', 'adl_8': 'ADL_SS/ADL_8.png',
+    # VCG2 - Unilateral
+    'vcg2_uni_1': 'VCG2_SS/VCG2_Unilateral_task_1.png', 'vcg2_uni_2': 'VCG2_SS/VCG2_Unilateral_task_2.png',
+    'vcg2_uni_3': 'VCG2_SS/VCG2_Unilateral_task_3.png', 'vcg2_uni_4': 'VCG2_SS/VCG2_Unilateral_task_4.png',
+    'vcg2_uni_5': 'VCG2_SS/VCG2_Unilateral_task_5.png', 'vcg2_uni_6': 'VCG2_SS/VCG2_Unilateral_task_6.png',
+    'vcg2_uni_7': 'VCG2_SS/VCG2_Unilateral_task_7.png', 'vcg2_uni_8': 'VCG2_SS/VCG2_Unilateral_task_8.png',
+    # VCG2 - Bilateral (IDs 9-18, but screenshots are task_1-10)
+    'vcg2_bil_9': 'VCG2_SS/VCG2_Bilateral_task_1.png', 'vcg2_bil_10': 'VCG2_SS/VCG2_Bilateral_task_2.png',
+    'vcg2_bil_11': 'VCG2_SS/VCG2_Bilateral_task_3.png', 'vcg2_bil_12': 'VCG2_SS/VCG2_Bilateral_task_4.png',
+    'vcg2_bil_13': 'VCG2_SS/VCG2_Bilateral_task_5.png', 'vcg2_bil_14': 'VCG2_SS/VCG2_Bilateral_task_6.png',
+    'vcg2_bil_15': 'VCG2_SS/VCG2_Bilateral_task_7.png', 'vcg2_bil_16': 'VCG2_SS/VCG2_Bilateral_task_8.png',
+    'vcg2_bil_17': 'VCG2_SS/VCG2_Bilateral_task_9.png', 'vcg2_bil_18': 'VCG2_SS/VCG2_Bilateral_task_10.png',
+    # VCG3 - Unilateral
+    'vcg3_uni_1': 'VCG3_SS/VCG3-Uni-task_1.png', 'vcg3_uni_2': 'VCG3_SS/VCG3-Uni-task_2.png',
+    'vcg3_uni_3': 'VCG3_SS/VCG3-Uni-task_3.png', 'vcg3_uni_4': 'VCG3_SS/VCG3-Uni-task_4.png',
+    'vcg3_uni_5': 'VCG3_SS/VCG3-Uni-task_5.png', 'vcg3_uni_6': 'VCG3_SS/VCG3-Uni-task_6.png',
+    'vcg3_uni_7': 'VCG3_SS/VCG3-Uni-task_7.png', 'vcg3_uni_8': 'VCG3_SS/VCG3-Uni-task_8.png',
+    'vcg3_uni_9': 'VCG3_SS/VCG3-Uni-task_9.png', 'vcg3_uni_10': 'VCG3_SS/VCG3-Uni-task_10.png',
+    # VCG3 - Bilateral
+    'vcg3_bil_1': 'VCG3_SS/VCG3-Bi-task_1.png', 'vcg3_bil_2': 'VCG3_SS/VCG3-Bi-task_2.png',
+    'vcg3_bil_3': 'VCG3_SS/VCG3-Bi-task_3.png', 'vcg3_bil_4': 'VCG3_SS/VCG3-Bi-task_4.png',
+    'vcg3_bil_5': 'VCG3_SS/VCG3-Bi-task_5.png', 'vcg3_bil_6': 'VCG3_SS/VCG3-Bi-task_6.png',
+    'vcg3_bil_7': 'VCG3_SS/VCG3-Bi-task_7.png', 'vcg3_bil_8': 'VCG3_SS/VCG3-Bi-task_8.png',
+    'vcg3_bil_9': 'VCG3_SS/VCG3-Bi-task_9.png', 'vcg3_bil_10': 'VCG3_SS/VCG3-Bi-task_10.png',
+    'vcg3_bil_11': 'VCG3_SS/VCG3-Bi-task_11.png', 'vcg3_bil_12': 'VCG3_SS/VCG3-Bi-task_12.png',
+    # VCG4-5 - Unilateral
+    'vcg45_uni_1': 'VCG4-5_SS/VCG4-5-Uni-task_1.png', 'vcg45_uni_2': 'VCG4-5_SS/VCG4-5-Uni-task_2.png',
+    'vcg45_uni_3': 'VCG4-5_SS/VCG4-5-Uni-task_3.png', 'vcg45_uni_4': 'VCG4-5_SS/VCG4-5-uni-task_4.png',
+    'vcg45_uni_5': 'VCG4-5_SS/VCG4-5-Uni-task_5.png', 'vcg45_uni_6': 'VCG4-5_SS/VCG4-5-Uni-task_6.png',
+    'vcg45_uni_7': 'VCG4-5_SS/VCG4-5-Uni-task_7.png', 'vcg45_uni_8': 'VCG4-5_SS/VCG4-5-Uni-task_8.png',
+    # VCG4-5 - Bilateral
+    'vcg45_bil_1': 'VCG4-5_SS/VCG4-5-Bi-task_1.png', 'vcg45_bil_2': 'VCG4-5_SS/VCG4-5-Bi-task_2.png',
+    'vcg45_bil_3': 'VCG4-5_SS/VCG4-5-Bi-task_3.png', 'vcg45_bil_4': 'VCG4-5_SS/VCG4-5-Bi-task_4.png',
+    'vcg45_bil_5': 'VCG4-5_SS/VCG4-5-Bi-task_5.png', 'vcg45_bil_6': 'VCG4-5_SS/VCG4-5-Bi-task_6.png',
+    'vcg45_bil_7': 'VCG4-5_SS/VCG4-5-Bi-task_7.png', 'vcg45_bil_8': 'VCG4-5_SS/VCG4-5-Bi-task_8.png',
+    'vcg45_bil_9': 'VCG4-5_SS/VCG4-5-Bi-task_9.png', 'vcg45_bil_10': 'VCG4-5_SS/VCG4-5-Bi-task_10.png',
+    'vcg45_bil_11': 'VCG4-5_SS/VCG4-5-Bi-task_11.png', 'vcg45_bil_12': 'VCG4-5_SS/VCG4-5-Bi-task_12.png',
+    'vcg45_bil_13': 'VCG4-5_SS/VCG4-5-Bi-task_13.png', 'vcg45_bil_14': 'VCG4-5_SS/VCG4-5-Bi-task_14.png',
+    'vcg45_bil_15': 'VCG4-5_SS/VCG4-5-Bi-task_15.png', 'vcg45_bil_16': 'VCG4-5_SS/VCG4-5-Bi-task_16.png',
+    'vcg45_bil_17': 'VCG4-5_SS/VCG4-5-Bi-task_17.png', 'vcg45_bil_18': 'VCG4-5_SS/VCG4-5-Bi-task_18.png',
+    'vcg45_bil_19': 'VCG4-5_SS/VCG4-5-Bi-task_19.png',
+}
 
 
 def _load_exercises() -> dict:
@@ -4831,6 +5304,10 @@ _PRESCRIPTION_FILES = {
 
 
 def _write_prescription(folder: str, homer_id: str, rel_path: str, content: dict) -> None:
+    if Config.USE_S3:
+        from utils.s3_store import s3_write_json
+        s3_write_json(f"{folder}/patients/{homer_id}/{rel_path}", content)
+        return
     path = get_patients_path(folder) / homer_id / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp')
@@ -4840,6 +5317,9 @@ def _write_prescription(folder: str, homer_id: str, rel_path: str, content: dict
 
 
 def _read_prescription(folder: str, homer_id: str, rel_path: str):
+    if Config.USE_S3:
+        from utils.s3_store import s3_read_json
+        return s3_read_json(f"{folder}/patients/{homer_id}/{rel_path}")
     path = get_patients_path(folder) / homer_id / rel_path
     if not path.exists():
         return None
@@ -4867,6 +5347,231 @@ def api_get_prescription(homer_id, event_id):
     return jsonify(data)
 
 
+# ── Prescription pamphlet helpers ──────────────────────────────────────────────
+
+def _make_qr_b64(url: str) -> str:
+    """Generate QR code image as base64 data URI."""
+    if not url or url.strip() == '':
+        return ''
+    try:
+        qr = qrcode.QRCode(version=1, box_size=4, border=2)
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ''
+
+
+def _make_screenshot_b64(exercise_id: str) -> str:
+    """Read exercise screenshot and return as base64 string. Tries .png then .jpg."""
+    rel = _SCREENSHOT_MAP.get(exercise_id)
+    if not rel:
+        return ''
+    candidates = [rel, rel[:-4] + '.jpg'] if rel.lower().endswith('.png') else [rel]
+    if Config.USE_S3:
+        from utils.s3_store import s3_get_bytes
+        for candidate in candidates:
+            data = s3_get_bytes(f'EXERCISE_SS/{candidate}')
+            if data:
+                try:
+                    return base64.b64encode(data).decode()
+                except Exception:
+                    return ''
+        return ''
+    for candidate in candidates:
+        path = _EXERCISE_SS_PATH / candidate
+        if path.exists():
+            try:
+                return base64.b64encode(path.read_bytes()).decode()
+            except Exception:
+                return ''
+    return ''
+
+
+def _get_field_labels(language: str) -> dict:
+    """Get translated labels for exercise fields."""
+    labels = {
+        'english': {
+            'description': 'Description',
+            'dosage': 'Dosage',
+            'items': 'Items Needed',
+            'adl_section': 'Activities of Daily Living (ADL)',
+            'vcg_section': 'Virtual Center of Gravity (VCG)',
+            'scan_video': 'Scan for Video',
+            'video_instruction': 'Watch the exercise video using your smartphone camera',
+        },
+        'tamil': {
+            'description': 'விளக்கம்',
+            'dosage': 'தீவிரம்',
+            'items': 'தேவையான பொருட்கள்',
+            'adl_section': 'நாளாந்த வாழ்க்கை நடவடிக்கைகள் (ADL)',
+            'vcg_section': 'மெய்ம் ஈர்ப்பு மையம் (VCG)',
+            'scan_video': 'வீடியோவுக்கு ஸ்கேன் செய்யவும்',
+            'video_instruction': 'உங்கள் ஸ்மார்ட்ஃபோன் கேமிரா ஐப் பயன்படுத்தி பயிற்சி வீடியோவைப் பாருங்கள்',
+        },
+        'telugu': {
+            'description': 'వివరణ',
+            'dosage': 'మోతాదు',
+            'items': 'అవసరమైన వస్తువులు',
+            'adl_section': 'రోజువారీ జీవన కార్యకలాపాలు (ADL)',
+            'vcg_section': 'వర్చువల్ గురుత్వాకర్షణ కేంద్రం (VCG)',
+            'scan_video': 'వీడియో కోసం స్కాన్ చేయండి',
+            'video_instruction': 'మీ స్మార్ట్‌ఫోన్ కెమెరా ఉపయోగించి వ్యాయామ వీడియోను చూడండి',
+        },
+        'kannada': {
+            'description': 'ವಿವರಣೆ',
+            'dosage': 'ಮಾತ್ರೆ',
+            'items': 'ಬೇಕಾದ ವಸ್ತುಗಳು',
+            'adl_section': 'ದೈನಂದಿನ ಜೀವನ ಚಟುವಟಿಕೆಗಳು (ADL)',
+            'vcg_section': 'ವರ್ಚುವಲ್ ಗುರುತ್ವಾಕರ್ಷಣ ಕೇಂದ್ರ (VCG)',
+            'scan_video': 'ವೀಡಿಯೋಗಾಗಿ ಸ್ಕ್ಯಾನ್ ಮಾಡಿ',
+            'video_instruction': 'ನಿಮ್ಮ ಸ್ಮಾರ್ಟ್‌ಫೋನ್ ಕ್ಯಾಮೆರಾವನ್ನು ಬಳಸಿ ವ್ಯಾಯಾಮ ವೀಡಿಯೋವನ್ನು ವೀಕ್ಷಿಸಿ',
+        },
+        'hindi': {
+            'description': 'विवरण',
+            'dosage': 'खुराक',
+            'items': 'आवश्यक वस्तुएं',
+            'adl_section': 'दैनिक जीवन कार्यकलाप (ADL)',
+            'vcg_section': 'वर्चुअल गुरुत्व केंद्र (VCG)',
+            'scan_video': 'वीडियो के लिए स्कैन करें',
+            'video_instruction': 'अपने स्मार्टफोन कैमरे का उपयोग करके व्यायाम वीडियो देखें',
+        },
+        'punjabi': {
+            'description': 'ਵਰਣਨ',
+            'dosage': 'ਖੁਰਾਕ',
+            'items': 'ਲੋੜੀਂਦੀਆਂ ਵਸਤੂਆਂ',
+            'adl_section': 'ਰੋਜ਼ਾਨਾ ਜੀਵਨ ਦੀਆਂ ਗਤੀਵਿਧੀਆਂ (ADL)',
+            'vcg_section': 'ਵਰਚੁਅਲ ਗੁਰੁਤਾ ਕੇਂਦਰ (VCG)',
+            'scan_video': 'ਵੀਡੀਓ ਲਈ ਸਕੈਨ ਕਰੋ',
+            'video_instruction': 'ਆਪਣੇ ਸਮਾਰਟ ਫੋਨ ਕੈਮਰੇ ਦੀ ਵਰਤੋਂ ਕਰਕੇ ਅਭਿਆਸ ਵੀਡੀਓ ਦੇਖੋ',
+        },
+    }
+    return labels.get(language, labels['english'])
+
+
+def _get_exercise_text(exercise: dict, language: str) -> dict:
+    """Extract exercise text in the requested language, with English fallback."""
+    if language == 'english' or language not in exercise:
+        return {
+            'name':        exercise.get('name', ''),
+            'description': exercise.get('description', ''),
+            'dosage':      exercise.get('dosage', ''),
+            'items':       exercise.get('items', ''),
+        }
+    lang_block = exercise.get(language, {})
+    return {
+        'name':        lang_block.get('name')        or exercise.get('name', ''),
+        'description': lang_block.get('description') or exercise.get('description', ''),
+        'dosage':      lang_block.get('dosage')      or exercise.get('dosage', ''),
+        'items':       lang_block.get('items')       or exercise.get('items', ''),
+    }
+
+
+@bp.route('/api/patients/<homer_id>/prescription-pamphlet', methods=['GET'])
+def api_prescription_pamphlet(homer_id):
+    """Generate and return HTML pamphlet for prescribed exercises in requested language."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    event_id = request.args.get('event_id')
+    language = request.args.get('language', 'english')
+
+    if not event_id:
+        return jsonify({'error': 'Missing event_id'}), 400
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    # Load all exercises
+    all_exercises = _load_exercises()
+
+    # Determine which day (d01 or d15) from protocol_events
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found'}), 404
+
+    day_match = None
+    prescribed_date = None
+    for section in ['incomplete', 'complete']:
+        for entry in events_data.get(section, []):
+            if entry.get('id') == event_id:
+                proto_id = entry.get('protocol_event_id', '')
+                if 'd15' in proto_id:
+                    day_match = 'd15'
+                else:
+                    day_match = 'd01'
+                # Get the date: use completion_date if available, else use scheduled_date
+                prescribed_date = entry.get('completion_date') or (entry.get('scheduled_date', ['', ''])[0] if entry.get('scheduled_date') else '')
+                break
+        if day_match:
+            break
+
+    if not day_match:
+        day_match = 'd01'  # Default to d01 if not found
+
+    # Read ADL prescription
+    adl_exercises_list = []
+    adl_rel_path = f'adl/adl_prescription_{day_match}.json'
+    adl_data = _read_prescription(folder, homer_id, adl_rel_path)
+    if adl_data and adl_data.get('prescribed_exercises'):
+        adl_lib = all_exercises.get('adl', {}).get('exercises', [])
+        for presc in adl_data['prescribed_exercises']:
+            ex_id = presc.get('exercise_id')
+            ex = next((e for e in adl_lib if e.get('id') == ex_id), None)
+            if ex:
+                text = _get_exercise_text(ex, language)
+                qr = _make_qr_b64(ex.get('youtube_url', ''))
+                screenshot = _make_screenshot_b64(ex_id)
+                adl_exercises_list.append({
+                    'name': text['name'],
+                    'description': text['description'],
+                    'dosage': text['dosage'],
+                    'items': text['items'],
+                    'screenshot': screenshot,
+                    'qr_code': qr,
+                })
+
+    # Read VCG prescription
+    vcg_exercises_list = []
+    vcg_rel_path = f'vcg_exercise/vcg_prescription_{day_match}.json'
+    vcg_data = _read_prescription(folder, homer_id, vcg_rel_path)
+    if vcg_data and vcg_data.get('prescribed_exercises'):
+        # Determine VCG group from the data if available, default to vcg2
+        vcg_group = vcg_data.get('vcg_group', 'vcg2')
+        vcg_lib = all_exercises.get('vcg', {}).get(vcg_group, {}).get('exercises', [])
+        for presc in vcg_data['prescribed_exercises']:
+            ex_id = presc.get('exercise_id')
+            ex = next((e for e in vcg_lib if e.get('id') == ex_id), None)
+            if ex:
+                text = _get_exercise_text(ex, language)
+                qr = _make_qr_b64(ex.get('youtube_url', ''))
+                screenshot = _make_screenshot_b64(ex_id)
+                vcg_exercises_list.append({
+                    'name': text['name'],
+                    'description': text['description'],
+                    'dosage': text['dosage'],
+                    'items': text['items'],
+                    'screenshot': screenshot,
+                    'qr_code': qr,
+                })
+
+    labels = _get_field_labels(language)
+
+    return render_template(
+        'prescription_pamphlet.html',
+        patient_id=homer_id,
+        prescribed_date=prescribed_date,
+        adl_exercises=adl_exercises_list,
+        vcg_exercises=vcg_exercises_list,
+        language=language,
+        labels=labels
+    )
+
+
 @bp.route('/api/patients/<homer_id>/agwatch-timing/<protocol_event_id>', methods=['GET'])
 def api_get_agwatch_timing(homer_id, protocol_event_id):
     """Return a saved agwatch timing file."""
@@ -4878,6 +5583,12 @@ def api_get_agwatch_timing(homer_id, protocol_event_id):
     folder = find_patient_folder(flask_session['login_place'], homer_id)
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
+    if Config.USE_S3:
+        from utils.s3_store import s3_read_json
+        data = s3_read_json(f"{folder}/patients/{homer_id}/{cfg['timing_file']}")
+        if data is None:
+            return jsonify({'error': 'Timing file not found'}), 404
+        return jsonify(data)
     path = get_patients_path(folder) / homer_id / cfg['timing_file']
     if not path.exists():
         return jsonify({'error': 'Timing file not found'}), 404

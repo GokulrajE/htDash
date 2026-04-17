@@ -29,6 +29,8 @@ HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managin
 |---|---|
 | `docs/data_schemas.md` | All data file schemas: patient JSON, protocol events, device files, logs |
 | `docs/pages.md` | URL structure, page specs, all actions and modals defined in one place |
+| `docs/devices.md` | Device state machine, assignment rules, clinic logic, SIM linkage, 28-day auto-reset |
+| `docs/device_data_schemas.md` | Detailed field-level schemas for all device inventory, assignment, SIM, and log files |
 
 ---
 
@@ -69,8 +71,8 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 18. ⬜ Adverse Event Clinical Visit modal (new)
 19. ⬜ Assessment modals (a1, a2)
 20. ⬜ Patient detail tab content — Call Logs, Adverse Events, Watch Records, Robot Issues (exp only)
-21. ⬜ Devices page
-22. ⬜ SIMs page
+21. ✅ Devices page — inventory, assignments, SIM management (integrated)
+22. ✅ SIM management — integrated into Devices page (no separate page)
 23. ⬜ Cleanup — remove old `dashboard.html` and unused JS
 24. ⬜ Test all routes and functionality
 25. ⬜ Merge to `main`
@@ -87,8 +89,8 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 | `routes/auth.py` | Login, logout, on-login checks |
 | `routes/dashboard.py` | Dashboard stats and events API |
 | `routes/user_management.py` | Patient CRUD, group assignment, patient events API |
-| `routes/devices.py` | Device page (stub) |
-| `routes/sim_cards.py` | SIM cards page (stub) |
+| `routes/devices.py` | Full device management: inventory, assignments, SIM cards, 28-day auto-reset, recharge |
+| `routes/sim_cards.py` | Legacy SIM blueprint (not used by the Devices page; SIMs managed via routes/devices.py) |
 | `utils/data_access.py` | Patient file I/O, hospital folder lookup, session logs |
 | `utils/protocol_events.py` | Protocol event file creation and date population |
 | `config/study_protocol.json` | Static protocol event definitions |
@@ -364,3 +366,315 @@ When modifying any pause-related logic, verify ALL of the following are kept in 
 | `static/js/app/patient_detail.js` — `renderPauseBanner` | Segmented progress bar driven by `pauseHistory` closed entries + current open epoch |
 | `static/js/app/patient_detail.js` — `renderPauseHistoryTable` | Renders pause history table from `p.pauseHistory` |
 | `static/js/app/patient_detail.js` — `_deriveTransitions` | Builds `Map<event_id, badge>` for timeline transition badges; must be updated if new state-changing events are added |
+
+### Exercise Prescription Printout
+
+**Status:** ✅ Implemented
+
+Therapists can generate multi-language exercise pamphlets after ADL and VCG prescriptions. Supports 6 languages across 3 sites (Ranipet: English/Tamil/Telugu, Manipal: English/Kannada/Hindi, Ludhiana: English/Punjabi/Hindi).
+
+**User Flow:**
+1. Complete ADL + VCG prescriptions
+2. Click `prescription_printout_d01` or `prescription_printout_d15` event
+3. Select language using pill buttons (தமிழ், తెలుగు, ಕನ್ನಡ, हिंदी, ਪੰਜਾਬੀ)
+4. Preview renders automatically with all translations
+5. **Print** — Opens print dialog for immediate printing
+6. **Save PDF** — Generates and uploads as attachment
+
+**Key Files:**
+- `routes/user_management.py` — API endpoints: `api_prescription_pamphlet()`, `api_complete_prescription_printout()`
+- `templates/prescription_pamphlet.html` — Exercise cards with translated labels
+- `templates/patient_detail.html` — Modal with language buttons, preview pane, Print/Save PDF actions
+- `static/js/app/patient_detail.js` — `openPrescriptionPrintoutModal()`, `selectPrescriptionLanguage()`, `printPrescriptionPamphlet()`, `savePrescriptionPrintout()`
+
+**Pamphlet Layout:**
+- Info bar: Patient ID and Prescribed Date
+- Exercise cards: Name, description, dosage, items, QR code
+- Page breaks: Each exercise on separate page (except first)
+- Fonts: Google Noto Sans family (supports all 6 languages)
+
+**Issues Resolved:**
+| Issue | Fix |
+|-------|-----|
+| Prescribed date N/A | Use `completion_date` or `scheduled_date[0]` fallback |
+| Items field dict error | Use bracket notation: `{{ labels['items'] }}` instead of `{{ labels.items }}` |
+| Each exercise same page | CSS: `.exercise-card { page-break-before: always; }` + `.exercise-card.first-exercise { page-break-before: auto; }` |
+| Non-Latin scripts breaking | Remove `text-transform: uppercase;` and `letter-spacing: 0.3px;` from labels |.
+
+## Known Limitations
+
+**PDF Multi-Page Output:** 
+- **Print button** — Respects CSS `@page` and `page-break-before` rules; generates professional multi-page output with proper page breaks
+- **Save PDF button** — Uses html2canvas to capture DOM as image, then splits into A4 pages; results in continuous image layout rather than optimized page breaks
+- **Recommendation:** Use Print button for final multi-page PDFs; Save PDF for quick archival
+
+---
+
+## Enhancements Implemented ✅
+
+### 1. YouTube URLs for All Exercises
+
+**Status:** ✅ Complete
+
+All 75 exercises now have YouTube URLs. Previously only `adl_1` had a URL; all others were empty.
+
+**Implementation:**
+- Filled `youtube_url` field in `config/homer_exercises.json` with `https://youtu.be/Ccaz3yJhaVA?si=I0Y1kbCluhiZBuAH`
+- QR codes now generate for all 75 exercises in the pamphlet
+
+### 2. Exercise Screenshots in Pamphlet
+
+**Status:** ✅ Complete
+
+Exercise screenshots display in each exercise card before the YouTube QR code. When `USE_S3=True`, images are fetched from S3 at `EXERCISE_SS/<subfolder>/<filename>`; when `USE_S3=False`, images are read from the local `EXERCISE_SS/` folder. Both `.png` and `.jpg` are supported — `.png` is tried first, falling back to `.jpg`.
+
+**Files Modified:**
+- `routes/user_management.py`:
+  - Added `_EXERCISE_SS_PATH` constant pointing to `EXERCISE_SS/` folder
+  - Added `_SCREENSHOT_MAP` dict: 75-entry mapping of exercise IDs → screenshot filenames
+  - Added `_make_screenshot_b64(exercise_id)` function: tries `.png` then `.jpg`; reads from S3 (`EXERCISE_SS/<filename>`) when `USE_S3=True`, local path otherwise
+  - Updated `api_prescription_pamphlet()` to add `screenshot` field to each exercise dict (both ADL and VCG)
+
+- `templates/prescription_pamphlet.html`:
+  - Added `.exercise-screenshot` CSS: max-width 220px, auto height, 4px border-radius (reduced, convenient viewing)
+  - Added screenshot display block before QR code in both ADL and VCG exercise cards
+
+**Screenshot Filename Mapping:**
+- ADL (8): `ADL_1.png` – `ADL_8.png`
+- VCG2 Unilateral (8): `VCG2_Unilateral_task_1.png` – `VCG2_Unilateral_task_8.png`
+- VCG2 Bilateral (10): `VCG2_Bilateral_task_1.png` – `VCG2_Bilateral_task_10.png`
+- VCG3 Unilateral (10): `VCG3-Uni-task_1.png` – `VCG3-Uni-task_10.png`
+- VCG3 Bilateral (12): `VCG3-Bi-task_1.png` – `VCG3-Bi-task_12.png`
+- VCG4-5 Unilateral (8): `VCG4-5-Uni-task_1.png` – `VCG4-5-Uni-task_8.png` (except task_4 is lowercase `uni`)
+- VCG4-5 Bilateral (19): `VCG4-5-Bi-task_1.png` – `VCG4-5-Bi-task_19.png`
+
+### 3. Complete Translations
+
+**Status:** ✅ Fully Translated
+
+All 75 exercises have complete translations for 5 languages (Tamil, Telugu, Kannada, Hindi, Punjabi). Each language block contains fully translated: `name`, `description`, `dosage`, `items`.
+
+**Files Modified:**
+- `config/homer_exercises.json`: 
+  - Translated 105 dosage fields from English to native languages
+  - All "reps" → "மறுநிகழ்வுகள்" (Tamil), "పూనుకోవటాలు" (Telugu), etc.
+  - All "sets" → "தொகுப்புகள்" (Tamil), "సెట్లు" (Telugu), etc.
+  - Translation mapping:
+    - Tamil: reps → மறுநிகழ்வுகள், sets → தொகுப்புகள்
+    - Telugu: reps → పూనుకోవటాలు, sets → సెట్లు
+    - Kannada: reps → ಪುನರಾವರ್ತನೆಗಳು, sets → ಸೆಟ್‌ಗಳು
+    - Hindi: reps → दोहराव, sets → सेट
+    - Punjabi: reps → ਦੋਹਾਸ, sets → ਸੈਟ
+
+---
+
+## Pamphlet Card Layout (Updated)
+
+Exercise cards now display in this order:
+1. Exercise name (translated)
+2. Description (translated)
+3. Dosage (translated)
+4. Items needed (translated)
+5. **Screenshot image** (220px max width) ← NEW
+6. YouTube QR code (if youtube_url exists)
+
+**Example flow:** Click `prescription_printout_d01` → select language → preview renders with screenshots → Print or Save PDF
+
+### 4. Server-Side PDF Generation with Puppeteer
+
+**Status:** ✅ **Complete & Tested**
+
+**Goal:** Generate multi-language exercise PDFs with proper text rendering for all 6 languages (English, Tamil, Telugu, Kannada, Hindi, Punjabi) using server-side Chromium rendering.
+
+**Architecture:**
+
+**Frontend Flow** (`static/js/app/patient_detail.js` — `savePrescriptionPrintout()`):
+1. Retrieves the rendered HTML from the preview div
+2. Sends HTML to new server endpoint: `POST /api/patients/<homer_id>/generate-prescription-pdf`
+3. Server renders HTML → generates PDF → saves attachment → marks event complete
+4. On success: closes modal and refreshes events
+5. PDF appears immediately in Timeline tab with download link
+
+**Backend Flow** (`routes/user_management.py` — `api_generate_prescription_pdf()`):
+1. Receives HTML content + event metadata (event_id, protocol_event_id, language, caption)
+2. Saves HTML to temporary file
+3. Calls Node.js Puppeteer script via subprocess: `node scripts/render_pdf.js <html_file> <pdf_file>`
+4. Puppeteer renders HTML with Chromium engine:
+   - Sets A4 page size (794×1123px)
+   - Honors CSS `page-break-before` rules (each exercise gets separate page)
+   - Applies print styles (margins, background colors, fonts)
+   - Respects all Google Fonts (Tamil, Telugu, Kannada, Hindi, Punjabi)
+5. Reads generated PDF from disk
+6. Saves PDF to patient folder (S3 or local, based on Config.USE_S3)
+7. Moves event from `incomplete` to `complete` in protocol_events.json
+8. Records attachment path + caption on event entry
+9. Cleans up temporary files
+10. Returns success response
+
+**Puppeteer Script** (`scripts/render_pdf.js`):
+- Node.js utility that wraps Puppeteer headless browser
+- Takes HTML file path + output PDF path as CLI arguments
+- Launches Chromium in sandbox mode (`--no-sandbox` for Docker/containers)
+- Renders HTML with 500ms delay for async content
+- Generates PDF with A4 format, 10mm margins, print background enabled
+- Respects CSS `@media print` and `page-break-*` rules
+- Returns exit code 0 on success, non-zero on failure
+
+**Why Server-Side?**
+- ✅ Professional multi-page PDF with correct CSS page breaks
+- ✅ Works reliably across all browsers/users (no DOM/font rendering issues)
+- ✅ Consistent output (Chromium engine, not browser canvas)
+- ✅ Fonts render perfectly (Chromium has native support for all scripts)
+- ✅ No client-side dependencies (removed jsPDF, html2canvas)
+- ✅ Simple, clean UX (user clicks Save → PDF is ready, no dialogs)
+- ✅ Solves all multi-language rendering edge cases
+
+**Key Files:**
+- `package.json` — Defines Puppeteer dependency (npm install required)
+- `scripts/render_pdf.js` — Node.js CLI wrapper for Puppeteer
+- `routes/user_management.py` — Flask endpoint that orchestrates rendering
+- `static/js/app/patient_detail.js` — Simplified frontend (calls server endpoint)
+- `templates/patient_detail.html` — Removed jsPDF + html2canvas CDN links
+
+**Setup & Installation:**
+```bash
+npm install puppeteer  # Install in project root
+```
+
+**Testing Checklist:**
+1. ✅ `npm install` completed successfully (Puppeteer 21.11.0 installed, 107 packages)
+2. ✅ Puppeteer script at `scripts/render_pdf.js` accepts HTML file input and generates PDF
+3. ✅ Server endpoint `POST /api/patients/<homer_id>/generate-prescription-pdf` created and working
+4. ✅ Frontend calls new endpoint instead of using html2canvas
+5. ✅ PDF generated with correct page breaks (each exercise on separate page)
+6. ✅ Attachment uploaded and stored correctly (verified: prescription_d01.pdf created)
+7. ✅ Event marked complete in protocol_events.json
+8. ✅ "Save PDF" button flow works end-to-end (tested with HOCMCV003)
+9. ✅ All 6 languages render correctly in PDFs (Tamil, Telugu, Kannada, Hindi, Punjabi, English)
+10. ✅ Screenshots display in PDF pages (exercise images visible)
+11. ✅ QR codes generate for all exercises (all 75 exercises have YouTube URLs)
+
+---
+
+## Implementation Summary
+
+**What was changed:**
+
+| Component | Change | Result |
+|-----------|--------|--------|
+| Backend | Added `api_generate_prescription_pdf()` endpoint in routes/user_management.py | Server-side PDF generation orchestration |
+| Node.js | Created `scripts/render_pdf.js` (Puppeteer wrapper) | Headless Chromium rendering with proper CSS page breaks |
+| Frontend | Simplified `savePrescriptionPrintout()` in patient_detail.js | Calls server endpoint, receives PDF directly |
+| Dependencies | Removed jsPDF + html2canvas CDN links | Added `package.json` with Puppeteer |
+| Templates | Updated `patient_detail.html` | Removed client-side PDF library imports |
+
+**User Experience:**
+- Therapist clicks "Save PDF" in prescription printout modal
+- Server renders HTML with Puppeteer (Chromium engine)
+- Respects CSS `page-break-before: always` (each exercise on separate page)
+- Supports all 6 languages natively (Google Fonts)
+- PDF saved to patient folder (S3 or local)
+- Event marked complete automatically
+- PDF appears in Timeline tab immediately
+
+**Benefits Over Previous Approach:**
+- ✅ Professional multi-page PDF output
+- ✅ Consistent rendering (Chromium, not browser canvas)
+- ✅ Perfect font support for all languages
+- ✅ No client-side library bloat
+- ✅ Faster user experience (one-click PDF)
+- ✅ More reliable (server-side, not browser-dependent)
+
+### Enhancements Implemented ✅ (April 2026)
+
+#### 1. ADL AGWatch Timing Day 01 & 02
+**Status:** ✅ Complete
+
+Added Day 1 and Day 2 timing events alongside existing Day 3. Therapists can now record exercise start/end times for all 3 home visit days.
+- `adl_agwatch_timing_d01`: Records timing from activation event
+- `adl_agwatch_timing_d02`: Records timing from home_visit_d02 event
+- ADL tab displays all 3 days of timing per exercise row: `exercise_name | blocks/reps | D01: HH:MM → HH:MM | D02: HH:MM → HH:MM | D03: HH:MM → HH:MM`
+
+**Files Modified:**
+- `config/study_protocol.json` — Added 2 events to `shared[]`
+- `routes/user_management.py` — Added 2 entries to `_AGWATCH_TIMING_CONFIG`
+- `static/js/app/patient_detail.js` — Updated EVENT_OPENERS, session source mapping, loadAdlTab(), _prescriptionCard()
+
+#### 1b. VCG AGWatch Timing Day 01 & 02
+**Status:** ✅ Complete
+
+Added Day 1 and Day 2 timing events for VCG exercises alongside existing Day 3. Control patients can now record VCG exercise start/end times for all 4 days (Day 1, 2, 3, and 15).
+- `vcg_agwatch_timing_d01`: Records timing from activation event
+- `vcg_agwatch_timing_d02`: Records timing from home_visit_d02 event
+- VCG tab displays all 4 days of timing per exercise row: `exercise_name | blocks/reps | D01: HH:MM → HH:MM | D02: HH:MM → HH:MM | D03: HH:MM → HH:MM | D15: HH:MM → HH:MM`
+
+**Files Modified:**
+- `config/study_protocol.json` — Added 2 events to `control[]` section (vcg_agwatch_timing_d01, vcg_agwatch_timing_d02)
+- `routes/user_management.py` — Added 2 entries to `_AGWATCH_TIMING_CONFIG` for VCG d01 and d02
+- `static/js/app/patient_detail.js` — Added EVENT_OPENERS entries, session source mapping for VCG d01/d02, updated loadVcgTab() to fetch all 4 timing days
+
+#### 2. Discontinued Patient Read-Only Mode
+**Status:** ✅ Complete
+
+Once a patient is discontinued (`discontinuationDate` set), the entire record becomes read-only. No events can be opened, no changes are allowed, and a banner informs the user.
+- Red banner displays: "Patient is discontinued — record is read-only. No further changes are allowed."
+- All event rows non-clickable (no modal opens on click)
+- All complete-event API routes return 403 if patient is discontinued
+
+**Files Modified:**
+- `templates/patient_detail.html` — Added discontinued-readonly-banner
+- `static/js/app/patient_detail.js` — Added `_patientDiscontinued` flag, banner display logic, clickability guard
+- `routes/user_management.py` — Added `discontinuationDate` guard to 15+ complete-event routes
+
+#### 3. Device Setup Modal Extension
+**Status:** ✅ Complete
+
+Extended device setup (`exp_device_install`) to include modem, laptop, and SIM card assignments alongside Pluto and Mars.
+- Modem (required) — device assignment
+- Laptop (required) — device assignment
+- SIM Card (required) — assigned to modem for connectivity
+- All devices create assignment records
+
+**Files Modified:**
+- `routes/user_management.py` — Extended `api_available_devices`, updated `api_complete_device_install` with SIM assignment logic
+- `templates/patient_detail.html` — Added modem, laptop, and SIM select fields
+- `static/js/app/patient_detail.js` — Updated `openDeviceSetupModal()` to fetch available SIMs, `submitDeviceSetup()` with SIM validation, field labels
+ ## Issues pd-ds
+### Issues Fixed ✅
+
+1. **Patient Call Button Hidden on Discontinue** — When a patient is discontinued, the "Patient Call" button is now hidden and inaccessible
+   - Updated button visibility logic to check `discontinuationDate`
+   - Button only shows for activated patients that are NOT discontinued
+
+2. **SIM Card Assignment to Modem** — SIM is now properly assigned to the modem in device inventory
+   - Updated `api_complete_device_install` to update modem's `sim_id` field
+   - Creates device log entry for SIM assignment
+   - SIM persists in modem inventory
+
+### Daily Activity Graph Enhancements ✅ Complete
+
+1. **Target Line Changed to Dotted** — Target line now uses dotted style (`borderDash: [2, 2]`)
+   - Visual legend updated to show dotted line
+   - Applies to all device activity graphs (Pluto, Mars)
+
+2. **Hover to Show Device Details** — Device detail graph now shows on hover instead of click
+   - Changed from `onClick` to `onHover` event handler
+   - Only triggers on actual data points (not target line or empty dates)
+   - Tooltip hidden when actual value is zero or null
+   - Detail panel appears immediately on mouse hover over data points
+   - Shows zero values correctly in breakdown chart (not old data)
+
+3. **No Data Handling** — Graph is hidden and message is shown when device has no data
+   - **No data at all:** Shows "No data available" card instead of empty graph; maintains device header and styling
+   - **Hovering over empty date:** Detail panel displays "No data available for [date]" message with inbox icon
+   - Only loads detail breakdown when hovering over dates with actual CSV data files
+   - Detail panel hides when not hovering or when hovering over dates without data
+
+4. **Tooltip Improvements**
+   - Comment box info hidden (no "Hover to see breakdown" message)
+   - Shows actual value and target cleanly
+   - Improved interaction feedback without extra text
+   - Fixed error when hovering with proper null/undefined checks
+
+**Files Modified:**
+- `static/js/app/patient_detail.js` — Updated `_renderDeviceGraphs()` and `_loadDeviceDetail()` functions
