@@ -21,17 +21,30 @@ data/<hospital>/devices/
 │   ├── agwatch.json
 │   ├── modems.json
 │   └── laptops.json
-└── logs/
+├── logs/
+│   ├── pluto/
+│   │   └── <device_id>.log
+│   ├── mars/
+│   │   └── <device_id>.log
+│   ├── agwatch/
+│   │   └── <device_id>.log
+│   ├── modems/
+│   │   └── <device_id>.log
+│   └── laptops/
+│       └── <device_id>.log
+└── events/
     ├── pluto/
-    │   └── <device_id>.log
+    │   └── <device_id>.json
     ├── mars/
-    │   └── <device_id>.log
+    │   └── <device_id>.json
     ├── agwatch/
-    │   └── <device_id>.log
+    │   └── <device_id>.json
     ├── modems/
-    │   └── <device_id>.log
-    └── laptops/
-        └── <device_id>.log
+    │   └── <device_id>.json
+    ├── laptops/
+    │   └── <device_id>.json
+    └── sims/
+        └── <device_id>.json
 ```
 
 ---
@@ -361,6 +374,64 @@ New records written by the API always use `homer_id`.
 
 ---
 
+---
+
+## Device Event Files
+
+One JSON file per device, stored at `events/<device_type>/<device_id>.json`. Mirrors `logs/<device_type>/<device_id>.log` structure. Written with atomic `.tmp → os.replace()` pattern via `utils/device_events.py`.
+
+```json
+{
+  "events": [
+    {
+      "id": "<uuid>",
+      "device_id": "P-1",
+      "event_type": "faulty",
+      "date": "YYYY-MM-DDTHH:MM:SS",
+      "by": "<login_id>",
+      "notes": "Motor not responding",
+      "homer_id": "HOCMCV002",
+      "related_device_id": "P-2",
+      "patient_event_id": "<uuid>"
+    }
+  ]
+}
+```
+
+| Field | Type | Present on | Description |
+|-------|------|------------|-------------|
+| `id` | UUID string | All | Unique event ID |
+| `device_id` | string | All | Device this event belongs to |
+| `event_type` | string | All | See valid types per device below |
+| `date` | ISO 8601 datetime | All | When the event occurred |
+| `by` | string | All | Login ID of user who logged the event |
+| `notes` | string or `null` | All | Optional free-text notes |
+| `homer_id` | string or `null` | `assign`, `available` | Patient involved |
+| `related_device_id` | string or `null` | `swap` | Device swapped to/from |
+| `patient_event_id` | UUID or `null` | `faulty` (Pluto/Mars) | Links to `robot_issue_visit` UUID in patient's `protocol_events.json` |
+
+**Valid event types per device type** (defined in `config/device_protocol.json`):
+
+| Device | Event types |
+|--------|-------------|
+| Pluto / Mars | `assign`, `available`, `faulty`, `swap`, `repair`, `retire`, `discarded` |
+| Agwatch | `assign`, `available`, `faulty`, `repair`, `lost`, `retire`, `discarded` |
+| Modem | `assign`, `available`, `faulty`, `repair`, `retire`, `discarded` |
+| Laptop | `assign`, `available`, `faulty`, `repair`, `retire`, `discarded` |
+| SIM | `recharge`, `expired`, `retire`, `discarded` |
+
+**When events are auto-created:**
+- `assign` — when `exp_device_install` is completed (all device types)
+- `available` — when 28-day auto-reset fires, or manual unassign
+- `faulty` — when `toggle-issue` marks a device faulty, or `swap-device` flags old device
+- `swap` — when `swap-device` fires (written on old device; `related_device_id` = new device)
+- `repair` — when `toggle-issue` resolves a faulty device
+- `recharge` — when `recharge-sim` is called
+
+**Issues container logic:** a device is "open issue" when its last state-event is `faulty` and no subsequent `repair`, `available`, `retire`, or `discarded` event exists. "Resolved" = a `faulty` event that was closed by one of those events.
+
+---
+
 ## API Endpoints
 
 | Route | Method | Auth | Purpose |
@@ -369,9 +440,11 @@ New records written by the API always use `homer_id`.
 | `/devices/api/inventory` | GET | Required | Full inventory + assignments + SIMs; triggers 28-day auto-reset |
 | `/devices/api/add` | POST | Admin | Add a device or SIM to inventory |
 | `/devices/api/toggle-clinic` | POST | Admin | Toggle `clinic_only` on a pluto or mars device (one-per-type rule) |
-| `/devices/api/toggle-issue` | POST | Admin/Engineer | Mark or resolve a device issue; optional `notes` |
-| `/devices/api/swap-device` | POST | Admin/Engineer | Replace a faulty assigned device; patient follows to new device; swap recorded in device log entries |
+| `/devices/api/toggle-issue` | POST | Admin/Engineer | Mark or resolve a device issue; optional `notes`; auto-creates device event |
+| `/devices/api/swap-device` | POST | Admin/Engineer | Replace a faulty assigned device; patient follows; auto-creates device events |
 | `/devices/api/link-sim` | POST | Admin | Link or unlink a SIM to a modem |
-| `/devices/api/assign-device` | POST | Admin | Manually assign a modem or laptop to a patient |
-| `/devices/api/unassign-device` | POST | Admin | Return a modem or laptop from a patient |
-| `/devices/api/recharge-sim` | POST | Admin | Record a SIM recharge — updates rechargeDate, expiryDate, dataPlan |
+| `/devices/api/recharge-sim` | POST | Admin | Record a SIM recharge; auto-creates `recharge` device event |
+| `/devices/api/device-events` | GET | Required | Fetch device events (`?type=<type>` or `?type=<type>&device_id=<id>`) |
+| `/devices/api/log-event` | POST | Admin/Engineer | Manually log a device event (retire, discarded, repair, etc.) |
+| `/devices/api/issues` | GET | Required | Open issues per device type (`?type=<type>`) |
+| `/devices/api/solutions` | GET | Required | Resolved issue pairs per device type (`?type=<type>`) |

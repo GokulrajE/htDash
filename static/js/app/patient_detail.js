@@ -2305,6 +2305,7 @@ const EVENT_OPENERS = {
   adverse_event_followup_visit: (ev) => openAeFollowupVisitModal(ev),
   adverse_event_clinical_visit: (ev) => openAeClinicalVisitModal(ev),
   resolve_robot_issue_visit:    (ev) => openResolveRobotIssueVisitModal(ev),
+  other_device_issue:           (ev) => openOtherDeviceIssueModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -2374,6 +2375,8 @@ async function openDeviceSetupModal(ev) {
   document.getElementById('device-setup-demo').checked = false;
   document.getElementById('device-setup-notes').value = '';
   setError('device-setup-error', '');
+  document.getElementById('device-setup-sim-warning')?.classList.add('hidden');
+  window._setupSimExpiry = {};
   _resetAttachment('device-setup');
   _attachDateGuard('device-setup-date', 'device-setup-error');
 
@@ -2404,17 +2407,51 @@ async function openDeviceSetupModal(ev) {
       modem.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
     laptopSel.innerHTML = '<option value="">Select Laptop device…</option>' +
       laptop.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const simList = (sims || []).filter(s => {
+      if (s.removal_date) return false; // exclude retired
+      if (!s.expiryDate) return true;
+      const exp = new Date(s.expiryDate); exp.setHours(0,0,0,0);
+      return exp >= today; // exclude expired
+    });
+    window._setupSimExpiry = {};
+    simList.forEach(s => {
+      if (s.expiryDate) {
+        const exp = new Date(s.expiryDate); exp.setHours(0,0,0,0);
+        const days = Math.round((exp - today) / 86400000);
+        window._setupSimExpiry[s.id] = days;
+      }
+    });
     simSel.innerHTML = '<option value="">Select SIM card…</option>' +
-      (sims || []).map(s => `<option value="${s.id}">${s.phoneNumber || s.id}</option>`).join('');
+      simList.map(s => {
+        const days = window._setupSimExpiry[s.id];
+        const warn = days !== undefined && days <= 5 ? ` ⚠ Expires in ${days}d` : '';
+        return `<option value="${s.id}">${s.phoneNumber || s.id}${warn}</option>`;
+      }).join('');
 
     if (!pluto.length) plutoSel.innerHTML = '<option value="">No devices available</option>';
     if (!mars.length)  marsSel.innerHTML  = '<option value="">No devices available</option>';
     if (!modem.length) modemSel.innerHTML = '<option value="">No devices available</option>';
     if (!laptop.length) laptopSel.innerHTML = '<option value="">No devices available</option>';
-    if (!(sims || []).length) simSel.innerHTML = '<option value="">No SIM cards available</option>';
+    if (!simList.length) simSel.innerHTML = '<option value="">No SIM cards available</option>';
   } catch (e) {
     console.error('Error loading devices:', e);
     setError('device-setup-error', 'Failed to load available devices.');
+  }
+}
+
+function onSetupSimChange() {
+  const sel = document.getElementById('device-setup-sim');
+  const warn = document.getElementById('device-setup-sim-warning');
+  const warnText = document.getElementById('device-setup-sim-warning-text');
+  const days = window._setupSimExpiry?.[sel.value];
+  if (days !== undefined && days <= 5) {
+    warnText.textContent = days === 0
+      ? 'This SIM expires today. Recharge before assigning.'
+      : `This SIM expires in ${days} day${days === 1 ? '' : 's'}. Consider recharging first.`;
+    warn.classList.remove('hidden');
+  } else {
+    warn.classList.add('hidden');
   }
 }
 
@@ -2532,6 +2569,8 @@ async function submitActivation() {
   if (!document.getElementById('act-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('act-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('act-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue' });
   body.triggered = triggered;
 
   setLoading('activation-submit', true);
@@ -4107,6 +4146,8 @@ async function saveHomeVisit() {
   if (!document.getElementById('hv-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('hv-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('hv-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue' });
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/home-visit`, {
@@ -4218,6 +4259,8 @@ async function saveFollowupCall() {
   if (!document.getElementById('fc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('fc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('fc-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue' });
 
   const body = {
     event_id:          _followupCallEventId,
@@ -4305,6 +4348,8 @@ async function savePatientCall() {
   if (!document.getElementById('pc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('pc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('pc-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue' });
 
   const therapistInitiated = document.getElementById('pc-therapist-initiated').checked;
   const reason = document.getElementById('pc-reason').value.trim();
@@ -4808,6 +4853,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Auto-open modal if ?action=<event_id> is in the URL, then clean up the URL
   const actionId = new URLSearchParams(window.location.search).get('action');
+
   if (actionId) {
     history.replaceState(null, '', window.location.pathname);
     const ev = eventsCache.find(e => e.id === actionId);
@@ -4817,3 +4863,194 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 });
+
+// ── Other Device Issue Modal ──────────────────────────────────────────────────
+
+let _odiEventId   = null;
+let _odiInventory = null; // { modems, laptops, sims } filtered to patient's assigned devices
+let _odiRowCount  = 0;
+
+async function openOtherDeviceIssueModal(ev) {
+  _odiEventId = ev.id;
+  _odiRowCount = 0;
+  setError('odi-error', '');
+
+  // Set default datetime to now
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  document.getElementById('odi-completion-date').value = nowStr;
+  document.getElementById('odi-notes').value = '';
+  document.getElementById('odi-device-rows').innerHTML = '';
+
+  showModal('other-device-issue-modal');
+
+  // Fetch inventory and filter to patient's assigned devices
+  try {
+    const res = await fetch('/devices/api/inventory');
+    if (!res.ok) throw new Error('Failed to fetch inventory');
+    const inv = await res.json();
+
+    _odiInventory = {
+      modems:       (inv.modems  || []).filter(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID),
+      laptops:      (inv.laptops || []).filter(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID),
+      sims:         (inv.sims    || []).filter(s => !s.removal_date),
+      _allModems:   (inv.modems  || []).filter(d => !d.removal_date),
+      _allLaptops:  (inv.laptops || []).filter(d => !d.removal_date),
+      _allSims:     (inv.sims    || []).filter(s => !s.removal_date),
+    };
+
+    _odiAddRow(); // add first row automatically
+  } catch (e) {
+    setError('odi-error', 'Failed to load device inventory.');
+  }
+}
+
+function _odiAddRow() {
+  if (!_odiInventory) return;
+  const idx = _odiRowCount++;
+  const container = document.getElementById('odi-device-rows');
+  const row = document.createElement('div');
+  row.id = `odi-row-${idx}`;
+  row.className = 'bg-slate-50 rounded-xl p-4 space-y-3 border border-slate-200';
+
+  const modemOpts = _odiInventory.modems.map(d => `<option value="${_esc(d.id)}">Modem: ${_esc(d.id)}</option>`).join('');
+  const laptopOpts = _odiInventory.laptops.map(d => `<option value="${_esc(d.id)}">Laptop: ${_esc(d.id)}</option>`).join('');
+  const simOpts = _odiInventory.sims.map(s => `<option value="${_esc(s.id)}">SIM: ${_esc(s.phoneNumber || s.id)}</option>`).join('');
+
+  const allDeviceOpts = [
+    modemOpts ? `<optgroup label="Modems">${modemOpts}</optgroup>` : '',
+    laptopOpts ? `<optgroup label="Laptops">${laptopOpts}</optgroup>` : '',
+    simOpts ? `<optgroup label="SIMs">${simOpts}</optgroup>` : '',
+  ].filter(Boolean).join('');
+
+  row.innerHTML = `
+    <div class="flex items-center justify-between">
+      <span class="text-sm font-semibold text-slate-700">Device ${idx + 1}</span>
+      ${idx > 0 ? `<button type="button" onclick="document.getElementById('odi-row-${idx}').remove()" class="text-xs text-red-400 hover:text-red-600"><i class="fas fa-times"></i> Remove</button>` : ''}
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-600 mb-1">Device <span class="text-red-400">*</span></label>
+      <select id="odi-device-${idx}" onchange="_odiOnDeviceChange(${idx})"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
+        <option value="">Select device…</option>
+        ${allDeviceOpts || '<option value="" disabled>No assigned devices found</option>'}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-slate-600 mb-1">Outcome <span class="text-red-400">*</span></label>
+      <select id="odi-outcome-${idx}" onchange="_odiOnOutcomeChange(${idx})"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
+        <option value="">Select outcome…</option>
+        <option value="faulty">Faulty — flag issue</option>
+        <option value="resolved">Resolved — no further action</option>
+        <option value="lost">Lost — permanently retire</option>
+        <option value="swap">Swap — replace with another device</option>
+      </select>
+    </div>
+    <div id="odi-swap-section-${idx}" class="hidden">
+      <label class="block text-xs font-medium text-slate-600 mb-1">Replacement Device <span class="text-red-400">*</span></label>
+      <select id="odi-swap-device-${idx}"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
+        <option value="">Select replacement…</option>
+      </select>
+    </div>
+    <div id="odi-notes-section-${idx}">
+      <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span id="odi-notes-req-${idx}" class="text-red-400 hidden">*</span></label>
+      <textarea id="odi-device-notes-${idx}" rows="2"
+                class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300 resize-none"
+                placeholder="Device-specific notes…"></textarea>
+    </div>
+  `;
+  container.appendChild(row);
+}
+
+function _odiGetDeviceType(deviceId) {
+  if (!_odiInventory) return null;
+  if (_odiInventory.modems.find(d => d.id === deviceId)) return 'modems';
+  if (_odiInventory.laptops.find(d => d.id === deviceId)) return 'laptops';
+  if (_odiInventory.sims.find(s => s.id === deviceId)) return 'sims';
+  return null;
+}
+
+function _odiOnDeviceChange(idx) {
+  _odiOnOutcomeChange(idx); // refresh swap options based on new device type
+}
+
+function _odiOnOutcomeChange(idx) {
+  const outcome = document.getElementById(`odi-outcome-${idx}`)?.value;
+  const swapSec = document.getElementById(`odi-swap-section-${idx}`);
+  const notesReq = document.getElementById(`odi-notes-req-${idx}`);
+  const swapSel = document.getElementById(`odi-swap-device-${idx}`);
+
+  const needsNotes = outcome === 'faulty' || outcome === 'lost';
+  if (notesReq) notesReq.classList.toggle('hidden', !needsNotes);
+
+  if (swapSec) {
+    swapSec.classList.toggle('hidden', outcome !== 'swap');
+    if (outcome === 'swap' && swapSel) {
+      const deviceId = document.getElementById(`odi-device-${idx}`)?.value;
+      const dtype = _odiGetDeviceType(deviceId);
+      // Build options for available (non-assigned, non-retired) devices of same type
+      if (dtype && _odiInventory) {
+        const allInv = dtype === 'modems' ? (_odiInventory._allModems || [])
+                      : dtype === 'laptops' ? (_odiInventory._allLaptops || [])
+                      : (_odiInventory._allSims || []);
+        swapSel.innerHTML = '<option value="">Select replacement…</option>' +
+          allInv.filter(d => d.id !== deviceId && !d.assigned_to && !d.removal_date)
+                .map(d => `<option value="${_esc(d.id)}">${_esc(d.id)}</option>`).join('');
+      }
+    }
+  }
+}
+
+async function saveOtherDeviceIssue() {
+  const completionDate = document.getElementById('odi-completion-date').value;
+  const notes = document.getElementById('odi-notes').value.trim();
+
+  if (!completionDate) { setError('odi-error', 'Issue occurred date is required.'); return; }
+  const cd = new Date(completionDate);
+  if (cd > new Date()) { setError('odi-error', 'Date cannot be in the future.'); return; }
+
+  // Collect device rows
+  const rows = document.querySelectorAll('[id^="odi-row-"]');
+  const devices = [];
+  for (const row of rows) {
+    const idx = row.id.replace('odi-row-', '');
+    const deviceId = document.getElementById(`odi-device-${idx}`)?.value;
+    const outcome  = document.getElementById(`odi-outcome-${idx}`)?.value;
+    const devNotes = document.getElementById(`odi-device-notes-${idx}`)?.value.trim();
+    const swapId   = document.getElementById(`odi-swap-device-${idx}`)?.value;
+
+    if (!deviceId) { setError('odi-error', `Select a device for row ${parseInt(idx)+1}.`); return; }
+    if (!outcome)  { setError('odi-error', `Select an outcome for row ${parseInt(idx)+1}.`); return; }
+    if ((outcome === 'faulty' || outcome === 'lost') && !devNotes) {
+      setError('odi-error', `Notes are required for ${outcome} outcome (row ${parseInt(idx)+1}).`); return;
+    }
+    if (outcome === 'swap' && !swapId) {
+      setError('odi-error', `Select a replacement device for row ${parseInt(idx)+1}.`); return;
+    }
+
+    devices.push({
+      device_type:    _odiGetDeviceType(deviceId),
+      device_id:      deviceId,
+      outcome,
+      swap_device_id: swapId || null,
+      notes:          devNotes || null,
+      issue_date:     completionDate,
+    });
+  }
+
+  if (!devices.length) { setError('odi-error', 'Add at least one device entry.'); return; }
+
+  setLoading('odi-save', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue`,
+    { event_id: _odiEventId, completion_date: completionDate, notes: notes || null, devices }
+  );
+  setLoading('odi-save', false);
+  if (!ok) { setError('odi-error', data.error || 'Failed to save.'); return; }
+
+  hideModal('other-device-issue-modal');
+  loadPatientEvents();
+}
