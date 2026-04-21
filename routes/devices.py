@@ -15,6 +15,14 @@ from utils.data_access import (
     mark_device_not_faulty,
     write_device_log,
 )
+from utils.device_events import (
+    append_device_event,
+    read_all_device_events,
+    read_device_events,
+    get_open_issues,
+    get_resolved_issues,
+    update_device_event,
+)
 import os
 import json
 from datetime import datetime, date
@@ -602,11 +610,13 @@ def api_device_inventory():
         result[dtype] = []
         for d in inventory:
             result[dtype].append({
-                'id':          d['id'],
-                'serial':      d.get('serial', ''),
-                'clinic_only': d.get('clinic_only', False),
-                'faulty':      d.get('faulty', False),
-                'assigned_to': _assignment_info(d['id'], assignments),
+                'id':           d['id'],
+                'serial':       d.get('serial', ''),
+                'clinic_only':  d.get('clinic_only', False),
+                'faulty':       d.get('faulty', False),
+                'has_issue':    d.get('has_issue', False),
+                'removal_date': d.get('removal_date'),
+                'assigned_to':  _assignment_info(d['id'], assignments),
             })
 
     # agwatch — include limb from assignment record
@@ -615,12 +625,13 @@ def api_device_inventory():
     result['agwatch'] = []
     for d in inventory:
         result['agwatch'].append({
-            'id':          d['id'],
-            'serial':      d.get('serial', ''),
+            'id':           d['id'],
+            'serial':       d.get('serial', ''),
             'limb_default': d.get('limb_default', ''),
-            'has_issue':   d.get('has_issue', False),
-            'lost':        d.get('lost_date') is not None,
-            'assigned_to': _assignment_info(d['id'], assignments, limb=True),
+            'has_issue':    d.get('has_issue', False),
+            'lost':         d.get('lost_date') is not None,
+            'removal_date': d.get('removal_date'),
+            'assigned_to':  _assignment_info(d['id'], assignments, limb=True),
         })
 
     # modems — resolve sim_info from sims.json
@@ -641,11 +652,13 @@ def api_device_inventory():
             s = sim_map[sim_id]
             sim_info = {'id': sim_id, 'phoneNumber': s.get('phoneNumber'), 'network': s.get('network')}
         result['modems'].append({
-            'id':          d['id'],
-            'serial':      d.get('serial', ''),
-            'sim_id':      sim_id,
-            'sim_info':    sim_info,
-            'assigned_to': _assignment_info(d['id'], modem_asgn),
+            'id':           d['id'],
+            'serial':       d.get('serial', ''),
+            'sim_id':       sim_id,
+            'sim_info':     sim_info,
+            'has_issue':    d.get('has_issue', False),
+            'removal_date': d.get('removal_date'),
+            'assigned_to':  _assignment_info(d['id'], modem_asgn),
         })
 
     # laptops
@@ -654,9 +667,11 @@ def api_device_inventory():
     result['laptops'] = []
     for d in laptop_inv:
         result['laptops'].append({
-            'id':          d['id'],
-            'serial':      d.get('serial', ''),
-            'assigned_to': _assignment_info(d['id'], laptop_asgn),
+            'id':           d['id'],
+            'serial':       d.get('serial', ''),
+            'has_issue':    d.get('has_issue', False),
+            'removal_date': d.get('removal_date'),
+            'assigned_to':  _assignment_info(d['id'], laptop_asgn),
         })
 
     # sims — compute expiry for all SIMs regardless of modem assignment status
@@ -856,14 +871,16 @@ def api_toggle_issue():
     if not folder:
         return jsonify({'error': 'Cannot determine hospital folder'}), 400
 
-    data      = request.get_json() or {}
-    dtype     = (data.get('device_type') or '').strip().lower()
-    device_id = (data.get('device_id') or '').strip()
-    has_issue = bool(data.get('has_issue'))
-    notes     = (data.get('notes') or '').strip()
+    data         = request.get_json() or {}
+    dtype        = (data.get('device_type') or '').strip().lower()
+    device_id    = (data.get('device_id') or '').strip()
+    has_issue    = bool(data.get('has_issue'))
+    notes        = (data.get('notes') or '').strip()
+    resolve_date = (data.get('resolve_date') or '').strip() or None
+    issue_date   = (data.get('issue_date') or '').strip() or None
 
-    if dtype not in ('pluto', 'mars', 'agwatch') or not device_id:
-        return jsonify({'error': 'device_type (pluto/mars/agwatch) and device_id are required'}), 400
+    if dtype not in ('pluto', 'mars', 'agwatch', 'modems', 'laptops') or not device_id:
+        return jsonify({'error': 'device_type (pluto/mars/agwatch/modems/laptops) and device_id are required'}), 400
 
     if dtype in ('pluto', 'mars'):
         if has_issue:
@@ -871,7 +888,7 @@ def api_toggle_issue():
         else:
             mark_device_not_faulty(folder, dtype, device_id)
     else:
-        # agwatch — use has_issue field
+        # agwatch / modems / laptops — use has_issue field
         inv_data = {'devices': read_device_inventory(folder, dtype)}
         found = False
         for d in inv_data['devices']:
@@ -889,7 +906,77 @@ def api_toggle_issue():
     if notes:
         action += f' — {notes}'
     write_device_log(folder, device_id, loginid, session_id, action, device_type=dtype)
-    return jsonify({'status': 'success'})
+
+    # When resolving: check if a faulty event already exists in the file.
+    # If not (inventory flag was set without an event), synthesise one so
+    # get_resolved_issues can form a faulty→repair pair.
+    if not has_issue:
+        existing = read_device_events(folder, dtype, device_id)
+        events = existing.get('events', [])
+        # Determine if there is an unresolved faulty event
+        pending_faulty = None
+        for ev in sorted(events, key=lambda e: e.get('date', '')):
+            if ev.get('event_type') == 'faulty':
+                pending_faulty = ev
+            elif ev.get('event_type') in ('repair', 'available', 'retire', 'discarded', 'lost'):
+                pending_faulty = None
+        if pending_faulty is None:
+            append_device_event(folder, dtype, device_id,
+                                event_type='faulty',
+                                by='system',
+                                notes='(Auto-recorded: issue existed before event logging)')
+
+    event_id = append_device_event(folder, dtype, device_id,
+                                   event_type='faulty' if has_issue else 'repair',
+                                   by=loginid, notes=notes,
+                                   event_date=issue_date if has_issue else resolve_date)
+    return jsonify({'status': 'success', 'event_id': event_id})
+
+
+# ── Mark device lost (permanent retire) ──────────────────────────────────────
+
+@bp.route('/api/lose-device', methods=['POST'])
+def api_lose_device():
+    """Permanently retire a device as lost. Sets removal_date and appends lost event."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') == 'user':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    data      = request.get_json() or {}
+    dtype     = (data.get('device_type') or '').strip().lower()
+    device_id = (data.get('device_id') or '').strip()
+    notes     = (data.get('notes') or '').strip()
+
+    if dtype not in ('modems', 'laptops', 'agwatch') or not device_id:
+        return jsonify({'error': 'device_type (modems/laptops/agwatch) and device_id are required'}), 400
+
+    inv_data = {'devices': read_device_inventory(folder, dtype)}
+    found = False
+    for d in inv_data['devices']:
+        if d['id'] == device_id:
+            d['removal_date'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            d['has_issue'] = False
+            found = True
+            break
+    if not found:
+        return jsonify({'error': 'Device not found'}), 404
+    write_device_inventory(folder, dtype, inv_data)
+
+    loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
+    session_id = flask_session.get('session_id', 0) or 0
+    action = 'Marked as lost (permanently retired)'
+    if notes:
+        action += f' — {notes}'
+    write_device_log(folder, device_id, loginid, session_id, action, device_type=dtype)
+    event_id = append_device_event(folder, dtype, device_id,
+                                   event_type='lost',
+                                   by=loginid, notes=notes)
+    return jsonify({'status': 'success', 'event_id': event_id})
 
 
 # ── Recharge SIM ─────────────────────────────────────────────────────────────
@@ -921,6 +1008,9 @@ def api_recharge_sim():
     target['dataPlan']     = data.get('dataPlan') or None
     target['updatedAt']    = datetime.now().isoformat()
     write_sims(folder, sims)
+    loginid = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
+    append_device_event(folder, 'sims', sim_id, event_type='recharge', by=loginid,
+                        notes=f"Plan: {target['dataPlan'] or '—'}, Expiry: {target['expiryDate'] or '—'}")
     return jsonify({'status': 'success'})
 
 
@@ -1157,4 +1247,203 @@ def api_unassign_device():
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', 0) or 0
     write_device_log(folder, device_id, loginid, session_id, f'Returned from {homer_id}', device_type=dtype)
+    append_device_event(folder, dtype, device_id, event_type='available', by=loginid,
+                        homer_id=homer_id)
     return jsonify({'status': 'success'})
+
+
+# ── Device events API ─────────────────────────────────────────────────────────
+
+@bp.route('/api/device-events', methods=['GET'])
+def api_device_events():
+    """Fetch device events. ?type=<type> for all devices of a type, or add &device_id=<id> for one."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    dtype     = (request.args.get('type') or '').strip().lower()
+    device_id = (request.args.get('device_id') or '').strip()
+
+    valid = ('pluto', 'mars', 'agwatch', 'modems', 'laptops', 'sims')
+    if dtype not in valid:
+        return jsonify({'error': f'type must be one of: {", ".join(valid)}'}), 400
+
+    if device_id:
+        data = read_device_events(folder, dtype, device_id)
+        return jsonify({'events': data.get('events', [])})
+
+    events = read_all_device_events(folder, dtype)
+    return jsonify({'events': events})
+
+
+@bp.route('/api/log-event', methods=['POST'])
+def api_log_device_event():
+    """Manually log a device event (retire, discarded, repair, etc.). Admin or engineer."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') == 'user':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    data      = request.get_json() or {}
+    dtype     = (data.get('device_type') or '').strip().lower()
+    device_id = (data.get('device_id') or '').strip()
+    event_type = (data.get('event_type') or '').strip().lower()
+    notes     = (data.get('notes') or '').strip()
+
+    valid_types = ('pluto', 'mars', 'agwatch', 'modems', 'laptops', 'sims')
+    if dtype not in valid_types or not device_id or not event_type:
+        return jsonify({'error': 'device_type, device_id, and event_type are required'}), 400
+
+    import json as _json
+    protocol_path = Path(__file__).parent.parent / 'config' / 'device_protocol.json'
+    with open(protocol_path, encoding='utf-8') as f:
+        protocol = _json.load(f)
+    valid_events = set(protocol.get(dtype, {}).get('events', {}).keys())
+    if event_type not in valid_events:
+        return jsonify({'error': f'event_type {event_type!r} is not valid for {dtype}'}), 400
+
+    privilege = flask_session.get('privilege', 'user')
+    allowed_roles = protocol[dtype]['events'][event_type].get('roles', [])
+    if privilege not in allowed_roles:
+        return jsonify({'error': 'Forbidden — insufficient role for this event type'}), 403
+
+    loginid = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
+    event_id = append_device_event(folder, dtype, device_id, event_type=event_type,
+                                   by=loginid, notes=notes)
+
+    # If retiring/discarding, update inventory removal_date
+    if event_type in ('retire', 'discarded'):
+        if dtype == 'sims':
+            sims = read_sims(folder)
+            for s in sims:
+                if s['id'] == device_id:
+                    s['removal_date'] = datetime.now().strftime('%Y-%m-%d')
+                    break
+            write_sims(folder, sims)
+        else:
+            inv = read_device_inventory(folder, dtype)
+            for d in inv:
+                if d['id'] == device_id:
+                    d['removal_date'] = datetime.now().strftime('%Y-%m-%d')
+                    break
+            write_device_inventory(folder, dtype, {'devices': inv})
+
+    session_id = flask_session.get('session_id', 0) or 0
+    write_device_log(folder, device_id, loginid, session_id, event_type.capitalize() + (f' — {notes}' if notes else ''), device_type=dtype)
+    return jsonify({'status': 'success', 'event_id': event_id})
+
+
+@bp.route('/api/issues', methods=['GET'])
+def api_device_issues():
+    """Return open issues for a device type. ?type=<type>"""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    dtype = (request.args.get('type') or '').strip().lower()
+    valid = ('pluto', 'mars', 'agwatch', 'modems', 'laptops', 'sims')
+    if dtype not in valid:
+        return jsonify({'error': f'type must be one of: {", ".join(valid)}'}), 400
+
+    issues = get_open_issues(folder, dtype)
+    return jsonify({'issues': issues})
+
+
+@bp.route('/api/solutions', methods=['GET'])
+def api_device_solutions():
+    """Return resolved issue pairs for a device type. ?type=<type>"""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    dtype = (request.args.get('type') or '').strip().lower()
+    valid = ('pluto', 'mars', 'agwatch', 'modems', 'laptops', 'sims')
+    if dtype not in valid:
+        return jsonify({'error': f'type must be one of: {", ".join(valid)}'}), 400
+
+    solutions = get_resolved_issues(folder, dtype)
+    return jsonify({'solutions': solutions})
+
+
+# ── Device event attachments ──────────────────────────────────────────────────
+
+@bp.route('/api/upload-event-attachment', methods=['POST'])
+def api_upload_event_attachment():
+    """Upload a PDF or image attachment for a device event. Admin or engineer."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') == 'user':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    dtype     = (request.form.get('device_type') or '').strip().lower()
+    device_id = (request.form.get('device_id') or '').strip()
+    event_id  = (request.form.get('event_id') or '').strip()
+    file      = request.files.get('file')
+
+    if not dtype or not device_id or not event_id or not file:
+        return jsonify({'error': 'device_type, device_id, event_id, and file are required'}), 400
+
+    allowed_exts = {'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp'}
+    orig_ext = Path(file.filename).suffix.lower() if file.filename else ''
+    if orig_ext not in allowed_exts:
+        return jsonify({'error': f'File type not allowed. Use: {", ".join(allowed_exts)}'}), 400
+
+    attach_dir = Path(Config.DATA_ROOT) / folder / 'devices' / 'attachments' / dtype
+    attach_dir.mkdir(parents=True, exist_ok=True)
+    filename = f'{event_id}{orig_ext}'
+    file_path = attach_dir / filename
+
+    tmp_path = file_path.with_suffix('.tmp')
+    file.save(str(tmp_path))
+    os.replace(tmp_path, file_path)
+
+    rel_path = f'attachments/{dtype}/{filename}'
+    updated = update_device_event(folder, dtype, device_id, event_id, {'attachment': rel_path})
+    if not updated:
+        return jsonify({'error': 'Event not found — file saved but event not linked'}), 404
+
+    return jsonify({'status': 'success', 'attachment': rel_path})
+
+
+@bp.route('/api/download-event-attachment', methods=['GET'])
+def api_download_event_attachment():
+    """Download an attachment for a device event."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder    = get_hospital_folder(flask_session['login_place'])
+    dtype     = (request.args.get('type') or '').strip().lower()
+    device_id = (request.args.get('device_id') or '').strip()
+    event_id  = (request.args.get('event_id') or '').strip()
+
+    if not folder or not dtype or not device_id or not event_id:
+        return jsonify({'error': 'type, device_id, and event_id are required'}), 400
+
+    events_data = read_device_events(folder, dtype, device_id)
+    event = next((e for e in events_data.get('events', []) if e['id'] == event_id), None)
+    if not event or not event.get('attachment'):
+        return jsonify({'error': 'Attachment not found'}), 404
+
+    file_path = Path(Config.DATA_ROOT) / folder / 'devices' / event['attachment']
+    if not file_path.exists():
+        return jsonify({'error': 'File not found on disk'}), 404
+
+    from flask import send_file
+    return send_file(str(file_path), as_attachment=True, download_name=file_path.name)
