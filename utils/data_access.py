@@ -383,11 +383,12 @@ def _devices_path(hospital_folder: str) -> Path:
 
 
 def read_device_inventory(hospital_folder: str, device_type: str) -> list:
-    """Return all device entries from inventory/<device_type>.json."""
+    """Return all device entries from {folder}/inventory.json."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        data = s3_read_json(f"{hospital_folder}/devices/inventory/{device_type}.json")
+        data = s3_read_json(f"{hospital_folder}/devices/{folder}/inventory.json")
         return (data or {}).get('devices', [])
-    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'inventory.json'
     try:
         with open(path, encoding='utf-8') as f:
             return json.load(f).get('devices', [])
@@ -396,11 +397,12 @@ def read_device_inventory(hospital_folder: str, device_type: str) -> list:
 
 
 def read_device_assignments(hospital_folder: str, device_type: str) -> list:
-    """Return all assignment records from assignments/<device_type>.json."""
+    """Return all assignment records from {folder}/assignments.json."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        data = s3_read_json(f"{hospital_folder}/devices/assignments/{device_type}.json")
+        data = s3_read_json(f"{hospital_folder}/devices/{folder}/assignments.json")
         return (data or {}).get('assignments', [])
-    path = _devices_path(hospital_folder) / 'assignments' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'assignments.json'
     try:
         with open(path, encoding='utf-8') as f:
             return json.load(f).get('assignments', [])
@@ -409,12 +411,13 @@ def read_device_assignments(hospital_folder: str, device_type: str) -> list:
 
 
 def write_device_assignments(hospital_folder: str, device_type: str, assignments: list) -> None:
-    """Atomically overwrite assignments/<device_type>.json."""
+    """Atomically overwrite {folder}/assignments.json."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        s3_write_json(f"{hospital_folder}/devices/assignments/{device_type}.json",
+        s3_write_json(f"{hospital_folder}/devices/{folder}/assignments.json",
                       {'assignments': assignments})
         return
-    path = _devices_path(hospital_folder) / 'assignments' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'assignments.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp')
     with open(tmp, 'w', encoding='utf-8') as f:
@@ -423,11 +426,12 @@ def write_device_assignments(hospital_folder: str, device_type: str, assignments
 
 
 def write_device_inventory(hospital_folder: str, device_type: str, data: dict) -> None:
-    """Atomically overwrite inventory/<device_type>.json."""
+    """Atomically overwrite {folder}/inventory.json."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        s3_write_json(f"{hospital_folder}/devices/inventory/{device_type}.json", data)
+        s3_write_json(f"{hospital_folder}/devices/{folder}/inventory.json", data)
         return
-    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'inventory.json'
     tmp = path.with_suffix('.tmp')
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(tmp, 'w', encoding='utf-8') as f:
@@ -436,11 +440,11 @@ def write_device_inventory(hospital_folder: str, device_type: str, data: dict) -
 
 
 def read_sims(hospital_folder: str) -> list:
-    """Return all SIM cards from devices/inventory/sims.json."""
+    """Return all SIM cards from sims/inventory.json."""
     if Config.USE_S3:
-        data = s3_read_json(f"{hospital_folder}/devices/inventory/sims.json")
+        data = s3_read_json(f"{hospital_folder}/devices/sims/inventory.json")
         return (data or {}).get('sims', [])
-    path = _devices_path(hospital_folder) / 'inventory' / 'sims.json'
+    path = _devices_path(hospital_folder) / 'sims' / 'inventory.json'
     try:
         with open(path, encoding='utf-8') as f:
             return json.load(f).get('sims', [])
@@ -449,11 +453,11 @@ def read_sims(hospital_folder: str) -> list:
 
 
 def write_sims(hospital_folder: str, sims: list) -> None:
-    """Atomically overwrite devices/inventory/sims.json."""
+    """Atomically overwrite sims/inventory.json."""
     if Config.USE_S3:
-        s3_write_json(f"{hospital_folder}/devices/inventory/sims.json", {'sims': sims})
+        s3_write_json(f"{hospital_folder}/devices/sims/inventory.json", {'sims': sims})
         return
-    path = _devices_path(hospital_folder) / 'inventory' / 'sims.json'
+    path = _devices_path(hospital_folder) / 'sims' / 'inventory.json'
     tmp = path.with_suffix('.tmp')
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(tmp, 'w', encoding='utf-8') as f:
@@ -480,8 +484,9 @@ def get_available_devices(hospital_folder: str, device_type: str) -> list:
 
 def mark_device_faulty(hospital_folder: str, device_type: str, device_id: str) -> None:
     """Set faulty: true on a device inventory entry."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        key = f"{hospital_folder}/devices/inventory/{device_type}.json"
+        key = f"{hospital_folder}/devices/{folder}/inventory.json"
         try:
             data = s3_read_json(key) or {'devices': []}
             for d in data.get('devices', []):
@@ -492,7 +497,7 @@ def mark_device_faulty(hospital_folder: str, device_type: str, device_id: str) -
         except Exception as e:
             print(f'Warning: could not mark device faulty (S3): {e}')
         return
-    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'inventory.json'
     try:
         with open(path, encoding='utf-8') as f:
             data = json.load(f)
@@ -510,8 +515,9 @@ def mark_device_faulty(hospital_folder: str, device_type: str, device_id: str) -
 
 def mark_device_not_faulty(hospital_folder: str, device_type: str, device_id: str) -> None:
     """Clear faulty flag on a device inventory entry (device declared repaired)."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        key = f"{hospital_folder}/devices/inventory/{device_type}.json"
+        key = f"{hospital_folder}/devices/{folder}/inventory.json"
         try:
             data = s3_read_json(key) or {'devices': []}
             for d in data.get('devices', []):
@@ -522,7 +528,7 @@ def mark_device_not_faulty(hospital_folder: str, device_type: str, device_id: st
         except Exception as e:
             print(f'Warning: could not clear device faulty flag (S3): {e}')
         return
-    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'inventory.json'
     try:
         with open(path, encoding='utf-8') as f:
             data = json.load(f)
@@ -541,8 +547,9 @@ def mark_device_not_faulty(hospital_folder: str, device_type: str, device_id: st
 def mark_device_lost(hospital_folder: str, device_type: str,
                      device_id: str, lost_date: str) -> None:
     """Set lost_date on a device inventory entry (agwatch only)."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        key = f"{hospital_folder}/devices/inventory/{device_type}.json"
+        key = f"{hospital_folder}/devices/{folder}/inventory.json"
         try:
             data = s3_read_json(key) or {'devices': []}
             for d in data.get('devices', []):
@@ -553,7 +560,7 @@ def mark_device_lost(hospital_folder: str, device_type: str,
         except Exception as e:
             print(f'Warning: could not mark device lost (S3): {e}')
         return
-    path = _devices_path(hospital_folder) / 'inventory' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'inventory.json'
     try:
         with open(path, encoding='utf-8') as f:
             data = json.load(f)
@@ -569,21 +576,26 @@ def mark_device_lost(hospital_folder: str, device_type: str,
         print(f'Warning: could not mark device lost: {e}')
 
 
-_LOG_TYPE_FOLDER = {
+_TYPE_FOLDER = {
     'pluto': 'pluto', 'mars': 'mars', 'agwatch': 'agwatch',
     'modem': 'modems', 'modems': 'modems',
     'laptop': 'laptops', 'laptops': 'laptops',
+    'sims': 'sims',
 }
+
+def _type_folder(device_type: str) -> str:
+    """Return the folder name for a device type."""
+    return _TYPE_FOLDER.get(device_type, device_type)
 
 
 def write_device_log(hospital_folder: str, device_id: str, user_id: str,
                      session_id: int, action: str, device_type: str = '') -> None:
-    """Append an entry to devices/logs/<device_type>/<device_id>.log, creating it if needed."""
-    subfolder = _LOG_TYPE_FOLDER.get(device_type, 'misc')
+    """Append an entry to {folder}/logs/{device_id}.log, creating it if needed."""
+    subfolder = _type_folder(device_type) if device_type else 'misc'
     timestamp = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     line = f'[{timestamp}]   {user_id:<16}#{session_id:<4} {action}\n'
     if Config.USE_S3:
-        key = f"{hospital_folder}/devices/logs/{subfolder}/{device_id}.log"
+        key = f"{hospital_folder}/devices/{subfolder}/logs/{device_id}.log"
         try:
             existing = s3_read_text(key)
             if existing is None:
@@ -593,7 +605,7 @@ def write_device_log(hospital_folder: str, device_id: str, user_id: str,
         except Exception as e:
             print(f'Warning: could not write device log (S3): {e}')
         return
-    logs_dir = _devices_path(hospital_folder) / 'logs' / subfolder
+    logs_dir = _devices_path(hospital_folder) / subfolder / 'logs'
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / f'{device_id}.log'
     is_new = not log_path.exists()
@@ -608,11 +620,12 @@ def write_device_log(hospital_folder: str, device_id: str, user_id: str,
 
 
 def read_fault_reports(hospital_folder: str, device_type: str) -> list:
-    """Read fault reports for a device type from devices/fault_reports/<type>.json."""
+    """Read fault reports for a device type from {folder}/faultReport.json."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        data = s3_read_json(f"{hospital_folder}/devices/fault_reports/{device_type}.json")
+        data = s3_read_json(f"{hospital_folder}/devices/{folder}/faultReport.json")
         return (data or {}).get('fault_reports', [])
-    path = _devices_path(hospital_folder) / 'fault_reports' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'faultReport.json'
     if not path.exists():
         return []
     try:
@@ -624,12 +637,13 @@ def read_fault_reports(hospital_folder: str, device_type: str) -> list:
 
 
 def write_fault_reports(hospital_folder: str, device_type: str, reports: list) -> None:
-    """Write fault reports for a device type to devices/fault_reports/<type>.json."""
+    """Write fault reports for a device type to {folder}/faultReport.json."""
+    folder = _type_folder(device_type)
     if Config.USE_S3:
-        s3_write_json(f"{hospital_folder}/devices/fault_reports/{device_type}.json",
+        s3_write_json(f"{hospital_folder}/devices/{folder}/faultReport.json",
                       {'fault_reports': reports})
         return
-    path = _devices_path(hospital_folder) / 'fault_reports' / f'{device_type}.json'
+    path = _devices_path(hospital_folder) / folder / 'faultReport.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp')
     try:

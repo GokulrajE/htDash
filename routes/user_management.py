@@ -269,10 +269,12 @@ def api_available_devices(homer_id):
             modem_dict['sim_phone'] = sim_map[sim_id].get('phoneNumber', '')
         modems_with_sim.append(modem_dict)
 
-    # Get available SIMs (not yet assigned to any modem)
+    # Get available SIMs (not currently linked to any modem's sim_id)
     try:
         all_sims = read_sims(folder)
-        available_sims = [s for s in all_sims if not s.get('assigned_date')]
+        modem_inv = read_device_inventory(folder, 'modems')
+        used_sim_ids = {d.get('sim_id') for d in modem_inv if d.get('sim_id')}
+        available_sims = [s for s in all_sims if s['id'] not in used_sim_ids]
     except Exception:
         available_sims = []
 
@@ -2463,6 +2465,9 @@ def api_complete_robot_issue_visit(homer_id):
                 write_device_assignments(folder, device_type, assignments)
                 write_device_log(folder, new_device_id, loginid, session_id,
                                  f'Assigned to {homer_id} after robot issue visit (swap)')
+                append_device_event(folder, device_type, new_device_id, 'assign', loginid,
+                                    notes=f'Replacement for {old_device_id} (patient {homer_id})',
+                                    homer_id=homer_id)
             else:
                 # No replacement — training pause required
                 any_taken_back = True
@@ -2648,6 +2653,9 @@ def api_complete_resolve_robot_issue_visit(homer_id):
             write_device_assignments(folder, device_type, assignments)
             write_device_log(folder, new_device_id, loginid, session_id,
                              f'Assigned to {homer_id} after resolve robot issue visit')
+            append_device_event(folder, device_type, new_device_id, 'assign', loginid,
+                                notes=f'Replacement for {old_device_id} (patient {homer_id})',
+                                homer_id=homer_id)
         else:
             any_still_missing = True
 
@@ -2720,6 +2728,9 @@ def api_complete_resolve_robot_issue_visit(homer_id):
                 write_device_assignments(folder, device_type, assignments)
                 write_device_log(folder, new_device_id, loginid, session_id,
                                  f'Assigned to {homer_id} after resolve robot issue visit (other device swap)')
+                append_device_event(folder, device_type, new_device_id, 'assign', loginid,
+                                    notes=f'Replacement for {old_device_id} (patient {homer_id})',
+                                    homer_id=homer_id)
 
         saved_other_outcomes.append({
             'device':        device_type,

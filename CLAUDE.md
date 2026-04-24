@@ -805,3 +805,115 @@ ts = d.replace(hour=now.hour, minute=now.minute, second=now.second).strftime('%Y
 - Cannot submit modal without selecting date
 - Date picker prevents future dates
 - Value is passed correctly to backend
+
+---
+
+### Device Data Structure Refactor ✅ (April 2026)
+
+#### 1. Per-Type Folder Layout
+**Status:** ✅ Complete
+
+**Change:** Device data reorganised from flat type-grouped subdirectories to per-type folders. Every file for a device type now lives inside its own subfolder.
+
+**Old layout:**
+```
+devices/inventory/pluto.json
+devices/assignments/pluto.json
+devices/fault_reports/pluto.json
+devices/events/pluto/<device_id>.json
+devices/logs/pluto/<device_id>.log
+devices/attachments/pluto/<event_id>.ext
+```
+
+**New layout:**
+```
+devices/pluto/inventory.json
+devices/pluto/assignments.json
+devices/pluto/faultReport.json
+devices/pluto/events/<device_id>.json
+devices/pluto/logs/<device_id>.log
+devices/pluto/attachments/<event_id>.ext
+```
+
+Type → folder mapping: `pluto→pluto`, `mars→mars`, `agwatch→agwatch`, `modem/modems→modems`, `laptop/laptops→laptops`, `sims→sims`
+
+**Key implementation:**
+- `_TYPE_FOLDER` dict and `_type_folder()` helper added to `utils/data_access.py` as the single source of truth for all path construction
+- Replaces the old `_LOG_TYPE_FOLDER` dict (removed)
+- All 11 read/write functions in `utils/data_access.py` updated
+- `utils/device_events.py` updated — all `_events_path()` and S3 key strings
+- `routes/devices.py` — attachment upload/download paths updated
+- S3 keys follow the same new pattern
+
+**Files Modified:**
+- `utils/data_access.py` — `_TYPE_FOLDER`, `_type_folder()`, all inventory/assignment/fault_report/log functions
+- `utils/device_events.py` — `_events_path()`, `read_all_device_events()`, `get_open_issues()`, `get_resolved_issues()`
+- `routes/devices.py` — attachment paths in `api_upload_event_attachment()`
+- `scripts/migrate_device_data.py` — NEW idempotent migration script
+- `docs/device_data_schemas.md` — updated folder structure diagram and all file path references
+
+**Migration:** Run `python scripts/migrate_device_data.py` once per environment to move existing data files. Script is idempotent (skips files already moved). Also updates stored `attachment` field references inside event JSON files.
+
+---
+
+#### 2. SIM ID = Phone Number
+**Status:** ✅ Complete
+
+**Change:** SIM `id` field is now the phone number instead of a UUID. Prevents the same phone number from being added twice or linked to two different modems.
+
+**Details:**
+- `api_add_device` for `dtype='sim'` sets `id = phone` (was `uuid4()`)
+- Duplicate check: if phone number already exists in inventory, returns 409
+- `phoneNumber` field kept alongside `id` for display compatibility
+- `sim_id` on modem inventory now references the phone number string (not a UUID)
+
+**Files Modified:**
+- `routes/devices.py` — `api_add_device()` SIM branch: duplicate check + `id = phone`
+
+---
+
+#### 3. SIM Availability Fix
+**Status:** ✅ Complete
+
+**Problem:** Assigned SIMs still appeared in the device setup dropdown for new patients. The filter `s.get('assigned_date')` checked a field that doesn't exist on SIM records.
+
+**Fix:** Derive availability from modem inventory — a SIM is unavailable if its `id` appears as `sim_id` on any modem record.
+
+```python
+# Old (broken — field doesn't exist):
+available_sims = [s for s in all_sims if not s.get('assigned_date')]
+
+# Fixed:
+modem_inv = read_device_inventory(folder, 'modems')
+used_sim_ids = {d.get('sim_id') for d in modem_inv if d.get('sim_id')}
+available_sims = [s for s in all_sims if s['id'] not in used_sim_ids]
+```
+
+**Files Modified:**
+- `routes/user_management.py` — `api_available_devices()` SIM filtering logic
+
+---
+
+#### 4. Device Swap — Missing Assign Events for New Device
+**Status:** ✅ Complete
+
+**Problem:** When a device is swapped via the Devices page or during a robot issue visit, the new (replacement) device never got an `assign` event record. So it never appeared in Recent Activity, unlike modem/laptop replacements which did.
+
+**Root cause:** Three swap paths were missing `append_device_event('assign', ...)` for the new device:
+1. `api_swap_device` in `routes/devices.py` — Devices page "Report Issue + swap" flow
+2. `api_complete_robot_issue_visit` in `routes/user_management.py` — robot issue visit swapped outcome
+3. `api_complete_resolve_robot_issue_visit` in `routes/user_management.py` — resolve robot issue visit new device delivery + other-device swap
+
+All three already called `write_device_log()` for the new device but not `append_device_event()`.
+
+**Fix:** Added `append_device_event(..., event_type='assign')` for the new device immediately after `write_device_assignments()` in each of the three paths. Also added `append_device_event(..., event_type='faulty')` for the old device in `api_swap_device` (was also missing).
+
+**Files Modified:**
+- `routes/devices.py` — `api_swap_device()`: added faulty event for old device + assign event for new device
+- `routes/user_management.py` — `api_complete_robot_issue_visit()` swapped branch: assign event for new device
+- `routes/user_management.py` — `api_complete_resolve_robot_issue_visit()` main replacement loop + other-device swap: assign event for new device
+
+**Verification:**
+- After a pluto/mars swap from Devices page → Overview tab Recent Activity shows "Faulty" (old) and "Assigned" (new)
+- After robot issue visit with device swap → Recent Activity shows "Assigned" for replacement device
+- Matches existing behaviour for modem/laptop replacements

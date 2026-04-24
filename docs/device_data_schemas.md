@@ -4,48 +4,50 @@
 
 ## Folder Structure
 
-All device data lives under `data/<hospital>/devices/`.
+All device data lives under `data/<hospital>/devices/`. Each device type has its own subfolder containing all related files.
 
 ```
 data/<hospital>/devices/
-├── inventory/
-│   ├── pluto.json
-│   ├── mars.json
-│   ├── agwatch.json
-│   ├── modems.json
-│   ├── laptops.json
-│   └── sims.json
-├── assignments/
-│   ├── pluto.json
-│   ├── mars.json
-│   ├── agwatch.json
-│   ├── modems.json
-│   └── laptops.json
-├── logs/
-│   ├── pluto/
+├── pluto/
+│   ├── inventory.json
+│   ├── assignments.json
+│   ├── faultReport.json
+│   ├── events/
+│   │   └── <device_id>.json
+│   ├── logs/
 │   │   └── <device_id>.log
-│   ├── mars/
+│   └── attachments/
+│       └── <event_id>.<ext>
+├── mars/          (same layout as pluto)
+├── agwatch/       (same layout as pluto)
+├── modems/
+│   ├── inventory.json
+│   ├── assignments.json
+│   ├── events/
+│   │   └── <device_id>.json
+│   ├── logs/
 │   │   └── <device_id>.log
-│   ├── agwatch/
-│   │   └── <device_id>.log
-│   ├── modems/
-│   │   └── <device_id>.log
-│   └── laptops/
-│       └── <device_id>.log
-└── events/
-    ├── pluto/
-    │   └── <device_id>.json
-    ├── mars/
-    │   └── <device_id>.json
-    ├── agwatch/
-    │   └── <device_id>.json
-    ├── modems/
-    │   └── <device_id>.json
-    ├── laptops/
-    │   └── <device_id>.json
-    └── sims/
+│   └── attachments/
+│       └── <event_id>.<ext>
+├── laptops/       (same layout as modems)
+└── sims/
+    ├── inventory.json
+    └── events/
         └── <device_id>.json
 ```
+
+**Type → folder name mapping** (used in all path construction via `_type_folder()` in `utils/data_access.py`):
+
+| Input type string | Folder name |
+|-------------------|-------------|
+| `pluto` | `pluto` |
+| `mars` | `mars` |
+| `agwatch` | `agwatch` |
+| `modem` / `modems` | `modems` |
+| `laptop` / `laptops` | `laptops` |
+| `sims` | `sims` |
+
+**Migration:** `scripts/migrate_device_data.py` moves all existing files from the old flat layout to this structure. Safe to re-run (skips files that no longer exist at old paths).
 
 ---
 
@@ -64,7 +66,7 @@ State is always **derived** — never stored directly. Derivation order (highest
 
 ## Inventory Files
 
-### `inventory/pluto.json` and `inventory/mars.json`
+### `pluto/inventory.json` and `mars/inventory.json`
 
 ```json
 {
@@ -96,7 +98,7 @@ State is always **derived** — never stored directly. Derivation order (highest
 
 ---
 
-### `inventory/agwatch.json`
+### `agwatch/inventory.json`
 
 ```json
 {
@@ -130,7 +132,7 @@ State is always **derived** — never stored directly. Derivation order (highest
 
 ---
 
-### `inventory/modems.json`
+### `modems/inventory.json`
 
 ```json
 {
@@ -150,17 +152,18 @@ State is always **derived** — never stored directly. Derivation order (highest
 |-------|------|-------------|
 | `id` | string | Unique device identifier (e.g. `MDM-001`) |
 | `serial` | string | Physical serial number |
-| `sim_id` | UUID string or `null` | ID of the linked SIM card in `inventory/sims.json`; `null` = no SIM linked |
+| `sim_id` | string or `null` | Phone number of the linked SIM card in `sims/inventory.json`; `null` = no SIM linked |
+| `has_issue` | boolean | `true` = device has a reported fault; overrides all other states |
 | `inclusion_date` | `YYYY-MM-DD` | Date added to inventory |
 | `removal_date` | `YYYY-MM-DD` or `null` | Date permanently removed |
 
 **Notes:**
-- A SIM can only be linked to one modem at a time (enforced server-side).
+- A SIM can only be linked to one modem at a time. Availability is derived by checking which SIMs are referenced by any modem's `sim_id` — SIMs with a modem reference are excluded from the device setup dropdown.
 - SIM expiry is shown for all SIMs regardless of modem assignment status.
 
 ---
 
-### `inventory/laptops.json`
+### `laptops/inventory.json`
 
 ```json
 {
@@ -179,6 +182,7 @@ State is always **derived** — never stored directly. Derivation order (highest
 |-------|------|-------------|
 | `id` | string | Unique device identifier (e.g. `LPT-001`) |
 | `serial` | string | Physical serial number |
+| `has_issue` | boolean | `true` = device has a reported fault; overrides all other states |
 | `inclusion_date` | `YYYY-MM-DD` | Date added to inventory |
 | `removal_date` | `YYYY-MM-DD` or `null` | Date permanently removed |
 
@@ -186,9 +190,9 @@ State is always **derived** — never stored directly. Derivation order (highest
 
 ## Assignment Files
 
-One file per device type. All assignment files share the same top-level key `"assignments"`.
+One file per device type, stored at `<type>/assignments.json`. All share the same top-level key `"assignments"`.
 
-### `assignments/pluto.json` and `assignments/mars.json`
+### `pluto/assignments.json` and `mars/assignments.json`
 
 ```json
 {
@@ -206,7 +210,7 @@ One file per device type. All assignment files share the same top-level key `"as
 }
 ```
 
-### `assignments/agwatch.json`
+### `agwatch/assignments.json`
 
 ```json
 {
@@ -225,7 +229,7 @@ One file per device type. All assignment files share the same top-level key `"as
 }
 ```
 
-### `assignments/modems.json` and `assignments/laptops.json`
+### `modems/assignments.json` and `laptops/assignments.json`
 
 ```json
 {
@@ -261,13 +265,13 @@ One file per device type. All assignment files share the same top-level key `"as
 
 ---
 
-## `inventory/sims.json`
+## `sims/inventory.json`
 
 ```json
 {
   "sims": [
     {
-      "id": "8920949d-84a4-485f-aee0-9db217db1b00",
+      "id": "9090909090",
       "phoneNumber": "9090909090",
       "network": "jio",
       "rechargeDate": "2026-04-07",
@@ -285,8 +289,8 @@ One file per device type. All assignment files share the same top-level key `"as
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | UUID string | Unique SIM identifier; referenced by modem inventory via `sim_id` |
-| `phoneNumber` | string | SIM phone number |
+| `id` | string (phone number) | SIM identifier — **set to the phone number** at creation. Referenced by modem inventory via `sim_id`. Duplicate phone numbers rejected on add. |
+| `phoneNumber` | string | Same as `id`; kept for display compatibility |
 | `network` | string | Carrier name (e.g. `"jio"`, `"airtel"`) |
 | `rechargeDate` | `YYYY-MM-DD` or `null` | Date of most recent recharge |
 | `expiryDate` | `YYYY-MM-DD` or `null` | Date the current recharge expires |
@@ -315,9 +319,9 @@ When `isExpired=true`, a **Recharge** button appears in the SIM row alongside th
 
 ## Device Log Files
 
-One log file per device, stored at `logs/<device_type>/<device_id>.log`.
+One log file per device, stored at `<device_type>/logs/<device_id>.log`.
 
-`<device_type>` is one of: `pluto`, `mars`, `agwatch`, `modems`, `laptops`.
+`<device_type>` folder is one of: `pluto`, `mars`, `agwatch`, `modems`, `laptops`.
 
 ```
 :Location: Ranipet
@@ -328,7 +332,7 @@ One log file per device, stored at `logs/<device_type>/<device_id>.log`.
 [2026-04-09T11:00:00]   RP-HS-ADMIN     #3    Issue resolved
 ```
 
-Example path: `logs/agwatch/AGR-88.log`
+Example path: `agwatch/logs/AGR-88.log`
 
 **Header lines** (written once at creation):
 
@@ -378,7 +382,7 @@ New records written by the API always use `homer_id`.
 
 ## Device Event Files
 
-One JSON file per device, stored at `events/<device_type>/<device_id>.json`. Mirrors `logs/<device_type>/<device_id>.log` structure. Written with atomic `.tmp → os.replace()` pattern via `utils/device_events.py`.
+One JSON file per device, stored at `<device_type>/events/<device_id>.json`. Mirrors `<device_type>/logs/<device_id>.log` structure. Written with atomic `.tmp → os.replace()` pattern via `utils/device_events.py`.
 
 ```json
 {
@@ -421,12 +425,11 @@ One JSON file per device, stored at `events/<device_type>/<device_id>.json`. Mir
 | SIM | `recharge`, `expired`, `retire`, `discarded` |
 
 **When events are auto-created:**
-- `assign` — when `exp_device_install` is completed (all device types)
-- `available` — when 28-day auto-reset fires, or manual unassign
-- `faulty` — when `toggle-issue` marks a device faulty, or `swap-device` flags old device
-- `swap` — when `swap-device` fires (written on old device; `related_device_id` = new device)
-- `repair` — when `toggle-issue` resolves a faulty device
-- `recharge` — when `recharge-sim` is called
+- `assign` — `exp_device_install` (all device types); `swap-device` new device; robot issue visit / resolve robot issue visit new device; other device issue visit replaced device
+- `available` — 28-day auto-reset fires, or manual unassign
+- `faulty` — `toggle-issue` marks faulty; `swap-device` old device; robot issue visit fault-driven swap old device
+- `repair` — `toggle-issue` resolves a faulty device; robot issue visit / resolve visit repaired_on_site
+- `recharge` — `recharge-sim`
 
 **Issues container logic:** a device is "open issue" when its last state-event is `faulty` and no subsequent `repair`, `available`, `retire`, or `discarded` event exists. "Resolved" = a `faulty` event that was closed by one of those events.
 
