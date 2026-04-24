@@ -679,19 +679,129 @@ Extended device setup (`exp_device_install`) to include modem, laptop, and SIM c
 **Files Modified:**
 - `static/js/app/patient_detail.js` — Updated `_renderDeviceGraphs()` and `_loadDeviceDetail()` functions
 
-### Task need to implement : Fix UI update issues and improve prescription modal behavior
-Fix 3 UI issues:
+### UI Update Fixes ✅ Complete
 
-1. Call Log History:
-- Not updating after save (needs refresh)
-- Should update immediately after save
+1. **Call Log History** — updates immediately after save (direct cache + re-render via `_callLogsCache`)
+2. **Pause/Resume History** — `loadPatientEvents()` now calls `renderPauseBanner` and `renderPauseHistoryTable` after every event action
+3. **Prescription Modal** — Print & Save disabled until language selected; Print auto-saves first (abort if save fails); `_prescPrintoutLanguage` starts `null`
 
-2. Resume/Pause History:
-- Same issue
-- Update UI instantly after action
+### Other Device Issue Chain ✅ Complete
 
-3. Prescription Modal:
-- Disable Print & Save initially
-- Enable only after language selection
-- On Print → auto Save first
-- Add proper validation
+Engineer call + visit chain for laptop, modem, and SIM issues — analogous to the robot issue chain for Pluto/Mars.
+
+**Events (experimental patients only):**
+- `other_device_issue_call` — triggered from patient events (activation, home visits, patient call, followup calls). Records `issue_occur_date` (when the issue first started, distinct from call date) and per-device outcome (`visit_required` / `resolved_over_call`). Marks affected devices `has_issue = true` and logs a "faulty" device event carrying `issue_occur_date`. If any device needs a visit, auto-creates an `other_device_issue_visit` stub.
+- `other_device_issue_visit` — engineer physical visit. Per-device outcomes: `repaired` (clears `has_issue`) / `replaced` (swap + clear issue) / `neither`. Does NOT pause training.
+
+**Device inventory:** `has_issue: boolean` added to modem, laptop, and SIM inventory records. Clears on resolution.
+
+**Devices page:**
+- Modem and laptop rows show "Issue" badge when `has_issue = true`
+- Resolve Issue modal for modem/laptop displays `issue_occur_date` from the device's "faulty" event log
+
+**Trigger toggles** exist in: activation, home_visit_d02/d03/d15, patient_call, followup_call_d07/d21. Hidden for control patients.
+
+**Files Modified:**
+- `config/study_protocol.json` — added 2 events to `experimental[]`
+- `routes/user_management.py` — `api_complete_other_device_issue_call`, `api_complete_other_device_issue_visit`, + trigger injection in 7 routes
+- `routes/devices.py` — `has_issue` support for modem/laptop/SIM; `issue_occur_date` in resolve; `GET /devices/api/device-issue-date`
+- `templates/patient_detail.html` — engineer call modal (updated) + new engineer visit modal
+- `static/js/app/patient_detail.js` — EVENT_OPENERS + all modal functions
+- `static/js/app/devices.js` — issue badge for modem/laptop, `issue_occur_date` in resolve modal
+
+### Device Issue Resolution & UI Improvements ✅ (April 2026 - Continued)
+
+#### 1. Fixed Device Issue Resolution Bug
+**Status:** ✅ Complete
+
+**Problem:** Device issues raised from patient page and resolved via Devices page were not moving from "Open Issues" to "Resolved Issues". Recent Activity also displayed "00:00" instead of actual timestamps.
+
+**Root Cause:** `append_device_event()` in `utils/device_events.py` stored date-only strings (from datepickers) as `YYYY-MM-DDT00:00:00` (midnight). When sorting events chronologically:
+- Faulty event: `2026-04-21T14:30:00` (actual time when reported)
+- Repair event: `2026-04-21T00:00:00` (hardcoded midnight)
+- Sort result: repair < faulty → pair never detected → stayed in Open Issues
+
+**Solution:** When `event_date` is a date-only string, combine with current time of day instead of midnight:
+```python
+# Before (broken):
+ts = datetime.strptime(event_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00')
+
+# After (fixed):
+d = datetime.strptime(event_date, '%Y-%m-%d')
+now = datetime.now()
+ts = d.replace(hour=now.hour, minute=now.minute, second=now.second).strftime('%Y-%m-%dT%H:%M:%S')
+```
+
+**Files Modified:**
+- `utils/device_events.py` — `append_device_event()` lines 75–81: replaced midnight logic with current-time-on-date logic
+
+**Verification:**
+- Issues raised from patient page now move to Resolved Issues when resolved via Devices page
+- Recent Activity displays correct timestamps (e.g., "14:32") instead of "00:00"
+- Works for both robot issues (pluto/mars) and other device issues (modem/laptop/SIM)
+
+---
+
+#### 2. Report Issue Button UI Update
+**Status:** ✅ Complete
+
+**Change:** Added "Report Issue" buttons to modem and laptop card headers (top-right corner), matching pluto/mars layout.
+
+**Details:**
+- Buttons appear in card header next to "Manage" dropdown
+- Only visible for users with manage permissions (admin/engineer)
+- Removed inline action buttons from table rows (cleaner interface)
+- Hidden for retired devices
+
+**Files Modified:**
+- `templates/devices.html` — Added `issue-modems-btn` and `issue-laptops-btn` elements to card headers
+- `static/js/app/devices.js` — Added button IDs to visibility toggle list (line 72)
+
+---
+
+#### 3. Robot Issue `issue_occur_date` Tracking
+**Status:** ✅ Complete
+
+**Feature:** Added optional `issue_occur_date` field to robot issue call modal. Tracks when the robot issue first started (distinct from call date).
+
+**Details:**
+- `issue_occur_date` is date-only input (optional)
+- Passed through `api_complete_robot_issue_call` to robot_issue_call free event
+- Traced through robot_issue_visit → resolve_robot_issue_visit chain
+- Appended to device faulty event with `issue_occur_date` parameter
+- Displayed in Devices page resolve modal under "Issue First Occurred"
+
+**Files Modified:**
+- `templates/patient_detail.html` — Added date input field to `#robot-issue-call-modal` (line 1167)
+- `static/js/app/patient_detail.js` — Updated `openRobotIssueCallModal()` to clear field, `saveRobotIssueCall()` to read and pass value
+- `routes/user_management.py` — Updated `api_complete_robot_issue_call()` to read and store `issue_occur_date` (lines 1958–1962), passes to device events on visit completion (lines 2379–2398, 2424–2427)
+
+---
+
+#### 4. Other Device Issue `issue_occur_date` Required Field
+**Status:** ✅ Complete
+
+**Change:** Made `issue_occur_date` a required field in other device issue call modal. Removed automatic today-date population.
+
+**Details:**
+- Added `required` attribute to HTML input
+- Removed auto-fill logic that set value to today's date
+- Field must be manually filled by user before saving
+- Max constraint still prevents selecting future dates
+- Backend validation (line 5027) blocks empty values
+
+**User Flow:**
+1. Open other device issue call modal
+2. "Issue First Occurred" field is empty (no auto-fill)
+3. User MUST select a date/time
+4. Browser and server validate before saving
+
+**Files Modified:**
+- `templates/patient_detail.html` — Added `required` attribute to `#odi-issue-occur-date` input (line 1397)
+- `static/js/app/patient_detail.js` — Changed auto-fill from `nowStr` to empty string `''` in `openOtherDeviceIssueModal()` (line 4923)
+
+**Verification:**
+- Field is empty on modal open
+- Cannot submit modal without selecting date
+- Date picker prevents future dates
+- Value is passed correctly to backend

@@ -69,7 +69,7 @@ function _showButtonVisibility() {
   });
 
   // Issue report — admin or engineer
-  ['issue-pluto-btn','issue-mars-btn','issue-agwatch-btn'].forEach(id => {
+  ['issue-pluto-btn','issue-mars-btn','issue-agwatch-btn','issue-modems-btn','issue-laptops-btn'].forEach(id => {
     if (_canManage) document.getElementById(id)?.classList.remove('hidden');
   });
 }
@@ -377,7 +377,7 @@ function _renderAll() {
   _renderLaptops(_inventory.laptops  || []);
   document.getElementById('devices-tabs-wrapper').classList.remove('hidden');
   document.getElementById('devices-tab-panes').classList.remove('hidden');
-  switchDeviceTab('overview');
+  switchDeviceTab(_activeDeviceTab || 'overview');
 }
 
 // ── Pluto / Mars ──────────────────────────────────────────────
@@ -491,10 +491,13 @@ function _renderModems(devices) {
             ? `<span class="font-medium text-slate-700">${_esc(d.sim_info.network || '—')}</span>
                <span class="text-xs text-slate-400 ml-1">${_esc(d.sim_info.phoneNumber || '')}</span>`
             : '<span class="text-slate-400 italic text-xs">Not linked</span>';
-          const statusBadge = d.assigned_to
-            ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>'
-            : '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
-          const retired = !!d.removal_date;
+          const hasIssue = !!d.has_issue;
+          const retired  = !!d.removal_date;
+          const statusBadge = hasIssue
+            ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700"><i class="fas fa-exclamation-circle"></i>Issue</span>'
+            : d.assigned_to
+              ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>'
+              : '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
           return `
             <tr class="${retired ? 'opacity-40' : 'hover:bg-slate-50 transition-colors'}">
               <td class="px-6 py-3.5 font-mono font-medium text-slate-800">${_esc(d.id)}</td>
@@ -641,10 +644,13 @@ function _renderLaptops(devices) {
       </thead>
       <tbody class="divide-y divide-slate-50">
         ${devices.map(d => {
-          const statusBadge = d.assigned_to
-            ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>'
-            : '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
-          const retired = !!d.removal_date;
+          const hasIssue = !!d.has_issue;
+          const retired  = !!d.removal_date;
+          const statusBadge = hasIssue
+            ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700"><i class="fas fa-exclamation-circle"></i>Issue</span>'
+            : d.assigned_to
+              ? '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700"><i class="fas fa-user-check"></i>Assigned</span>'
+              : '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700"><i class="fas fa-check-circle"></i>Available</span>';
           return `
             <tr class="${retired ? 'opacity-40' : 'hover:bg-slate-50 transition-colors'}">
               <td class="px-6 py-3.5 font-mono font-medium text-slate-800">${_esc(d.id)}</td>
@@ -800,10 +806,11 @@ let _issueType = null;
 
 function openIssueModal(type, preselectedId) {
   _issueType = type;
-  const labels = { pluto: 'Pluto', mars: 'Mars', agwatch: 'Agwatch' };
+  const labels = { pluto: 'Pluto', mars: 'Mars', agwatch: 'Agwatch', modems: 'Modem', laptops: 'Laptop' };
   document.getElementById('issue-modal-title').textContent = `Report / Resolve Issue — ${labels[type] || type}`;
   _setError('issue-modal-error', '');
   document.getElementById('issue-device-info').classList.add('hidden');
+  document.getElementById('issue-occur-date-info').classList.add('hidden');
   document.getElementById('issue-swap-section').classList.add('hidden');
   document.getElementById('issue-notes').value = '';
   document.getElementById('issue-attachment-file').value = '';
@@ -816,19 +823,15 @@ function openIssueModal(type, preselectedId) {
   sel.innerHTML = '<option value="">Select device…</option>';
 
   const devices = type === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[type] || []);
-  // Show only non-assigned, non-lost, non-retired devices + devices that already have issues
-  {
-    devices.filter(d => !d.lost && !d.removal_date && (!d.assigned_to || d.faulty || d.has_issue)).forEach(d => {
-      const opt = document.createElement('option');
-      opt.value = d.id;
-      const hasIssue = d.faulty || d.has_issue;
-      opt.textContent = hasIssue ? `${d.id} — Has Issue` : `${d.id} — OK`;
-      sel.appendChild(opt);
-    });
-  }
+  devices.filter(d => !d.lost && !d.removal_date && (!d.assigned_to || d.faulty || d.has_issue)).forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    const hasIssue = d.faulty || d.has_issue;
+    opt.textContent = hasIssue ? `${d.id} — Has Issue` : `${d.id} — OK`;
+    sel.appendChild(opt);
+  });
 
   if (preselectedId) {
-    const sel = document.getElementById('issue-device-select');
     sel.value = preselectedId;
     onIssueDeviceChange();
   }
@@ -869,6 +872,19 @@ function onIssueDeviceChange() {
     swapEl.classList.add('hidden');
     document.getElementById('issue-resolve-date-section').classList.remove('hidden');
     document.getElementById('issue-occurred-date-section').classList.add('hidden');
+    // Fetch issue_occur_date from device events
+    document.getElementById('issue-occur-date-info').classList.add('hidden');
+    fetch(`/devices/api/device-events?type=${encodeURIComponent(type)}&device_id=${encodeURIComponent(sel.value)}`)
+      .then(r => r.json())
+      .then(data => {
+        const events = (data.events || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const faultyEv = events.find(e => e.event_type === 'faulty' && e.issue_occur_date);
+        if (faultyEv?.issue_occur_date) {
+          document.getElementById('issue-occur-date-value').textContent =
+            faultyEv.issue_occur_date.slice(0, 16).replace('T', ' ');
+          document.getElementById('issue-occur-date-info').classList.remove('hidden');
+        }
+      }).catch(() => {});
   } else {
     document.getElementById('issue-resolve-date-section').classList.add('hidden');
     document.getElementById('issue-occurred-date-section').classList.remove('hidden');
@@ -927,6 +943,10 @@ async function saveIssueAction() {
       closeIssueModal();
       showToast('Issue resolved', 'success');
       await _refreshInventory();
+      // Ensure device flags are cleared in local inventory
+      const devices = _issueType === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[_issueType] || []);
+      const dev = devices.find(x => x.id === device_id);
+      if (dev) { dev.faulty = false; dev.has_issue = false; }
       _loadIssuesSection(_issueType);
       _loadSolutionsSection(_issueType);
     } catch (e) {
@@ -954,6 +974,9 @@ async function saveIssueAction() {
       closeIssueModal();
       showToast(`Issue reported; ${res.homer_id || 'patient'} swapped to ${swapTo}`, 'success');
       await _refreshInventory();
+      const devices = _issueType === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[_issueType] || []);
+      const dev = devices.find(x => x.id === device_id);
+      if (dev) { dev.faulty = true; dev.has_issue = true; }
       _loadIssuesSection(_issueType);
       _loadSolutionsSection(_issueType);
     } catch (e) {
@@ -975,6 +998,9 @@ async function saveIssueAction() {
       closeIssueModal();
       showToast('Issue reported', 'error');
       await _refreshInventory();
+      const devices = _issueType === 'agwatch' ? (_inventory?.agwatch || []) : (_inventory?.[_issueType] || []);
+      const dev = devices.find(x => x.id === device_id);
+      if (dev) { dev.faulty = true; dev.has_issue = true; }
       _loadIssuesSection(_issueType);
       _loadSolutionsSection(_issueType);
     } catch (e) {

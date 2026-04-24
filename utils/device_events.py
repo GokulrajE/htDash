@@ -68,12 +68,15 @@ def append_device_event(
     related_device_id: Optional[str] = None,
     patient_event_id: Optional[str] = None,
     event_date: Optional[str] = None,
+    issue_occur_date: Optional[str] = None,
 ) -> str:
     """Append one event to a device's event file. Returns the new event id."""
     data = read_device_events(hospital_folder, device_type, device_id)
     if event_date:
         try:
-            ts = datetime.strptime(event_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00')
+            d = datetime.strptime(event_date, '%Y-%m-%d')
+            now = datetime.now()
+            ts = d.replace(hour=now.hour, minute=now.minute, second=now.second).strftime('%Y-%m-%dT%H:%M:%S')
         except ValueError:
             ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     else:
@@ -89,6 +92,8 @@ def append_device_event(
         'related_device_id': related_device_id,
         'patient_event_id':  patient_event_id,
     }
+    if issue_occur_date:
+        event['issue_occur_date'] = issue_occur_date
     data.setdefault('events', []).append(event)
     write_device_events(hospital_folder, device_type, device_id, data)
     return event['id']
