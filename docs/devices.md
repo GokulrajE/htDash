@@ -259,3 +259,4 @@ These checks are enforced by `get_available_devices()` in `utils/data_access.py`
 | `/devices/api/assign-device` | POST | Admin | Manually assign modem/laptop to patient |
 | `/devices/api/unassign-device` | POST | Admin | Return modem/laptop from patient |
 | `/devices/api/recharge-sim` | POST | Admin | Record a SIM recharge |
+

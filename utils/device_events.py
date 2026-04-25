@@ -1,7 +1,7 @@
 """
 Device event utilities — per-device chronological event log.
 
-Events stored at: data/<hospital>/devices/events/<type>/<device_id>.json
+Events stored at: data/<hospital>/devices/<type>/events/<device_id>.json
 Write pattern: atomic .tmp → os.replace(), S3-aware. Mirrors utils/protocol_events.py.
 """
 
@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import Config
+from utils.data_access import _type_folder
 
 if Config.USE_S3:
     from utils.s3_store import s3_read_json, s3_write_json
@@ -25,15 +26,15 @@ def _events_path(hospital_folder: str, device_type: str, device_id: str) -> Path
         Path(Config.DATA_ROOT)
         / hospital_folder
         / 'devices'
+        / _type_folder(device_type)
         / 'events'
-        / device_type
         / f'{device_id}.json'
     )
 
 
 def read_device_events(hospital_folder: str, device_type: str, device_id: str) -> dict:
     if Config.USE_S3:
-        data = s3_read_json(f"{hospital_folder}/devices/events/{device_type}/{device_id}.json")
+        data = s3_read_json(f"{hospital_folder}/devices/{_type_folder(device_type)}/events/{device_id}.json")
         return data if data else {'events': []}
     path = _events_path(hospital_folder, device_type, device_id)
     if not path.exists():
@@ -68,12 +69,15 @@ def append_device_event(
     related_device_id: Optional[str] = None,
     patient_event_id: Optional[str] = None,
     event_date: Optional[str] = None,
+    issue_occur_date: Optional[str] = None,
 ) -> str:
     """Append one event to a device's event file. Returns the new event id."""
     data = read_device_events(hospital_folder, device_type, device_id)
     if event_date:
         try:
-            ts = datetime.strptime(event_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00')
+            d = datetime.strptime(event_date, '%Y-%m-%d')
+            now = datetime.now()
+            ts = d.replace(hour=now.hour, minute=now.minute, second=now.second).strftime('%Y-%m-%dT%H:%M:%S')
         except ValueError:
             ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     else:
@@ -89,6 +93,8 @@ def append_device_event(
         'related_device_id': related_device_id,
         'patient_event_id':  patient_event_id,
     }
+    if issue_occur_date:
+        event['issue_occur_date'] = issue_occur_date
     data.setdefault('events', []).append(event)
     write_device_events(hospital_folder, device_type, device_id, data)
     return event['id']
@@ -98,14 +104,14 @@ def read_all_device_events(hospital_folder: str, device_type: str) -> list:
     """Read and merge all event files for a device type. Returns a flat list sorted by date desc."""
     if Config.USE_S3:
         from utils.s3_store import s3_list_keys
-        prefix = f"{hospital_folder}/devices/events/{device_type}/"
+        prefix = f"{hospital_folder}/devices/{_type_folder(device_type)}/events/"
         keys = s3_list_keys(prefix)
         all_events = []
         for key in keys:
             data = s3_read_json(key) or {}
             all_events.extend(data.get('events', []))
     else:
-        events_dir = Path(Config.DATA_ROOT) / hospital_folder / 'devices' / 'events' / device_type
+        events_dir = Path(Config.DATA_ROOT) / hospital_folder / 'devices' / _type_folder(device_type) / 'events'
         all_events = []
         if events_dir.exists():
             for json_file in events_dir.glob('*.json'):
@@ -132,7 +138,7 @@ def update_device_event(hospital_folder: str, device_type: str, device_id: str, 
 
 def get_open_issues(hospital_folder: str, device_type: str) -> list:
     """Return list of {device_id, faulty_event} for devices with unresolved faulty events."""
-    events_dir = Path(Config.DATA_ROOT) / hospital_folder / 'devices' / 'events' / device_type
+    events_dir = Path(Config.DATA_ROOT) / hospital_folder / 'devices' / _type_folder(device_type) / 'events'
     issues = []
     if not events_dir.exists():
         return issues
@@ -156,7 +162,7 @@ def get_open_issues(hospital_folder: str, device_type: str) -> list:
 
 def get_resolved_issues(hospital_folder: str, device_type: str) -> list:
     """Return list of {faulty_event, resolved_event} pairs where issue was closed."""
-    events_dir = Path(Config.DATA_ROOT) / hospital_folder / 'devices' / 'events' / device_type
+    events_dir = Path(Config.DATA_ROOT) / hospital_folder / 'devices' / _type_folder(device_type) / 'events'
     resolved = []
     if not events_dir.exists():
         return resolved

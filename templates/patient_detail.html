@@ -667,12 +667,12 @@
         Cancel
       </button>
       <button type="button" id="prescription-printout-print" data-label="Print"
-              onclick="printPrescriptionPamphlet()"
+              onclick="printPrescriptionPamphlet()" disabled
               class="flex-1 px-4 py-3 bg-green-500 text-white rounded-xl font-medium hover:bg-green-600 flex items-center justify-center gap-2">
         <i class="fas fa-print text-sm"></i> Print
       </button>
       <button type="button" id="prescription-printout-save" data-label="Save PDF"
-              onclick="savePrescriptionPrintout()"
+              onclick="savePrescriptionPrintout()" disabled
               class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
         <i class="fas fa-download text-sm"></i> Save PDF
       </button>
@@ -1162,6 +1162,10 @@
         <label class="block text-sm font-medium text-slate-700 mb-1">Call Date/Time <span class="text-red-500">*</span></label>
         <input type="datetime-local" id="ric-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
       </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Issue Occurred Date <span class="text-slate-400 font-normal">(optional — when the issue first started)</span></label>
+        <input type="date" id="ric-issue-occur-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      </div>
       <!-- Per-device sections (built by JS) -->
       <div id="ric-device-sections" class="space-y-3"></div>
       <div>
@@ -1372,26 +1376,29 @@
 </div>
 
 <!-- ── Other Device Issue Modal ─────────────────────────────────────────────── -->
+<!-- Other Device Issue — Engineer Call Modal -->
 <div id="other-device-issue-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-2xl w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Other Device Issue</h3>
+      <h3 class="text-xl font-bold text-slate-800">Other Device Issue — Engineer Call</h3>
       <button onclick="hideModal('other-device-issue-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
-      <!-- Event datetime -->
+      <!-- Context banner -->
+      <div id="odi-context" class="hidden px-4 py-3 bg-purple-50 rounded-xl border border-purple-100 text-sm text-slate-600"></div>
+      <!-- Call date -->
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Issue Occurred <span class="text-red-400">*</span></label>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Call Date <span class="text-red-400">*</span></label>
         <input type="datetime-local" id="odi-completion-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
       </div>
-
-      <!-- Device rows container -->
+      <!-- Issue occur date -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Issue First Occurred <span class="text-red-400">*</span></label>
+        <input type="datetime-local" id="odi-issue-occur-date" required class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
+        <p class="text-xs text-slate-400 mt-1">When did the problem first start?</p>
+      </div>
+      <!-- Per-device sections (built by JS) -->
       <div id="odi-device-rows" class="space-y-3"></div>
-
-      <button type="button" onclick="_odiAddRow()" class="flex items-center gap-2 text-sm text-purple-600 hover:text-purple-800 font-medium">
-        <i class="fas fa-plus-circle"></i> Add device
-      </button>
-
       <!-- Overall notes -->
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
@@ -1402,7 +1409,45 @@
       <p id="odi-error" class="text-sm text-red-500 hidden mb-3"></p>
       <div class="flex gap-3">
         <button type="button" onclick="hideModal('other-device-issue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
-        <button type="button" id="odi-save" onclick="saveOtherDeviceIssue()" class="flex-1 px-4 py-3 bg-purple-600 text-white rounded-xl font-medium hover:bg-purple-700">Save</button>
+        <button type="button" id="odi-save" onclick="saveOtherDeviceIssueCall()" class="flex-1 px-4 py-3 bg-purple-600 text-white rounded-xl font-medium hover:bg-purple-700">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Other Device Issue — Engineer Visit Modal -->
+<div id="other-device-issue-visit-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-2xl w-full flex flex-col" style="max-height:90vh">
+    <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+      <h3 class="text-xl font-bold text-slate-800">Other Device Issue — Engineer Visit</h3>
+      <button onclick="hideModal('other-device-issue-visit-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
+      <!-- Context banner -->
+      <div id="odiv-context" class="hidden px-4 py-3 bg-purple-50 rounded-xl border border-purple-100 text-sm text-slate-600"></div>
+      <!-- Issue occur date (read-only from call) -->
+      <div id="odiv-issue-occur-row" class="hidden">
+        <label class="block text-sm font-medium text-slate-700 mb-1">Issue First Occurred</label>
+        <div id="odiv-issue-occur-date" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 font-mono"></div>
+      </div>
+      <!-- Visit date -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Visit Date <span class="text-red-400">*</span></label>
+        <input type="datetime-local" id="odiv-completion-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
+      </div>
+      <!-- Per-device outcome rows -->
+      <div id="odiv-device-rows" class="space-y-3"></div>
+      <!-- Notes -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <textarea id="odiv-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300 resize-none" placeholder="Overall visit notes…"></textarea>
+      </div>
+    </div>
+    <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
+      <p id="odiv-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <div class="flex gap-3">
+        <button type="button" onclick="hideModal('other-device-issue-visit-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button type="button" id="odiv-save" onclick="saveOtherDeviceIssueVisit()" class="flex-1 px-4 py-3 bg-purple-600 text-white rounded-xl font-medium hover:bg-purple-700">Save</button>
       </div>
     </div>
   </div>

@@ -14,6 +14,7 @@ from utils.data_access import (
     mark_device_faulty,
     mark_device_not_faulty,
     write_device_log,
+    _type_folder,
 )
 from utils.device_events import (
     append_device_event,
@@ -730,8 +731,10 @@ def api_add_device():
         if not phone:
             return jsonify({'error': 'phoneNumber is required'}), 400
         sims_list = read_sims(folder)
+        if any(s['id'] == phone for s in sims_list):
+            return jsonify({'error': f'SIM with phone number {phone} already exists'}), 409
         new_sim = {
-            'id':            str(uuid.uuid4()),
+            'id':            phone,
             'phoneNumber':   phone,
             'network':       (data.get('network') or '').strip(),
             'rechargeDate':  data.get('rechargeDate') or None,
@@ -1152,6 +1155,12 @@ def api_swap_device():
         new_action += f' — {notes}'
     write_device_log(folder, old_device_id, loginid, session_id, old_action, device_type=dtype)
     write_device_log(folder, new_device_id, loginid, session_id, new_action, device_type=dtype)
+    append_device_event(folder, dtype, old_device_id, event_type='faulty', by=loginid,
+                        notes=notes or 'Marked faulty (device swap)', homer_id=homer_id,
+                        related_device_id=new_device_id)
+    append_device_event(folder, dtype, new_device_id, event_type='assign', by=loginid,
+                        notes=f'Assigned (swap from {old_device_id})', homer_id=homer_id,
+                        related_device_id=old_device_id)
     return jsonify({'status': 'success', 'homer_id': homer_id})
 
 
@@ -1405,7 +1414,7 @@ def api_upload_event_attachment():
     if orig_ext not in allowed_exts:
         return jsonify({'error': f'File type not allowed. Use: {", ".join(allowed_exts)}'}), 400
 
-    attach_dir = Path(Config.DATA_ROOT) / folder / 'devices' / 'attachments' / dtype
+    attach_dir = Path(Config.DATA_ROOT) / folder / 'devices' / _type_folder(dtype) / 'attachments'
     attach_dir.mkdir(parents=True, exist_ok=True)
     filename = f'{event_id}{orig_ext}'
     file_path = attach_dir / filename
@@ -1414,7 +1423,7 @@ def api_upload_event_attachment():
     file.save(str(tmp_path))
     os.replace(tmp_path, file_path)
 
-    rel_path = f'attachments/{dtype}/{filename}'
+    rel_path = f'{_type_folder(dtype)}/attachments/{filename}'
     updated = update_device_event(folder, dtype, device_id, event_id, {'attachment': rel_path})
     if not updated:
         return jsonify({'error': 'Event not found — file saved but event not linked'}), 404

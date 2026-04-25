@@ -678,3 +678,242 @@ Extended device setup (`exp_device_install`) to include modem, laptop, and SIM c
 
 **Files Modified:**
 - `static/js/app/patient_detail.js` — Updated `_renderDeviceGraphs()` and `_loadDeviceDetail()` functions
+
+### UI Update Fixes ✅ Complete
+
+1. **Call Log History** — updates immediately after save (direct cache + re-render via `_callLogsCache`)
+2. **Pause/Resume History** — `loadPatientEvents()` now calls `renderPauseBanner` and `renderPauseHistoryTable` after every event action
+3. **Prescription Modal** — Print & Save disabled until language selected; Print auto-saves first (abort if save fails); `_prescPrintoutLanguage` starts `null`
+
+### Other Device Issue Chain ✅ Complete
+
+Engineer call + visit chain for laptop, modem, and SIM issues — analogous to the robot issue chain for Pluto/Mars.
+
+**Events (experimental patients only):**
+- `other_device_issue_call` — triggered from patient events (activation, home visits, patient call, followup calls). Records `issue_occur_date` (when the issue first started, distinct from call date) and per-device outcome (`visit_required` / `resolved_over_call`). Marks affected devices `has_issue = true` and logs a "faulty" device event carrying `issue_occur_date`. If any device needs a visit, auto-creates an `other_device_issue_visit` stub.
+- `other_device_issue_visit` — engineer physical visit. Per-device outcomes: `repaired` (clears `has_issue`) / `replaced` (swap + clear issue) / `neither`. Does NOT pause training.
+
+**Device inventory:** `has_issue: boolean` added to modem, laptop, and SIM inventory records. Clears on resolution.
+
+**Devices page:**
+- Modem and laptop rows show "Issue" badge when `has_issue = true`
+- Resolve Issue modal for modem/laptop displays `issue_occur_date` from the device's "faulty" event log
+
+**Trigger toggles** exist in: activation, home_visit_d02/d03/d15, patient_call, followup_call_d07/d21. Hidden for control patients.
+
+**Files Modified:**
+- `config/study_protocol.json` — added 2 events to `experimental[]`
+- `routes/user_management.py` — `api_complete_other_device_issue_call`, `api_complete_other_device_issue_visit`, + trigger injection in 7 routes
+- `routes/devices.py` — `has_issue` support for modem/laptop/SIM; `issue_occur_date` in resolve; `GET /devices/api/device-issue-date`
+- `templates/patient_detail.html` — engineer call modal (updated) + new engineer visit modal
+- `static/js/app/patient_detail.js` — EVENT_OPENERS + all modal functions
+- `static/js/app/devices.js` — issue badge for modem/laptop, `issue_occur_date` in resolve modal
+
+### Device Issue Resolution & UI Improvements ✅ (April 2026 - Continued)
+
+#### 1. Fixed Device Issue Resolution Bug
+**Status:** ✅ Complete
+
+**Problem:** Device issues raised from patient page and resolved via Devices page were not moving from "Open Issues" to "Resolved Issues". Recent Activity also displayed "00:00" instead of actual timestamps.
+
+**Root Cause:** `append_device_event()` in `utils/device_events.py` stored date-only strings (from datepickers) as `YYYY-MM-DDT00:00:00` (midnight). When sorting events chronologically:
+- Faulty event: `2026-04-21T14:30:00` (actual time when reported)
+- Repair event: `2026-04-21T00:00:00` (hardcoded midnight)
+- Sort result: repair < faulty → pair never detected → stayed in Open Issues
+
+**Solution:** When `event_date` is a date-only string, combine with current time of day instead of midnight:
+```python
+# Before (broken):
+ts = datetime.strptime(event_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00')
+
+# After (fixed):
+d = datetime.strptime(event_date, '%Y-%m-%d')
+now = datetime.now()
+ts = d.replace(hour=now.hour, minute=now.minute, second=now.second).strftime('%Y-%m-%dT%H:%M:%S')
+```
+
+**Files Modified:**
+- `utils/device_events.py` — `append_device_event()` lines 75–81: replaced midnight logic with current-time-on-date logic
+
+**Verification:**
+- Issues raised from patient page now move to Resolved Issues when resolved via Devices page
+- Recent Activity displays correct timestamps (e.g., "14:32") instead of "00:00"
+- Works for both robot issues (pluto/mars) and other device issues (modem/laptop/SIM)
+
+---
+
+#### 2. Report Issue Button UI Update
+**Status:** ✅ Complete
+
+**Change:** Added "Report Issue" buttons to modem and laptop card headers (top-right corner), matching pluto/mars layout.
+
+**Details:**
+- Buttons appear in card header next to "Manage" dropdown
+- Only visible for users with manage permissions (admin/engineer)
+- Removed inline action buttons from table rows (cleaner interface)
+- Hidden for retired devices
+
+**Files Modified:**
+- `templates/devices.html` — Added `issue-modems-btn` and `issue-laptops-btn` elements to card headers
+- `static/js/app/devices.js` — Added button IDs to visibility toggle list (line 72)
+
+---
+
+#### 3. Robot Issue `issue_occur_date` Tracking
+**Status:** ✅ Complete
+
+**Feature:** Added optional `issue_occur_date` field to robot issue call modal. Tracks when the robot issue first started (distinct from call date).
+
+**Details:**
+- `issue_occur_date` is date-only input (optional)
+- Passed through `api_complete_robot_issue_call` to robot_issue_call free event
+- Traced through robot_issue_visit → resolve_robot_issue_visit chain
+- Appended to device faulty event with `issue_occur_date` parameter
+- Displayed in Devices page resolve modal under "Issue First Occurred"
+
+**Files Modified:**
+- `templates/patient_detail.html` — Added date input field to `#robot-issue-call-modal` (line 1167)
+- `static/js/app/patient_detail.js` — Updated `openRobotIssueCallModal()` to clear field, `saveRobotIssueCall()` to read and pass value
+- `routes/user_management.py` — Updated `api_complete_robot_issue_call()` to read and store `issue_occur_date` (lines 1958–1962), passes to device events on visit completion (lines 2379–2398, 2424–2427)
+
+---
+
+#### 4. Other Device Issue `issue_occur_date` Required Field
+**Status:** ✅ Complete
+
+**Change:** Made `issue_occur_date` a required field in other device issue call modal. Removed automatic today-date population.
+
+**Details:**
+- Added `required` attribute to HTML input
+- Removed auto-fill logic that set value to today's date
+- Field must be manually filled by user before saving
+- Max constraint still prevents selecting future dates
+- Backend validation (line 5027) blocks empty values
+
+**User Flow:**
+1. Open other device issue call modal
+2. "Issue First Occurred" field is empty (no auto-fill)
+3. User MUST select a date/time
+4. Browser and server validate before saving
+
+**Files Modified:**
+- `templates/patient_detail.html` — Added `required` attribute to `#odi-issue-occur-date` input (line 1397)
+- `static/js/app/patient_detail.js` — Changed auto-fill from `nowStr` to empty string `''` in `openOtherDeviceIssueModal()` (line 4923)
+
+**Verification:**
+- Field is empty on modal open
+- Cannot submit modal without selecting date
+- Date picker prevents future dates
+- Value is passed correctly to backend
+
+---
+
+### Device Data Structure Refactor ✅ (April 2026)
+
+#### 1. Per-Type Folder Layout
+**Status:** ✅ Complete
+
+**Change:** Device data reorganised from flat type-grouped subdirectories to per-type folders. Every file for a device type now lives inside its own subfolder.
+
+**Old layout:**
+```
+devices/inventory/pluto.json
+devices/assignments/pluto.json
+devices/fault_reports/pluto.json
+devices/events/pluto/<device_id>.json
+devices/logs/pluto/<device_id>.log
+devices/attachments/pluto/<event_id>.ext
+```
+
+**New layout:**
+```
+devices/pluto/inventory.json
+devices/pluto/assignments.json
+devices/pluto/faultReport.json
+devices/pluto/events/<device_id>.json
+devices/pluto/logs/<device_id>.log
+devices/pluto/attachments/<event_id>.ext
+```
+
+Type → folder mapping: `pluto→pluto`, `mars→mars`, `agwatch→agwatch`, `modem/modems→modems`, `laptop/laptops→laptops`, `sims→sims`
+
+**Key implementation:**
+- `_TYPE_FOLDER` dict and `_type_folder()` helper added to `utils/data_access.py` as the single source of truth for all path construction
+- Replaces the old `_LOG_TYPE_FOLDER` dict (removed)
+- All 11 read/write functions in `utils/data_access.py` updated
+- `utils/device_events.py` updated — all `_events_path()` and S3 key strings
+- `routes/devices.py` — attachment upload/download paths updated
+- S3 keys follow the same new pattern
+
+**Files Modified:**
+- `utils/data_access.py` — `_TYPE_FOLDER`, `_type_folder()`, all inventory/assignment/fault_report/log functions
+- `utils/device_events.py` — `_events_path()`, `read_all_device_events()`, `get_open_issues()`, `get_resolved_issues()`
+- `routes/devices.py` — attachment paths in `api_upload_event_attachment()`
+- `scripts/migrate_device_data.py` — NEW idempotent migration script
+- `docs/device_data_schemas.md` — updated folder structure diagram and all file path references
+
+**Migration:** Run `python scripts/migrate_device_data.py` once per environment to move existing data files. Script is idempotent (skips files already moved). Also updates stored `attachment` field references inside event JSON files.
+
+---
+
+#### 2. SIM ID = Phone Number
+**Status:** ✅ Complete
+
+**Change:** SIM `id` field is now the phone number instead of a UUID. Prevents the same phone number from being added twice or linked to two different modems.
+
+**Details:**
+- `api_add_device` for `dtype='sim'` sets `id = phone` (was `uuid4()`)
+- Duplicate check: if phone number already exists in inventory, returns 409
+- `phoneNumber` field kept alongside `id` for display compatibility
+- `sim_id` on modem inventory now references the phone number string (not a UUID)
+
+**Files Modified:**
+- `routes/devices.py` — `api_add_device()` SIM branch: duplicate check + `id = phone`
+
+---
+
+#### 3. SIM Availability Fix
+**Status:** ✅ Complete
+
+**Problem:** Assigned SIMs still appeared in the device setup dropdown for new patients. The filter `s.get('assigned_date')` checked a field that doesn't exist on SIM records.
+
+**Fix:** Derive availability from modem inventory — a SIM is unavailable if its `id` appears as `sim_id` on any modem record.
+
+```python
+# Old (broken — field doesn't exist):
+available_sims = [s for s in all_sims if not s.get('assigned_date')]
+
+# Fixed:
+modem_inv = read_device_inventory(folder, 'modems')
+used_sim_ids = {d.get('sim_id') for d in modem_inv if d.get('sim_id')}
+available_sims = [s for s in all_sims if s['id'] not in used_sim_ids]
+```
+
+**Files Modified:**
+- `routes/user_management.py` — `api_available_devices()` SIM filtering logic
+
+---
+
+#### 4. Device Swap — Missing Assign Events for New Device
+**Status:** ✅ Complete
+
+**Problem:** When a device is swapped via the Devices page or during a robot issue visit, the new (replacement) device never got an `assign` event record. So it never appeared in Recent Activity, unlike modem/laptop replacements which did.
+
+**Root cause:** Three swap paths were missing `append_device_event('assign', ...)` for the new device:
+1. `api_swap_device` in `routes/devices.py` — Devices page "Report Issue + swap" flow
+2. `api_complete_robot_issue_visit` in `routes/user_management.py` — robot issue visit swapped outcome
+3. `api_complete_resolve_robot_issue_visit` in `routes/user_management.py` — resolve robot issue visit new device delivery + other-device swap
+
+All three already called `write_device_log()` for the new device but not `append_device_event()`.
+
+**Fix:** Added `append_device_event(..., event_type='assign')` for the new device immediately after `write_device_assignments()` in each of the three paths. Also added `append_device_event(..., event_type='faulty')` for the old device in `api_swap_device` (was also missing).
+
+**Files Modified:**
+- `routes/devices.py` — `api_swap_device()`: added faulty event for old device + assign event for new device
+- `routes/user_management.py` — `api_complete_robot_issue_visit()` swapped branch: assign event for new device
+- `routes/user_management.py` — `api_complete_resolve_robot_issue_visit()` main replacement loop + other-device swap: assign event for new device
+
+**Verification:**
+- After a pluto/mars swap from Devices page → Overview tab Recent Activity shows "Faulty" (old) and "Assigned" (new)
+- After robot issue visit with device swap → Recent Activity shows "Assigned" for replacement device
+- Matches existing behaviour for modem/laptop replacements
