@@ -15,6 +15,8 @@ from utils.data_access import (
     mark_device_not_faulty,
     write_device_log,
     _type_folder,
+    read_patient_meta,
+    find_patient_folder,
 )
 from utils.device_events import (
     append_device_event,
@@ -860,6 +862,62 @@ def api_toggle_clinic():
     return jsonify({'status': 'success', 'clinic_only': new_clinic})
 
 
+# ── Get patient enrollment date for date validation ─────────────────────────────
+
+@bp.route('/api/device-validation-dates', methods=['POST'])
+def api_device_validation_dates():
+    """Fetch patient enrollment date and device issue occurrence date for validation."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    data = request.get_json() or {}
+    dtype = (data.get('device_type') or '').strip().lower()
+    device_id = (data.get('device_id') or '').strip()
+
+    if dtype not in ('pluto', 'mars', 'agwatch', 'modems', 'laptops') or not device_id:
+        return jsonify({'error': 'device_type and device_id are required'}), 400
+
+    # Get device inventory to find assigned patient
+    devices = read_device_inventory(folder, dtype)
+    device = next((d for d in devices if d['id'] == device_id), None)
+    if not device:
+        return jsonify({'error': 'Device not found'}), 404
+
+    enroll_date = None
+    issue_occur_date = None
+
+    # If device is assigned to a patient, get their activation date
+    if device.get('assigned_to'):
+        homer_id = device['assigned_to'].get('homerID')
+        patient_folder = find_patient_folder(flask_session['login_place'], homer_id)
+        if patient_folder:
+            patient = read_patient_meta(patient_folder, homer_id)
+            if patient:
+                enroll_date = patient.get('activationDate')
+
+    # Get device's issue occurrence date from faulty event
+    try:
+        events_data = read_device_events(folder, dtype, device_id)
+        events = events_data.get('events', [])
+        # Find the most recent faulty event
+        for ev in sorted(events, key=lambda e: e.get('date', ''), reverse=True):
+            if ev.get('event_type') == 'faulty':
+                issue_occur_date = ev.get('issue_occur_date') or ev.get('date', '').split('T')[0]
+                break
+    except Exception as e:
+        # Silently continue if no events found
+        pass
+
+    return jsonify({
+        'enroll_date': enroll_date,
+        'issue_occur_date': issue_occur_date,
+    })
+
+
 # ── Toggle issue state ────────────────────────────────────────────────────────
 
 @bp.route('/api/toggle-issue', methods=['POST'])
@@ -884,6 +942,26 @@ def api_toggle_issue():
 
     if dtype not in ('pluto', 'mars', 'agwatch', 'modems', 'laptops') or not device_id:
         return jsonify({'error': 'device_type (pluto/mars/agwatch/modems/laptops) and device_id are required'}), 400
+
+    # Validate issue_date (when reporting issue)
+    if has_issue and issue_date:
+        try:
+            issue_dt = datetime.strptime(issue_date, '%Y-%m-%d')
+            today = datetime.now()
+            if issue_dt > today:
+                return jsonify({'error': 'Issue occurred date cannot be in the future'}), 400
+        except ValueError:
+            return jsonify({'error': 'Invalid issue date format'}), 400
+
+    # Validate resolve_date (when resolving issue)
+    if not has_issue and resolve_date:
+        try:
+            resolve_dt = datetime.strptime(resolve_date, '%Y-%m-%d')
+            today = datetime.now()
+            if resolve_dt > today:
+                return jsonify({'error': 'Resolution date cannot be in the future'}), 400
+        except ValueError:
+            return jsonify({'error': 'Invalid resolution date format'}), 400
 
     if dtype in ('pluto', 'mars'):
         if has_issue:
@@ -1087,9 +1165,20 @@ def api_swap_device():
     old_device_id = (data.get('old_device_id') or '').strip()
     new_device_id = (data.get('new_device_id') or '').strip()
     notes         = (data.get('notes') or '').strip()
+    issue_date    = (data.get('issue_date') or '').strip() or None
 
     if dtype not in ('pluto', 'mars', 'agwatch') or not old_device_id or not new_device_id:
         return jsonify({'error': 'device_type, old_device_id, new_device_id required'}), 400
+
+    # Validate issue_date (when reporting issue during swap)
+    if issue_date:
+        try:
+            issue_dt = datetime.strptime(issue_date, '%Y-%m-%d')
+            today = datetime.now()
+            if issue_dt > today:
+                return jsonify({'error': 'Issue occurred date cannot be in the future'}), 400
+        except ValueError:
+            return jsonify({'error': 'Invalid issue date format'}), 400
 
     assignments = read_device_assignments(folder, dtype)
     now_str = datetime.now().strftime('%Y-%m-%dT%H:%M')
@@ -1213,6 +1302,27 @@ def api_assign_device():
     }
     assignments.append(new_asgn)
     write_device_assignments(folder, dtype, assignments)
+
+    # For modems: transfer sim_id from previously-assigned modem if any
+    if dtype == 'modems':
+        prev_ids = {a['device_id'] for a in assignments
+                    if a.get('homer_id') == homer_id
+                    and a.get('returned_date') is not None
+                    and a['device_id'] != device_id}
+        if prev_ids:
+            orphaned_sim = None
+            for m in inv:
+                if m['id'] in prev_ids and m.get('sim_id'):
+                    orphaned_sim = m['sim_id']
+                    m['sim_id'] = None
+                    break
+            if orphaned_sim:
+                for m in inv:
+                    if m['id'] == device_id:
+                        m['sim_id'] = orphaned_sim
+                        m['sim_assigned_date'] = now_str
+                        break
+                write_device_inventory(folder, dtype, {'devices': inv})
 
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', 0) or 0

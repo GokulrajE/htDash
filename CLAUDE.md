@@ -917,3 +917,68 @@ All three already called `write_device_log()` for the new device but not `append
 - After a pluto/mars swap from Devices page → Overview tab Recent Activity shows "Faulty" (old) and "Assigned" (new)
 - After robot issue visit with device swap → Recent Activity shows "Assigned" for replacement device
 - Matches existing behaviour for modem/laptop replacements
+
+#### 5. Device Issue Date Validation ✅ Complete
+
+**Feature:** Add comprehensive date validation to device issue modals across Devices page and patient detail page.
+
+**Constraints Applied:**
+
+**A. Issue Occurred Date** (when issue was first noticed):
+- **Robot Issues:** Required field, Min = Patient's activation date (`activationDate`), Max = today
+- **Other Device Issues:** Optional, Min = Patient's activation date, Max = today
+- **Device Report Issue (Devices page):** Optional, Min = Patient's activation date, Max = today
+
+**B. Call/Visit Date** (when engineer was called or visited):
+- Minimum: Issue Occurred Date (from the issue that triggered this)
+- Maximum: Current date (today)
+- Applies to: robot_issue_visit, resolve_robot_issue_visit, other_device_issue_visit, device resolve modal
+
+**C. Resolution Date** (when issue was resolved):
+- Minimum: Issue Occurred Date
+- Maximum: Current date (today)
+- Applies to: Device resolve modal (Devices page only)
+
+**Implementation Details:**
+
+**Devices Page (devices.js & routes/devices.py):**
+- When device is selected, fetch patient's `enrollDate` + most recent issue's `issue_occur_date` via API
+- Set `min`/`max` on issue-occurred-date input: `[enrollDate, today]`
+- Set `min`/`max` on resolve-date input: `[issue_occur_date, today]`
+- Client-side validation in `saveIssueAction()` before submit
+- Server-side validation in `/devices/api/toggle-issue` and `/devices/api/swap-device`
+
+**Patient Detail Page (patient_detail.js & routes/user_management.py):**
+- API endpoint: fetch patient's enrollDate + all relevant issue's issue_occur_date
+- Applied to 5 event modals:
+  1. `robot_issue_call` — issue_occur_date: `[enrollDate, today]`; call_date: `[issue_occur_date, today]`
+  2. `robot_issue_visit` — visit_date: `[issue_occur_date, today]` (from triggered call)
+  3. `resolve_robot_issue_visit` — visit_date: `[issue_occur_date, today]`
+  4. `other_device_issue_call` — issue_occur_date: `[enrollDate, today]`; call_date: `[issue_occur_date, today]`
+  5. `other_device_issue_visit` — visit_date: `[issue_occur_date, today]`
+- Client-side validation before submit
+- Server-side validation in all complete-event routes
+
+**Files Modified:**
+- `static/js/app/devices.js` — Enhanced `onIssueDeviceChange()` + `saveIssueAction()`
+- `routes/devices.py` — New API endpoint + validation in toggle-issue & swap-device
+- `static/js/app/patient_detail.js` — New API call + modal setup + validation in 5 save functions
+- `routes/user_management.py` — New API endpoint + validation in 5 complete-event routes
+
+**Error Messages:**
+- "Issue occurred date must be between enrollment date (YYYY-MM-DD) and today"
+- "Resolution date must be between issue occurred date (YYYY-MM-DD) and today"
+- "Dates cannot be in the future"
+
+**Verification Checklist:**
+- ✅ Syntax: Python and JavaScript code compiles without errors
+- ✅ API Endpoint: `/devices/api/device-validation-dates` created and returns enroll_date + issue_occur_date
+- ✅ Backend Validation: Both `api_toggle_issue` and `api_swap_device` validate date ranges
+- ✅ Frontend Bounds: Date inputs show visual bounds (min/max attributes set from API response)
+- ✅ Frontend Validation: `saveIssueAction()` validates dates before submission with error messages
+- ✅ User Flow: 
+  1. Select device → fetch bounds → set min/max on inputs
+  2. Pick date outside range → browser prevents selection OR user enters via calendar
+  3. Try to save with invalid date → JS validation shows error message
+  4. If JS bypassed → backend validation catches and returns 400 error
+- ✅ Backward Compatibility: Existing device issue functionality unchanged; validation is additive only

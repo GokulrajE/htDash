@@ -7,7 +7,7 @@ from utils.data_access import (
     get_available_devices, read_device_inventory, write_device_inventory, read_device_assignments,
     write_device_assignments, write_device_log, mark_device_lost,
     mark_device_faulty, mark_device_not_faulty,
-    read_fault_reports, write_fault_reports, read_sims,
+    read_fault_reports, write_fault_reports, read_sims, write_sims,
 )
 from utils.protocol_events import (
     create_protocol_events, populate_activation_dates,
@@ -30,6 +30,27 @@ import qrcode
 import io
 import base64
 
+
+
+def _parse_date_flex(date_str):
+    """Parse multiple possible date formats."""
+    if not date_str:
+        return None
+
+    formats = (
+        '%Y-%m-%d',
+        '%d-%m-%Y',
+        '%Y-%m-%dT%H:%M',   # <-- ADD THIS
+        '%Y-%m-%dT%H:%M:%S' # <-- optional (safer)
+    )
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str.strip(), fmt)
+        except ValueError:
+            continue
+
+    return None
 
 bp = Blueprint("user_management", __name__)
 
@@ -1937,6 +1958,45 @@ def api_cancel_event(homer_id, event_type):
     return jsonify({'ok': True})
 
 
+@bp.route('/api/patients/<homer_id>/issue-validation-dates', methods=['POST'])
+def api_issue_validation_dates(homer_id):
+    """Fetch patient enrollment date and triggered event's issue occurrence date for validation."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    data = request.get_json() or {}
+    triggered_by_id = (data.get('triggered_by_id') or '').strip()
+
+    # Get patient enrollment date
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient data not found'}), 404
+
+    enroll_date = patient.get('activationDate')
+
+    # Get issue occurrence date from triggered event (if applicable)
+    issue_occur_date = None
+    if triggered_by_id:
+        events_data = read_protocol_events(folder, homer_id)
+        if events_data:
+            # Search in free events for the triggered event
+            for event_type_key in ['robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
+                                    'other_device_issue_call', 'other_device_issue_visit']:
+                for ev in events_data.get('free', {}).get(event_type_key, []):
+                    if ev.get('id') == triggered_by_id:
+                        issue_occur_date = ev.get('issue_occur_date') or ev.get('completion_date', '').split('T')[0]
+                        break
+
+    return jsonify({
+        'enroll_date': enroll_date,
+        'issue_occur_date': issue_occur_date,
+    })
+
+
 @bp.route('/api/patients/<homer_id>/complete-event/robot-issue-call', methods=['POST'])
 def api_complete_robot_issue_call(homer_id):
     """Complete a robot_issue_call stub; if any device needs a visit, create robot_issue_visit stub."""
@@ -1966,10 +2026,37 @@ def api_complete_robot_issue_call(homer_id):
     if not completion_date:
         return jsonify({'error': 'Call date is required.'}), 400
     try:
-        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+        call_dt = datetime.strptime(completion_date, '%Y-%m-%dT%H:%M')
+        if call_dt > datetime.now():
             return jsonify({'error': 'Call date cannot be in the future.'}), 400
     except ValueError:
-        return jsonify({'error': 'Invalid date format.'}), 400
+        return jsonify({'error': 'Invalid call date format.'}), 400
+
+    # Validate issue_occur_date (required for robot issues)
+    if not issue_occur_date:
+        return jsonify({'error': 'Issue occurred date is required.'}), 400
+    print(f"DEBUG: Received issue_occur_date: '{issue_occur_date}' (type: {type(issue_occur_date)})")
+    try:
+        issue_dt = _parse_date_flex(issue_occur_date)
+        print(f"DEBUG: Parsed issue_dt: {issue_dt}")
+        if not issue_dt:
+            return jsonify({'error': f'Invalid issue occurred date format: {issue_occur_date}'}), 400
+        today = datetime.now()
+        print(f"DEBUG: Today's date: {today.date()}")
+        if issue_dt > today:
+            return jsonify({'error': 'Issue occurred date cannot be in the future.'}), 400
+        if patient and patient.get('activationDate'):
+            print(f"DEBUG: activationDate = {patient.get('activationDate')}")
+            activation_dt = _parse_date_flex(patient['activationDate'])
+            if not activation_dt:
+                return jsonify({'error': f"Invalid activation date format: {patient['activationDate']}"}), 400
+            if issue_dt.date() < activation_dt.date():
+                return jsonify({'error': f"Issue occurred date must be on or after activation date ({patient['activationDate']})."}), 400
+        # Validate call date is after issue occurred date
+        if call_dt.date() < issue_dt.date():
+            return jsonify({'error': 'Call date must be on or after issue occurred date.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid issue occurred date format.'}), 400
     if not isinstance(devices, list):
         return jsonify({'error': 'devices must be a list.'}), 400
     valid_outcomes = ('resolved', 'visit_required')
@@ -2063,15 +2150,35 @@ def api_complete_other_device_issue_call(homer_id):
     if not completion_date:
         return jsonify({'error': 'Call date is required.'}), 400
     try:
-        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+        call_dt = datetime.strptime(completion_date, '%Y-%m-%dT%H:%M')
+        if call_dt > datetime.now():
             return jsonify({'error': 'Call date cannot be in the future.'}), 400
     except ValueError:
-        return jsonify({'error': 'Invalid date format.'}), 400
+        return jsonify({'error': 'Invalid call date format.'}), 400
+
+    # Validate issue_occur_date (if provided)
     if issue_occur_date:
+        print(f"DEBUG: Received issue_occur_date: '{issue_occur_date}' (type: {type(issue_occur_date)})")
         try:
-            datetime.strptime(issue_occur_date, '%Y-%m-%dT%H:%M')
+            issue_dt = _parse_date_flex(issue_occur_date)
+            print(f"DEBUG: Parsed issue_dt: {issue_dt}")
+            if not issue_dt:
+                return jsonify({'error': f'Invalid issue occurred date format: {issue_occur_date}'}), 400
+            today = datetime.now()
+            if issue_dt > today:
+                return jsonify({'error': 'Issue occurred date cannot be in the future.'}), 400
+            if patient and patient.get('activationDate'):
+                print(f"DEBUG: activationDate = {patient.get('activationDate')}")
+                activation_dt = _parse_date_flex(patient['activationDate'])
+                if not activation_dt:
+                    return jsonify({'error': f"Invalid activation date format: {patient['activationDate']}"}), 400
+                if issue_dt.date() < activation_dt.date():
+                    return jsonify({'error': f"Issue occurred date must be on or after activation date ({patient['activationDate']})."}), 400
+            # Validate call date is after issue occurred date
+            if call_dt.date() < issue_dt.date():
+                return jsonify({'error': 'Call date must be on or after issue occurred date.'}), 400
         except ValueError:
-            return jsonify({'error': 'Invalid issue_occur_date format.'}), 400
+            return jsonify({'error': 'Invalid issue occurred date format.'}), 400
     if not isinstance(devices_list, list) or not devices_list:
         return jsonify({'error': 'At least one device entry is required.'}), 400
 
@@ -2115,30 +2222,58 @@ def api_complete_other_device_issue_call(homer_id):
         if not device_id:
             continue
 
-        inv_data = {'devices': read_device_inventory(device_folder, dtype)}
-        if outcome == 'visit_required':
-            for dev in inv_data['devices']:
-                if dev['id'] == device_id:
-                    dev['has_issue'] = True
-                    break
-            write_device_inventory(device_folder, dtype, inv_data)
-            ev_id = append_device_event(device_folder, dtype, device_id,
-                                        event_type='faulty', by=loginid,
-                                        notes=d_notes, homer_id=homer_id,
-                                        patient_event_id=event_id,
-                                        issue_occur_date=issue_occur_date)
-        else:  # resolved_over_call
-            # Clear any lingering has_issue flag
-            for dev in inv_data['devices']:
-                if dev['id'] == device_id and dev.get('has_issue'):
-                    dev['has_issue'] = False
-                    break
-            write_device_inventory(device_folder, dtype, inv_data)
-            ev_id = append_device_event(device_folder, dtype, device_id,
-                                        event_type='repair', by=loginid,
-                                        notes=d_notes, homer_id=homer_id,
-                                        patient_event_id=event_id,
-                                        issue_occur_date=issue_occur_date)
+        if dtype == 'sims':
+            # SIM data is stored under 'sims' key, use read_sims/write_sims
+            all_sims = read_sims(device_folder)
+            if outcome == 'visit_required':
+                for s in all_sims:
+                    if s['id'] == device_id:
+                        s['has_issue'] = True
+                        break
+                write_sims(device_folder, all_sims)
+                ev_id = append_device_event(device_folder, dtype, device_id,
+                                            event_type='faulty', by=loginid,
+                                            notes=d_notes, homer_id=homer_id,
+                                            patient_event_id=event_id,
+                                            issue_occur_date=issue_occur_date)
+            else:  # resolved_over_call
+                # Clear any lingering has_issue flag
+                for s in all_sims:
+                    if s['id'] == device_id and s.get('has_issue'):
+                        s['has_issue'] = False
+                        break
+                write_sims(device_folder, all_sims)
+                ev_id = append_device_event(device_folder, dtype, device_id,
+                                            event_type='repair', by=loginid,
+                                            notes=d_notes, homer_id=homer_id,
+                                            patient_event_id=event_id,
+                                            issue_occur_date=issue_occur_date)
+        else:
+            # Modems/laptops use read_device_inventory/write_device_inventory
+            inv_data = {'devices': read_device_inventory(device_folder, dtype)}
+            if outcome == 'visit_required':
+                for dev in inv_data['devices']:
+                    if dev['id'] == device_id:
+                        dev['has_issue'] = True
+                        break
+                write_device_inventory(device_folder, dtype, inv_data)
+                ev_id = append_device_event(device_folder, dtype, device_id,
+                                            event_type='faulty', by=loginid,
+                                            notes=d_notes, homer_id=homer_id,
+                                            patient_event_id=event_id,
+                                            issue_occur_date=issue_occur_date)
+            else:  # resolved_over_call
+                # Clear any lingering has_issue flag
+                for dev in inv_data['devices']:
+                    if dev['id'] == device_id and dev.get('has_issue'):
+                        dev['has_issue'] = False
+                        break
+                write_device_inventory(device_folder, dtype, inv_data)
+                ev_id = append_device_event(device_folder, dtype, device_id,
+                                            event_type='repair', by=loginid,
+                                            notes=d_notes, homer_id=homer_id,
+                                            patient_event_id=event_id,
+                                            issue_occur_date=issue_occur_date)
         device_results.append({'device_type': dtype, 'device_id': device_id,
                                 'outcome': outcome, 'event_id': ev_id})
 
@@ -2200,10 +2335,11 @@ def api_complete_other_device_issue_visit(homer_id):
     if not completion_date:
         return jsonify({'error': 'Visit date is required.'}), 400
     try:
-        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+        visit_dt = datetime.strptime(completion_date, '%Y-%m-%dT%H:%M')
+        if visit_dt > datetime.now():
             return jsonify({'error': 'Visit date cannot be in the future.'}), 400
     except ValueError:
-        return jsonify({'error': 'Invalid date format.'}), 400
+        return jsonify({'error': 'Invalid visit date format.'}), 400
     if not isinstance(device_outcomes, list) or not device_outcomes:
         return jsonify({'error': 'At least one device outcome is required.'}), 400
 
@@ -2230,6 +2366,27 @@ def api_complete_other_device_issue_visit(homer_id):
     if not entry:
         return jsonify({'error': 'Other device issue visit stub not found.'}), 404
 
+    # Look up issue_occur_date from the triggering other_device_issue_call entry
+    call_issue_occur_date = None
+    triggered_by = entry.get('triggered_by', {})
+    if triggered_by.get('type') == 'other_device_issue_call':
+        call_entry = next(
+            (e for e in events_data.get('free', {}).get('other_device_issue_call', [])
+             if e.get('id') == triggered_by.get('id')),
+            None
+        )
+        if call_entry:
+            call_issue_occur_date = call_entry.get('issue_occur_date')
+
+    # Validate visit date is after issue occurred date
+    if call_issue_occur_date:
+        try:
+            issue_dt = _parse_date_flex(call_issue_occur_date)
+            if issue_dt and visit_dt.date() < issue_dt.date():
+                return jsonify({'error': f'Visit date must be on or after issue occurred date ({call_issue_occur_date}).'}), 400
+        except ValueError:
+            pass
+
     device_folder = get_hospital_folder(flask_session['login_place'])
     loginid    = flask_session.get('loginid', flask_session.get('login_place', 'unknown'))
     session_id = flask_session.get('session_id', -1)
@@ -2251,36 +2408,74 @@ def api_complete_other_device_issue_visit(homer_id):
 
         if outcome == 'repaired':
             # Clear has_issue — device is fixed
-            for dev in inv_data['devices']:
-                if dev['id'] == device_id:
-                    dev['has_issue'] = False
-                    break
-            write_device_inventory(device_folder, dtype, inv_data)
+            if dtype == 'sims':
+                all_sims = read_sims(device_folder)
+                for s in all_sims:
+                    if s['id'] == device_id:
+                        s['has_issue'] = False
+                        break
+                write_sims(device_folder, all_sims)
+            else:
+                for dev in inv_data['devices']:
+                    if dev['id'] == device_id:
+                        dev['has_issue'] = False
+                        break
+                write_device_inventory(device_folder, dtype, inv_data)
             append_device_event(device_folder, dtype, device_id,
                                 event_type='repair', by=loginid,
                                 notes=d_notes, homer_id=homer_id,
                                 patient_event_id=event_id)
 
         if outcome == 'replaced' and new_dev_id:
-            # has_issue stays True on old device — faulty until engineer resolves from Devices page
-            # Close old assignment and create new one for replacement device
-            asgns = read_device_assignments(device_folder, dtype)
-            for a in asgns:
-                if a.get('device_id') == device_id and a.get('returned_date') is None:
-                    a['returned_date'] = now_hhmm
-                    break
-            asgns.append({
-                'id':            str(uuid.uuid4()),
-                'device_id':     new_dev_id,
-                'homer_id':      homer_id,
-                'assigned_date': now_hhmm,
-                'returned_date': None,
-            })
-            write_device_assignments(device_folder, dtype, asgns)
-            append_device_event(device_folder, dtype, new_dev_id,
-                                event_type='assign', by=loginid,
-                                notes=f'Replacement for {device_id} (patient {homer_id})',
-                                homer_id=homer_id)
+            if dtype == 'sims':
+                # SIM replacement: update modem.sim_id to new SIM
+                modem_inv = read_device_inventory(device_folder, 'modems')
+                for m in modem_inv:
+                    if m.get('sim_id') == device_id:
+                        m['sim_id'] = new_dev_id
+                        m['sim_assigned_date'] = now_hhmm
+                        break
+                write_device_inventory(device_folder, 'modems', {'devices': modem_inv})
+                append_device_event(device_folder, dtype, new_dev_id,
+                                    event_type='assign', by=loginid,
+                                    notes=f'Replacement for {device_id} (patient {homer_id})',
+                                    homer_id=homer_id)
+            else:
+                # Modem/laptop replacement: close old assignment and create new one
+                asgns = read_device_assignments(device_folder, dtype)
+                for a in asgns:
+                    if a.get('device_id') == device_id and a.get('returned_date') is None:
+                        a['returned_date'] = now_hhmm
+                        break
+                asgns.append({
+                    'id':            str(uuid.uuid4()),
+                    'device_id':     new_dev_id,
+                    'homer_id':      homer_id,
+                    'assigned_date': now_hhmm,
+                    'returned_date': None,
+                })
+                write_device_assignments(device_folder, dtype, asgns)
+                append_device_event(device_folder, dtype, new_dev_id,
+                                    event_type='assign', by=loginid,
+                                    notes=f'Replacement for {device_id} (patient {homer_id})',
+                                    homer_id=homer_id)
+
+                # For modems: transfer sim_id from old modem to new modem
+                if dtype == 'modems':
+                    inv_data = {'devices': read_device_inventory(device_folder, 'modems')}
+                    old_sim_id = None
+                    for m in inv_data['devices']:
+                        if m['id'] == device_id and m.get('sim_id'):
+                            old_sim_id = m['sim_id']
+                            m['sim_id'] = None
+                            break
+                    if old_sim_id:
+                        for m in inv_data['devices']:
+                            if m['id'] == new_dev_id:
+                                m['sim_id'] = old_sim_id
+                                m['sim_assigned_date'] = now_hhmm
+                                break
+                        write_device_inventory(device_folder, 'modems', inv_data)
 
         saved_outcomes.append({'device_type': dtype, 'device_id': device_id,
                                 'outcome': outcome, 'new_device_id': new_dev_id,
@@ -2332,10 +2527,11 @@ def api_complete_robot_issue_visit(homer_id):
     if not completion_date:
         return jsonify({'error': 'Visit date is required.'}), 400
     try:
-        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+        visit_dt = datetime.strptime(completion_date, '%Y-%m-%dT%H:%M')
+        if visit_dt > datetime.now():
             return jsonify({'error': 'Visit date cannot be in the future.'}), 400
     except ValueError:
-        return jsonify({'error': 'Invalid date format.'}), 400
+        return jsonify({'error': 'Invalid visit date format.'}), 400
     if not isinstance(device_outcomes, list) or not device_outcomes:
         return jsonify({'error': 'At least one device outcome is required.'}), 400
 
@@ -2386,6 +2582,16 @@ def api_complete_robot_issue_visit(homer_id):
         )
         if call_entry:
             call_issue_occur_date = call_entry.get('issue_occur_date')
+
+    # Validate visit date is after issue occurred date
+    if call_issue_occur_date:
+        try:
+            issue_dt = _parse_date_flex(call_issue_occur_date)
+            if issue_dt and visit_dt.date() < issue_dt.date():
+                print(f"DEBUG: call_issue_occur_date = {call_issue_occur_date}, issue_dt = {issue_dt.date()}, visit_dt = {visit_dt.date().date()}")
+                return jsonify({'error': f'Visit date must be on or after issue occurred date ({call_issue_occur_date}).'}), 400
+        except ValueError:
+            pass
 
     filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
@@ -2550,10 +2756,11 @@ def api_complete_resolve_robot_issue_visit(homer_id):
     if not completion_date:
         return jsonify({'error': 'Visit date is required.'}), 400
     try:
-        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+        visit_dt = datetime.strptime(completion_date, '%Y-%m-%dT%H:%M')
+        if visit_dt > datetime.now():
             return jsonify({'error': 'Visit date cannot be in the future.'}), 400
     except ValueError:
-        return jsonify({'error': 'Invalid date format.'}), 400
+        return jsonify({'error': 'Invalid visit date format.'}), 400
     if not can_resume_from:
         return jsonify({'error': 'Can resume from date is required.'}), 400
     try:
@@ -2624,6 +2831,15 @@ def api_complete_resolve_robot_issue_visit(homer_id):
                 )
                 if _call_entry:
                     call_issue_occur_date = _call_entry.get('issue_occur_date')
+
+    # Validate visit date is after issue occurred date
+    if call_issue_occur_date:
+        try:
+            issue_dt = datetime.strptime(call_issue_occur_date, '%Y-%m-%d')
+            if visit_dt.date() < issue_dt.date():
+                return jsonify({'error': f'Visit date must be on or after issue occurred date ({call_issue_occur_date}).'}), 400
+        except ValueError:
+            pass
 
     filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
     now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
