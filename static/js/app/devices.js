@@ -204,7 +204,7 @@ async function _loadRecentActivity() {
         <span class="font-mono text-sm text-slate-700 font-medium">${_esc(displayId)}</span>
         ${ev.homer_id ? `<span class="text-sm text-slate-500">→ ${_esc(ev.homer_id)}</span>` : ''}
         ${ev.notes ? `<span class="text-xs text-slate-400 truncate max-w-xs">${_esc(ev.notes)}</span>` : ''}
-        <span class="ml-auto text-xs text-slate-400 whitespace-nowrap">${_fmtDate(ev.date)} · ${_esc(ev.by)}</span>
+        <span class="ml-auto text-xs text-slate-400 whitespace-nowrap">${_fmtDate(ev.event_date || ev.date)} · ${_esc(ev.by)}</span>
       </div>`;
     }).join('');
   } catch (e) {
@@ -261,7 +261,7 @@ async function _loadIssuesSection(type) {
                   ${ev.homer_id ? `<span class="text-xs text-slate-500">Patient: ${_esc(ev.homer_id)}</span>` : ''}
                 </div>
                 ${ev.notes ? `<p class="text-sm text-slate-600">${_esc(ev.notes)}</p>` : ''}
-                ${ev.date ? `<p class="text-xs text-slate-400 mt-1">${_fmtDate(ev.date)} · ${_esc(ev.by)}</p>` : '<p class="text-xs text-slate-400 mt-1">Flagged in inventory</p>'}
+                ${ev.date ? `<p class="text-xs text-slate-400 mt-1">${_fmtDate(ev.issue_occur_date || ev.event_date || ev.date)} · ${_esc(ev.by)}</p>` : '<p class="text-xs text-slate-400 mt-1">Flagged in inventory</p>'}
               </div>
               ${_canManage ? `
                 <button onclick="openIssueModal('${type}', '${_esc(ev.device_id)}')"
@@ -277,7 +277,7 @@ async function _loadIssuesSection(type) {
                   <span class="text-xs text-slate-400 italic">Retired</span>
                 </div>
                 ${ev.notes ? `<p class="text-sm text-slate-500">${_esc(ev.notes)}</p>` : ''}
-                ${ev.date ? `<p class="text-xs text-slate-400 mt-1">${_fmtDate(ev.date)}</p>` : ''}
+                ${ev.date ? `<p class="text-xs text-slate-400 mt-1">${_fmtDate(ev.event_date || ev.date)}</p>` : ''}
               </div>
             </div>`).join('')}
         </div>
@@ -317,9 +317,9 @@ async function _loadSolutionsSection(type) {
                 ${pair.faulty.homer_id ? `<span class="text-xs text-slate-500">Patient: ${_esc(pair.faulty.homer_id)}</span>` : ''}
               </div>
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                <span class="text-red-500 font-medium"><i class="fas fa-exclamation-circle mr-1"></i>${_fmtDate(pair.faulty.date)}</span>
+                <span class="text-red-500 font-medium"><i class="fas fa-exclamation-circle mr-1"></i>${_fmtDate(pair.faulty.issue_occur_date || pair.faulty.event_date || pair.faulty.date)}</span>
                 <i class="fas fa-arrow-right text-slate-300"></i>
-                <span class="text-emerald-600 font-medium"><i class="fas fa-check-circle mr-1"></i>${_fmtDate(pair.resolved.date)}</span>
+                <span class="text-emerald-600 font-medium"><i class="fas fa-check-circle mr-1"></i>${_fmtDate(pair.resolved.event_date || pair.resolved.date)}</span>
                 <span class="text-slate-400">· ${_esc(pair.resolved.event_type)} · ${_esc(pair.resolved.by)}</span>
               </div>
               ${pair.faulty.notes ? `<p class="text-sm text-slate-600"><span class="text-xs font-semibold text-red-500 mr-1">Issue:</span>${_esc(pair.faulty.notes)}</p>` : ''}
@@ -855,8 +855,12 @@ function onIssueDeviceChange() {
   if (!d) {
     infoEl.classList.add('hidden');
     swapEl.classList.add('hidden');
+    _clearDateBounds();
     return;
   }
+
+  // Fetch patient enrollment date and device issue date for validation
+  _setDateValidationBounds(type, sel.value);
 
   const hasIssue = d.faulty || d.has_issue;
 
@@ -911,6 +915,61 @@ function onIssueDeviceChange() {
   }
 }
 
+async function _setDateValidationBounds(dtype, deviceId) {
+  try {
+    const res = await fetch('/devices/api/device-validation-dates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: dtype, device_id: deviceId }),
+    });
+
+    if (!res.ok) {
+      console.error(`API error: ${res.status} ${res.statusText}`);
+      _clearDateBounds();
+      return;
+    }
+
+    const data = await res.json();
+    if (!data.enroll_date && !data.issue_occur_date) {
+      _clearDateBounds();
+      return;
+    }
+
+    const occurrInput = document.getElementById('issue-occurred-date');
+    const resolveInput = document.getElementById('issue-resolve-date');
+    const today = new Date().toISOString().split('T')[0];
+
+    // Set bounds for issue-occurred-date (Report Issue flow)
+    if (data.enroll_date) {
+      occurrInput.min = data.enroll_date;
+    } else {
+      occurrInput.removeAttribute('min');
+    }
+    occurrInput.max = today;
+
+    // Set bounds for issue-resolve-date (Resolve Issue flow)
+    if (data.issue_occur_date) {
+      resolveInput.min = data.issue_occur_date;
+      resolveInput.max = today;
+    } else {
+      resolveInput.removeAttribute('min');
+      resolveInput.max = today;
+    }
+  } catch (e) {
+    console.error('Failed to set date bounds:', e);
+    _clearDateBounds();
+  }
+}
+
+function _clearDateBounds() {
+  const occurrInput = document.getElementById('issue-occurred-date');
+  const resolveInput = document.getElementById('issue-resolve-date');
+  occurrInput.removeAttribute('min');
+  occurrInput.removeAttribute('max');
+  resolveInput.removeAttribute('min');
+  resolveInput.removeAttribute('max');
+}
+
 async function saveIssueAction() {
   const device_id = document.getElementById('issue-device-select').value;
   if (!device_id) { _setError('issue-modal-error', 'Please select a device.'); return; }
@@ -926,6 +985,43 @@ async function saveIssueAction() {
   const attachFile   = document.getElementById('issue-attachment-file')?.files?.[0] || null;
   const resolveDate  = document.getElementById('issue-resolve-date')?.value || null;
   const occurredDate = document.getElementById('issue-occurred-date')?.value || null;
+  const today = new Date().toISOString().split('T')[0];
+
+  // Validate dates
+  if (hasIssue && occurredDate) {
+    if (occurredDate > today) {
+      _setError('issue-modal-error', 'Issue occurred date cannot be in the future.');
+      return;
+    }
+    const minDate = document.getElementById('issue-occurred-date').min;
+    if (minDate && occurredDate < minDate) {
+      _setError('issue-modal-error', `Issue occurred date must be on or after activation date (${minDate}).`);
+      return;
+    }
+  }
+  if (!hasIssue && resolveDate) {
+    if (resolveDate > today) {
+      _setError('issue-modal-error', 'Resolution date cannot be in the future.');
+      return;
+    }
+    const minDate = document.getElementById('issue-resolve-date').min;
+    if (minDate && resolveDate < minDate) {
+      _setError('issue-modal-error', `Resolution date must be on or after issue occurred date (${minDate}).`);
+      return;
+    }
+  }
+  // Validate issue-occurred-date against activation date for Report Issue flow
+  if (!hasIssue && occurredDate) {
+    if (occurredDate > today) {
+      _setError('issue-modal-error', 'Issue occurred date cannot be in the future.');
+      return;
+    }
+    const minDate = document.getElementById('issue-occurred-date').min;
+    if (minDate && occurredDate < minDate) {
+      _setError('issue-modal-error', `Issue occurred date must be on or after activation date (${minDate}).`);
+      return;
+    }
+  }
 
   // Resolving issue
   if (hasIssue) {
@@ -979,6 +1075,7 @@ async function saveIssueAction() {
       if (dev) { dev.faulty = true; dev.has_issue = true; }
       _loadIssuesSection(_issueType);
       _loadSolutionsSection(_issueType);
+      _loadRecentActivity();
     } catch (e) {
       _setError('issue-modal-error', 'Network error — please try again.');
     }

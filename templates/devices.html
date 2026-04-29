@@ -219,10 +219,6 @@
           <h2 class="text-base font-semibold text-slate-800">Modems</h2>
           <span id="badge-modems" class="ml-2 text-xs font-medium px-2.5 py-1 bg-slate-100 text-slate-500 rounded-full"></span>
           <div class="ml-auto flex items-center gap-2">
-            <button id="issue-modems-btn" onclick="openIssueModal('modems')"
-                    class="hidden flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-red-100 text-red-700 rounded-lg hover:bg-red-200 active:scale-95 transition-all">
-              <i class="fas fa-exclamation-triangle"></i> Report Issue
-            </button>
             <div id="manage-modems-dropdown-wrapper" class="hidden relative">
               <button onclick="toggleManageDropdown('modems')"
                       class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 active:scale-95 transition-all">
@@ -239,6 +235,10 @@
                 </button>
               </div>
             </div>
+             <button id="issue-modems-btn" onclick="openIssueModal('modems')"
+                    class="hidden flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-red-100 text-red-700 rounded-lg hover:bg-red-200 active:scale-95 transition-all">
+              <i class="fas fa-exclamation-triangle"></i> Report Issue
+            </button>
           </div>
         </div>
         <div id="table-modems" class="overflow-x-auto"></div>
@@ -257,10 +257,6 @@
           <h2 class="text-base font-semibold text-slate-800">Laptops</h2>
           <span id="badge-laptops" class="ml-2 text-xs font-medium px-2.5 py-1 bg-slate-100 text-slate-500 rounded-full"></span>
           <div class="ml-auto flex items-center gap-2">
-            <button id="issue-laptops-btn" onclick="openIssueModal('laptops')"
-                    class="hidden flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-red-100 text-red-700 rounded-lg hover:bg-red-200 active:scale-95 transition-all">
-              <i class="fas fa-exclamation-triangle"></i> Report Issue
-            </button>
             <div id="manage-laptops-dropdown-wrapper" class="hidden relative">
               <button onclick="toggleManageDropdown('laptops')"
                       class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 active:scale-95 transition-all">
@@ -277,6 +273,10 @@
                 </button>
               </div>
             </div>
+            <button id="issue-laptops-btn" onclick="openIssueModal('laptops')"
+                    class="hidden flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-red-100 text-red-700 rounded-lg hover:bg-red-200 active:scale-95 transition-all">
+              <i class="fas fa-exclamation-triangle"></i> Report Issue
+            </button>
           </div>
         </div>
         <div id="table-laptops" class="overflow-x-auto"></div>

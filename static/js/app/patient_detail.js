@@ -1277,11 +1277,94 @@ async function saveAdverseEvent() {
   await loadPatientEvents();
 }
 
+// ── Device Issue Date Validation Helpers ───────────────────────────────────────
+
+async function _fetchIssueValidationDates(triggeredById) {
+  try {
+    console.log('Fetching validation dates for triggered_by_id:', triggeredById);
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/issue-validation-dates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ triggered_by_id: triggeredById || '' }),
+    });
+    if (!res.ok) {
+      console.error(`API error: ${res.status}`);
+      return { enroll_date: null, issue_occur_date: null };
+    }
+    const data = await res.json();
+    console.log('Validation dates received:', data);
+    return data;
+  } catch (e) {
+    console.error('Failed to fetch issue validation dates:', e);
+    return { enroll_date: null, issue_occur_date: null };
+  }
+}
+
+function _setIssueModalDateBounds(enrollDate, issueOccurDate, issueOccurInputId, visitInputId) {
+  const today = new Date().toISOString().split('T')[0];
+
+  console.log('Setting date bounds:', { enrollDate, issueOccurDate, issueOccurInputId, visitInputId, today });
+
+  function formatDateForInput(dateStr, inputElement) {
+    if (!dateStr) return null;
+    if (inputElement.type === 'datetime-local') {
+      // datetime-local needs YYYY-MM-DDTHH:MM format
+      return dateStr.includes('T') ? dateStr.substring(0, 16) : dateStr + 'T00:00';
+    } else {
+      // date input needs YYYY-MM-DD format
+      return dateStr.split('T')[0];
+    }
+  }
+
+  if (issueOccurInputId) {
+    const inp = document.getElementById(issueOccurInputId);
+    if (inp) {
+      const formattedEnrollDate = formatDateForInput(enrollDate, inp);
+      if (formattedEnrollDate) {
+        inp.min = formattedEnrollDate;
+        console.log(`Set ${issueOccurInputId} min=${formattedEnrollDate}, max=${today}`);
+      } else {
+        inp.removeAttribute('min');
+        console.log(`Removed min from ${issueOccurInputId}, max=${today}`);
+      }
+      // For datetime-local, also format today
+      if (inp.type === 'datetime-local') {
+        inp.max = today + 'T23:59';
+      } else {
+        inp.max = today;
+      }
+    } else {
+      console.warn(`Could not find input: ${issueOccurInputId}`);
+    }
+  }
+  if (visitInputId) {
+    const inp = document.getElementById(visitInputId);
+    if (inp) {
+      const formattedIssueDate = formatDateForInput(issueOccurDate, inp);
+      if (formattedIssueDate) {
+        inp.min = formattedIssueDate;
+        console.log(`Set ${visitInputId} min=${formattedIssueDate}, max=${today}`);
+      } else {
+        inp.removeAttribute('min');
+        console.log(`Removed min from ${visitInputId}, max=${today}`);
+      }
+      // For datetime-local, also format today
+      if (inp.type === 'datetime-local') {
+        inp.max = today + 'T23:59';
+      } else {
+        inp.max = today;
+      }
+    } else {
+      console.warn(`Could not find input: ${visitInputId}`);
+    }
+  }
+}
+
 // ── Robot Issue Call modal ─────────────────────────────────────────────────────
 
 let _ricEventId = null;
 
-function openRobotIssueCallModal(ev) {
+async function openRobotIssueCallModal(ev) {
   _ricEventId = ev.id;
   const triggerType  = ev.triggered_by?.type || '';
   const triggerName  = _AE_TRIGGER_NAMES[triggerType] || triggerType;
@@ -1343,6 +1426,11 @@ function openRobotIssueCallModal(ev) {
   }
 
   _ricUpdateNotesLabel();
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates();
+  _setIssueModalDateBounds(dates.enroll_date, null, 'ric-issue-occur-date', 'ric-date');
+
   showModal('robot-issue-call-modal');
 }
 
@@ -1354,9 +1442,15 @@ function _ricUpdateNotesLabel() {
 
 async function saveRobotIssueCall() {
   const date           = document.getElementById('ric-date').value;
-  const issueOccurDate = document.getElementById('ric-issue-occur-date').value || null;
+  let issueOccurDate   = document.getElementById('ric-issue-occur-date').value || null;
   const notes          = document.getElementById('ric-notes').value.trim();
   const saveBtn        = document.getElementById('ric-save');
+
+  // Convert dd-mm-yyyy to YYYY-MM-DD if needed
+  if (issueOccurDate && /^\d{2}-\d{2}-\d{4}$/.test(issueOccurDate)) {
+    const parts = issueOccurDate.split('-');
+    issueOccurDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
 
   if (!date) { setError('ric-error', 'Call date is required.'); return; }
 
@@ -1376,6 +1470,31 @@ async function saveRobotIssueCall() {
     return;
   }
   if (!_validateAttachment('ric', 'ric-error')) return;
+
+  // Validate dates
+  const today = new Date().toISOString().split('T')[0];
+  if (!issueOccurDate) {
+    setError('ric-error', 'Issue occurred date is required.');
+    return;
+  }
+  if (issueOccurDate > today) {
+    setError('ric-error', 'Issue occurred date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('ric-issue-occur-date').min;
+  if (minDate && issueOccurDate < minDate) {
+    setError('ric-error', `Issue occurred date must be on or after activation date (${minDate}).`);
+    return;
+  }
+  // Validate call date is after issue occurred date
+  if (date.split('T')[0] < issueOccurDate) {
+    setError('ric-error', 'Call date must be on or after issue occurred date.');
+    return;
+  }
+  if (date.split('T')[0] > today) {
+    setError('ric-error', 'Call date cannot be in the future.');
+    return;
+  }
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
@@ -1415,6 +1534,11 @@ async function openRobotIssueVisitModal(ev) {
   _resetAttachment('riv');
   setError('riv-error', '');
   _attachDateGuard('riv-date', 'riv-error');
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'riv-date');
+
   showModal('robot-issue-visit-modal');
 
   try {
@@ -1540,6 +1664,18 @@ async function saveRobotIssueVisit() {
   const saveBtn = document.getElementById('riv-save');
 
   if (!date) { setError('riv-error', 'Visit date is required.'); return; }
+
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (date.split('T')[0] > today) {
+    setError('riv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('riv-date').min;
+  if (minDate && date.split('T')[0] < minDate) {
+    setError('riv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+    return;
+  }
 
   const deviceOutcomes = [];
   for (const dev of _rivDevices) {
@@ -1952,6 +2088,10 @@ async function openResolveRobotIssueVisitModal(ev) {
     }
   };
 
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'rriv-date');
+
   showModal('resolve-robot-issue-visit-modal');
 
   try {
@@ -2183,6 +2323,22 @@ async function saveResolveRobotIssueVisit() {
 
   if (!date)       { setError('rriv-error', 'Visit date is required.'); return; }
   if (!resumeDate) { setError('rriv-error', 'Can resume from date is required.'); return; }
+
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (date.split('T')[0] > today) {
+    setError('rriv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('rriv-date').min;
+  if (minDate && date.split('T')[0] < minDate) {
+    setError('rriv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+    return;
+  }
+  if (resumeDate > today) {
+    setError('rriv-error', 'Can resume from date cannot be in the future.');
+    return;
+  }
 
   const deviceReplacements = [];
   for (const dev of _rrivDevices) {
@@ -4918,10 +5074,11 @@ async function openOtherDeviceIssueModal(ev) {
   const now = new Date();
   const pad = n => String(n).padStart(2, '0');
   const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const todayDate = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
   document.getElementById('odi-completion-date').value = nowStr;
   document.getElementById('odi-completion-date').max   = nowStr;
   document.getElementById('odi-issue-occur-date').value = '';
-  document.getElementById('odi-issue-occur-date').max   = nowStr;
+  document.getElementById('odi-issue-occur-date').max   = todayDate;
   document.getElementById('odi-notes').value = '';
   document.getElementById('odi-device-rows').innerHTML =
     '<p class="text-sm text-slate-400 italic">Loading devices…</p>';
@@ -4936,6 +5093,10 @@ async function openOtherDeviceIssueModal(ev) {
   } else {
     ctx.classList.add('hidden');
   }
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates();
+  _setIssueModalDateBounds(dates.enroll_date, null, 'odi-issue-occur-date', 'odi-completion-date');
 
   showModal('other-device-issue-modal');
 
@@ -5019,13 +5180,39 @@ function _odiBuildSections() {
 
 async function saveOtherDeviceIssueCall() {
   const completionDate  = document.getElementById('odi-completion-date').value;
-  const issueOccurDate  = document.getElementById('odi-issue-occur-date').value;
+  let issueOccurDate    = document.getElementById('odi-issue-occur-date').value;
   const notes           = document.getElementById('odi-notes').value.trim();
 
+  // Convert dd-mm-yyyy to YYYY-MM-DD if needed
+  if (issueOccurDate && /^\d{2}-\d{2}-\d{4}$/.test(issueOccurDate)) {
+    const parts = issueOccurDate.split('-');
+    issueOccurDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+
   if (!completionDate)  { setError('odi-error', 'Call date is required.'); return; }
-  if (new Date(completionDate) > new Date()) { setError('odi-error', 'Call date cannot be in the future.'); return; }
   if (!issueOccurDate)  { setError('odi-error', 'Issue first occurred date is required.'); return; }
-  if (new Date(issueOccurDate) > new Date()) { setError('odi-error', 'Issue occur date cannot be in the future.'); return; }
+
+  // Validate dates
+  const today = new Date().toISOString().split('T')[0];
+  const callDateStr = completionDate.split('T')[0];
+
+  if (issueOccurDate > today) {
+    setError('odi-error', 'Issue occurred date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('odi-issue-occur-date').min;
+  if (minDate && issueOccurDate < minDate) {
+    setError('odi-error', `Issue occurred date must be on or after enrollment date (${minDate}).`);
+    return;
+  }
+  if (callDateStr > today) {
+    setError('odi-error', 'Call date cannot be in the future.');
+    return;
+  }
+  if (callDateStr < issueOccurDate) {
+    setError('odi-error', 'Call date must be on or after issue occurred date.');
+    return;
+  }
 
   const devices = [];
   for (let i = 0; i < _odiAssigned.length; i++) {
@@ -5093,6 +5280,10 @@ async function openOtherDeviceIssueVisitModal(ev) {
     occRow.classList.add('hidden');
   }
 
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'odiv-completion-date');
+
   showModal('other-device-issue-visit-modal');
 
   try {
@@ -5126,8 +5317,12 @@ function _odivBuildRow(container, d, idx) {
   const deviceId = d.device_id;
   const label    = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
   const avail    = _odivInventory[dtype] || [];
-  const replOpts = avail.filter(r => r.id !== deviceId)
-                        .map(r => `<option value="${_esc(r.id)}">${_esc(r.id)}</option>`).join('');
+  // For SIMs, filter to only unlinked SIMs (where !modem_id)
+  const filtered = dtype === 'sims'
+                   ? avail.filter(r => !r.removal_date && !r.modem_id)
+                   : avail.filter(r => !r.removal_date && !r.assigned_to);
+  const replOpts = filtered.filter(r => r.id !== deviceId)
+                           .map(r => `<option value="${_esc(r.id)}">${_esc(r.id)}</option>`).join('');
 
   const row = document.createElement('div');
   row.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
@@ -5184,7 +5379,18 @@ async function saveOtherDeviceIssueVisit() {
   const notes          = document.getElementById('odiv-notes').value.trim();
 
   if (!completionDate) { setError('odiv-error', 'Visit date is required.'); return; }
-  if (new Date(completionDate) > new Date()) { setError('odiv-error', 'Visit date cannot be in the future.'); return; }
+
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (completionDate.split('T')[0] > today) {
+    setError('odiv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('odiv-completion-date').min;
+  if (minDate && completionDate.split('T')[0] < minDate) {
+    setError('odiv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+    return;
+  }
 
   const outcomes = [];
   for (let i = 0; i < _odivDevices.length; i++) {
