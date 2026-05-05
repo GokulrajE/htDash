@@ -99,22 +99,61 @@ function _nowForInput() {
 
 function _attachSessionEndGuard(startInputId, endInputId, errorId) {
   // Fires on change of the end input; validates same date and end > start immediately.
+  const startInput = document.getElementById(startInputId);
   const endInput = document.getElementById(endInputId);
-  if (!endInput) return;
-  if (endInput._sessionEndGuard) endInput.removeEventListener('change', endInput._sessionEndGuard);
+  if (!endInput || !startInput) return;
+
+  if (endInput._sessionEndGuard) {
+    endInput.removeEventListener('change', endInput._sessionEndGuard);
+    endInput.removeEventListener('input', endInput._sessionEndGuard);
+  }
+
   endInput._sessionEndGuard = () => {
-    const startVal = document.getElementById(startInputId)?.value;
-    const endVal   = endInput.value;
-    if (!startVal || !endVal) return;
-    if (startVal.split('T')[0] !== endVal.split('T')[0]) {
-      setError(errorId, 'Session start and end must be on the same date.');
-    } else if (endVal <= startVal) {
-      setError(errorId, 'Session end must be after session start.');
-    } else {
-      setError(errorId, '');
-    }
+    _validateSessionEndInput(startInput, endInput, errorId);
   };
+
   endInput.addEventListener('change', endInput._sessionEndGuard);
+  endInput.addEventListener('input', endInput._sessionEndGuard);
+
+  // Also validate start input changes
+  if (startInput._sessionStartGuard) {
+    startInput.removeEventListener('change', startInput._sessionStartGuard);
+    startInput.removeEventListener('input', startInput._sessionStartGuard);
+  }
+
+  startInput._sessionStartGuard = () => {
+    _validateSessionEndInput(startInput, endInput, errorId);
+  };
+
+  startInput.addEventListener('change', startInput._sessionStartGuard);
+  startInput.addEventListener('input', startInput._sessionStartGuard);
+}
+
+function _validateSessionEndInput(startInput, endInput, errorId) {
+  // Validate session start/end pairs for keyboard input
+  const startVal = startInput?.value;
+  const endVal   = endInput?.value;
+
+  if (!startVal || !endVal) {
+    setError(errorId, '');
+    return true;
+  }
+
+  const startDate = startVal.split('T')[0];
+  const endDate   = endVal.split('T')[0];
+
+  if (startDate !== endDate) {
+    setError(errorId, 'Session start and end must be on the same date.');
+    return false;
+  }
+
+  if (endVal <= startVal) {
+    setError(errorId, 'Session end must be after session start.');
+    return false;
+  }
+
+  setError(errorId, '');
+  return true;
 }
 
 function _attachDateGuard(inputId, errorId) {
@@ -125,14 +164,63 @@ function _attachDateGuard(inputId, errorId) {
   // Remove any previously attached guard listener to avoid duplicates
   if (input._dateGuard) input.removeEventListener('change', input._dateGuard);
   input._dateGuard = () => {
-    if (input.value && input.value > input.max) {
-      setError(errorId, 'Date cannot be in the future.');
-      input.value = '';
-    } else {
-      setError(errorId, '');
-    }
+    _validateDateInput(input, errorId);
   };
   input.addEventListener('change', input._dateGuard);
+  input.addEventListener('input', input._dateGuard);
+}
+
+function _validateDateInput(input, errorId) {
+  // Comprehensive validation for keyboard-entered dates against min/max constraints
+  if (!input.value) {
+    setError(errorId, '');
+    return true;
+  }
+
+  const value = input.value;
+  let errorMsg = '';
+
+  // Check min constraint
+  if (input.min && value < input.min) {
+    const minDate = input.min.includes('T') ? input.min.split('T')[0] : input.min;
+    const valueDate = value.includes('T') ? value.split('T')[0] : value;
+    errorMsg = `Date cannot be before ${_formatDateForDisplay(minDate)}.`;
+  }
+
+  // Check max constraint
+  if (!errorMsg && input.max && value > input.max) {
+    const maxDate = input.max.includes('T') ? input.max.split('T')[0] : input.max;
+    const valueDate = value.includes('T') ? value.split('T')[0] : value;
+    errorMsg = `Date cannot be after ${_formatDateForDisplay(maxDate)}.`;
+  }
+
+  setError(errorId, errorMsg);
+  return !errorMsg;
+}
+
+function _formatDateForDisplay(dateStr) {
+  // Convert YYYY-MM-DD to readable format (e.g., "30 Apr 2026")
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
+function _hasDateValidationErrors(errorElementIds) {
+  // Check if any date validation error elements have visible errors
+  // errorElementIds: array of error element IDs to check (e.g., ['activation-error', 'device-setup-error'])
+  // Returns: true if any errors are visible, false if all clear
+  if (!errorElementIds || errorElementIds.length === 0) return false;
+
+  for (const errorId of errorElementIds) {
+    const el = document.getElementById(errorId);
+    if (el && !el.classList.contains('hidden') && el.textContent.trim()) {
+      return true; // Found a visible error
+    }
+  }
+  return false; // No visible errors
 }
 
 function setLoading(btnId, loading) {
@@ -476,6 +564,9 @@ async function loadPatientEvents() {
       discontinuedBanner.classList.add('hidden');
     }
     _renderPauseReasonPills();
+    // Re-render pause banner and history table with updated patient data
+    renderPauseBanner(patientData);
+    renderPauseHistoryTable(patientData);
     renderTimelineTab();
     renderAdverseEventsTab();
     renderWatchRecordsTab();
@@ -1274,11 +1365,94 @@ async function saveAdverseEvent() {
   await loadPatientEvents();
 }
 
+// ── Device Issue Date Validation Helpers ───────────────────────────────────────
+
+async function _fetchIssueValidationDates(triggeredById) {
+  try {
+    console.log('Fetching validation dates for triggered_by_id:', triggeredById);
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/issue-validation-dates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ triggered_by_id: triggeredById || '' }),
+    });
+    if (!res.ok) {
+      console.error(`API error: ${res.status}`);
+      return { enroll_date: null, issue_occur_date: null };
+    }
+    const data = await res.json();
+    console.log('Validation dates received:', data);
+    return data;
+  } catch (e) {
+    console.error('Failed to fetch issue validation dates:', e);
+    return { enroll_date: null, issue_occur_date: null };
+  }
+}
+
+function _setIssueModalDateBounds(enrollDate, issueOccurDate, issueOccurInputId, visitInputId) {
+  const today = new Date().toISOString().split('T')[0];
+
+  console.log('Setting date bounds:', { enrollDate, issueOccurDate, issueOccurInputId, visitInputId, today });
+
+  function formatDateForInput(dateStr, inputElement) {
+    if (!dateStr) return null;
+    if (inputElement.type === 'datetime-local') {
+      // datetime-local needs YYYY-MM-DDTHH:MM format
+      return dateStr.includes('T') ? dateStr.substring(0, 16) : dateStr + 'T00:00';
+    } else {
+      // date input needs YYYY-MM-DD format
+      return dateStr.split('T')[0];
+    }
+  }
+
+  if (issueOccurInputId) {
+    const inp = document.getElementById(issueOccurInputId);
+    if (inp) {
+      const formattedEnrollDate = formatDateForInput(enrollDate, inp);
+      if (formattedEnrollDate) {
+        inp.min = formattedEnrollDate;
+        console.log(`Set ${issueOccurInputId} min=${formattedEnrollDate}, max=${today}`);
+      } else {
+        inp.removeAttribute('min');
+        console.log(`Removed min from ${issueOccurInputId}, max=${today}`);
+      }
+      // For datetime-local, also format today
+      if (inp.type === 'datetime-local') {
+        inp.max = today + 'T23:59';
+      } else {
+        inp.max = today;
+      }
+    } else {
+      console.warn(`Could not find input: ${issueOccurInputId}`);
+    }
+  }
+  if (visitInputId) {
+    const inp = document.getElementById(visitInputId);
+    if (inp) {
+      const formattedIssueDate = formatDateForInput(issueOccurDate, inp);
+      if (formattedIssueDate) {
+        inp.min = formattedIssueDate;
+        console.log(`Set ${visitInputId} min=${formattedIssueDate}, max=${today}`);
+      } else {
+        inp.removeAttribute('min');
+        console.log(`Removed min from ${visitInputId}, max=${today}`);
+      }
+      // For datetime-local, also format today
+      if (inp.type === 'datetime-local') {
+        inp.max = today + 'T23:59';
+      } else {
+        inp.max = today;
+      }
+    } else {
+      console.warn(`Could not find input: ${visitInputId}`);
+    }
+  }
+}
+
 // ── Robot Issue Call modal ─────────────────────────────────────────────────────
 
 let _ricEventId = null;
 
-function openRobotIssueCallModal(ev) {
+async function openRobotIssueCallModal(ev) {
   _ricEventId = ev.id;
   const triggerType  = ev.triggered_by?.type || '';
   const triggerName  = _AE_TRIGGER_NAMES[triggerType] || triggerType;
@@ -1286,8 +1460,9 @@ function openRobotIssueCallModal(ev) {
   const dateStr = triggerEvent?.completion_date ? ` on ${_fmtDateTime(triggerEvent.completion_date)}` : '';
   document.getElementById('ric-context-banner').textContent =
     `Robot issue reported during ${triggerName}${dateStr}`;
-  document.getElementById('ric-date').value  = '';
-  document.getElementById('ric-notes').value = '';
+  document.getElementById('ric-date').value             = '';
+  document.getElementById('ric-issue-occur-date').value = '';
+  document.getElementById('ric-notes').value             = '';
   _resetAttachment('ric');
   setError('ric-error', '');
   _attachDateGuard('ric-date', 'ric-error');
@@ -1339,6 +1514,11 @@ function openRobotIssueCallModal(ev) {
   }
 
   _ricUpdateNotesLabel();
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates();
+  _setIssueModalDateBounds(dates.enroll_date, null, 'ric-issue-occur-date', 'ric-date');
+
   showModal('robot-issue-call-modal');
 }
 
@@ -1349,9 +1529,16 @@ function _ricUpdateNotesLabel() {
 }
 
 async function saveRobotIssueCall() {
-  const date    = document.getElementById('ric-date').value;
-  const notes   = document.getElementById('ric-notes').value.trim();
-  const saveBtn = document.getElementById('ric-save');
+  const date           = document.getElementById('ric-date').value;
+  let issueOccurDate   = document.getElementById('ric-issue-occur-date').value || null;
+  const notes          = document.getElementById('ric-notes').value.trim();
+  const saveBtn        = document.getElementById('ric-save');
+
+  // Convert dd-mm-yyyy to YYYY-MM-DD if needed
+  if (issueOccurDate && /^\d{2}-\d{2}-\d{4}$/.test(issueOccurDate)) {
+    const parts = issueOccurDate.split('-');
+    issueOccurDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
 
   if (!date) { setError('ric-error', 'Call date is required.'); return; }
 
@@ -1372,10 +1559,35 @@ async function saveRobotIssueCall() {
   }
   if (!_validateAttachment('ric', 'ric-error')) return;
 
+  // Validate dates
+  const today = new Date().toISOString().split('T')[0];
+  if (!issueOccurDate) {
+    setError('ric-error', 'Issue occurred date is required.');
+    return;
+  }
+  if (issueOccurDate > today) {
+    setError('ric-error', 'Issue occurred date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('ric-issue-occur-date').min;
+  if (minDate && issueOccurDate < minDate) {
+    setError('ric-error', `Issue occurred date must be on or after activation date (${minDate}).`);
+    return;
+  }
+  // Validate call date is after issue occurred date
+  if (date.split('T')[0] < issueOccurDate) {
+    setError('ric-error', 'Call date must be on or after issue occurred date.');
+    return;
+  }
+  if (date.split('T')[0] > today) {
+    setError('ric-error', 'Call date cannot be in the future.');
+    return;
+  }
+
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue-call`,
-    { event_id: _ricEventId, completion_date: date, notes: notes || null, devices }
+    { event_id: _ricEventId, completion_date: date, issue_occur_date: issueOccurDate, notes: notes || null, devices }
   );
   if (!ok) { setError('ric-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1410,6 +1622,11 @@ async function openRobotIssueVisitModal(ev) {
   _resetAttachment('riv');
   setError('riv-error', '');
   _attachDateGuard('riv-date', 'riv-error');
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'riv-date');
+
   showModal('robot-issue-visit-modal');
 
   try {
@@ -1535,6 +1752,18 @@ async function saveRobotIssueVisit() {
   const saveBtn = document.getElementById('riv-save');
 
   if (!date) { setError('riv-error', 'Visit date is required.'); return; }
+
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (date.split('T')[0] > today) {
+    setError('riv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('riv-date').min;
+  if (minDate && date.split('T')[0] < minDate) {
+    setError('riv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+    return;
+  }
 
   const deviceOutcomes = [];
   for (const dev of _rivDevices) {
@@ -1947,6 +2176,10 @@ async function openResolveRobotIssueVisitModal(ev) {
     }
   };
 
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'rriv-date');
+
   showModal('resolve-robot-issue-visit-modal');
 
   try {
@@ -2179,6 +2412,22 @@ async function saveResolveRobotIssueVisit() {
   if (!date)       { setError('rriv-error', 'Visit date is required.'); return; }
   if (!resumeDate) { setError('rriv-error', 'Can resume from date is required.'); return; }
 
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (date.split('T')[0] > today) {
+    setError('rriv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('rriv-date').min;
+  if (minDate && date.split('T')[0] < minDate) {
+    setError('rriv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+    return;
+  }
+  if (resumeDate > today) {
+    setError('rriv-error', 'Can resume from date cannot be in the future.');
+    return;
+  }
+
   const deviceReplacements = [];
   for (const dev of _rrivDevices) {
     const sel = document.getElementById(`rriv-${dev.device_type}-select`);
@@ -2305,6 +2554,8 @@ const EVENT_OPENERS = {
   adverse_event_followup_visit: (ev) => openAeFollowupVisitModal(ev),
   adverse_event_clinical_visit: (ev) => openAeClinicalVisitModal(ev),
   resolve_robot_issue_visit:    (ev) => openResolveRobotIssueVisitModal(ev),
+  other_device_issue_call:      (ev) => openOtherDeviceIssueModal(ev),
+  other_device_issue_visit:     (ev) => openOtherDeviceIssueVisitModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -2374,6 +2625,8 @@ async function openDeviceSetupModal(ev) {
   document.getElementById('device-setup-demo').checked = false;
   document.getElementById('device-setup-notes').value = '';
   setError('device-setup-error', '');
+  document.getElementById('device-setup-sim-warning')?.classList.add('hidden');
+  window._setupSimExpiry = {};
   _resetAttachment('device-setup');
   _attachDateGuard('device-setup-date', 'device-setup-error');
 
@@ -2404,21 +2657,61 @@ async function openDeviceSetupModal(ev) {
       modem.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
     laptopSel.innerHTML = '<option value="">Select Laptop device…</option>' +
       laptop.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const simList = (sims || []).filter(s => {
+      if (s.removal_date) return false; // exclude retired
+      if (!s.expiryDate) return true;
+      const exp = new Date(s.expiryDate); exp.setHours(0,0,0,0);
+      return exp >= today; // exclude expired
+    });
+    window._setupSimExpiry = {};
+    simList.forEach(s => {
+      if (s.expiryDate) {
+        const exp = new Date(s.expiryDate); exp.setHours(0,0,0,0);
+        const days = Math.round((exp - today) / 86400000);
+        window._setupSimExpiry[s.id] = days;
+      }
+    });
     simSel.innerHTML = '<option value="">Select SIM card…</option>' +
-      (sims || []).map(s => `<option value="${s.id}">${s.phoneNumber || s.id}</option>`).join('');
+      simList.map(s => {
+        const days = window._setupSimExpiry[s.id];
+        const warn = days !== undefined && days <= 5 ? ` ⚠ Expires in ${days}d` : '';
+        return `<option value="${s.id}">${s.phoneNumber || s.id}${warn}</option>`;
+      }).join('');
 
     if (!pluto.length) plutoSel.innerHTML = '<option value="">No devices available</option>';
     if (!mars.length)  marsSel.innerHTML  = '<option value="">No devices available</option>';
     if (!modem.length) modemSel.innerHTML = '<option value="">No devices available</option>';
     if (!laptop.length) laptopSel.innerHTML = '<option value="">No devices available</option>';
-    if (!(sims || []).length) simSel.innerHTML = '<option value="">No SIM cards available</option>';
+    if (!simList.length) simSel.innerHTML = '<option value="">No SIM cards available</option>';
   } catch (e) {
     console.error('Error loading devices:', e);
     setError('device-setup-error', 'Failed to load available devices.');
   }
 }
 
+function onSetupSimChange() {
+  const sel = document.getElementById('device-setup-sim');
+  const warn = document.getElementById('device-setup-sim-warning');
+  const warnText = document.getElementById('device-setup-sim-warning-text');
+  const days = window._setupSimExpiry?.[sel.value];
+  if (days !== undefined && days <= 5) {
+    warnText.textContent = days === 0
+      ? 'This SIM expires today. Recharge before assigning.'
+      : `This SIM expires in ${days} day${days === 1 ? '' : 's'}. Consider recharging first.`;
+    warn.classList.remove('hidden');
+  } else {
+    warn.classList.add('hidden');
+  }
+}
+
 async function submitDeviceSetup() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors(['device-setup-error'])) {
+    setError('device-setup-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const eventDate = document.getElementById('device-setup-date').value;
   const plutoId   = document.getElementById('device-setup-pluto').value;
   const marsId    = document.getElementById('device-setup-mars').value;
@@ -2497,6 +2790,12 @@ async function openActivationModal(evId) {
 }
 
 async function submitActivation() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors(['activation-error'])) {
+    setError('activation-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const sessionStart = document.getElementById('activation-session-start').value;
   const sessionEnd   = document.getElementById('activation-session-end').value;
   const notes        = document.getElementById('activation-notes').value;
@@ -2532,6 +2831,8 @@ async function submitActivation() {
   if (!document.getElementById('act-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('act-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('act-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
   body.triggered = triggered;
 
   setLoading('activation-submit', true);
@@ -3494,6 +3795,9 @@ let _prescPrintoutLanguage    = 'english';
 function openPrescriptionPrintoutModal(ev) {
   _prescPrintoutEventId    = typeof ev === 'object' ? ev.id : ev;
   _prescPrintoutProtocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
+  // After setting _prescPrintoutLanguage = 'english', disable buttons
+document.getElementById('prescription-printout-print').disabled = true;
+document.getElementById('prescription-printout-save').disabled = true;
 
   const title = _prescPrintoutProtocolId === 'prescription_printout_d15'
     ? 'Revised Therapy Prescription Printout'
@@ -3541,6 +3845,9 @@ function selectPrescriptionLanguage(lang) {
                       'bg-slate-200 text-slate-700 hover:bg-slate-300';
     }
   });
+     // After loading pamphlet, enable buttons
+  document.getElementById('prescription-printout-print').disabled = false;
+  document.getElementById('prescription-printout-save').disabled = false;
 
   _loadPrescriptionPamphlet();
 }
@@ -3860,9 +4167,15 @@ async function savePrescriptionPdfFromDialog() {
   }
 }
 
-function printPrescriptionPamphlet() {
+async function printPrescriptionPamphlet() {
   const previewDiv = document.getElementById('presc-printout-preview');
-
+  // Check if we need to save first
+    const event = _completeEventsCache?.find(e => e.id === _prescPrintoutEventId);
+    if (!event) {
+      // Event not yet complete - auto save first
+      await savePrescriptionPrintout();
+      // After save, proceed with print
+    }
   // Check if pamphlet is loaded
   if (!previewDiv.innerHTML || previewDiv.innerHTML.includes('Select a language') || previewDiv.innerHTML.includes('Loading')) {
     setError('prescription-printout-error', 'Please select a language and wait for the preview to load first');
@@ -3928,6 +4241,7 @@ function printPrescriptionPamphlet() {
     printWindow.focus();
     printWindow.print();
   }, 100);
+ 
 }
 
 // ── Simple event modal (home visits, follow-up calls, training completion) ────
@@ -4087,6 +4401,12 @@ function openHomeVisitModal(ev) {
 }
 
 async function saveHomeVisit() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors(['hv-error'])) {
+    setError('hv-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const sessionStart = document.getElementById('hv-session-start').value;
   const sessionEnd   = document.getElementById('hv-session-end').value;
   const notes        = document.getElementById('hv-notes').value.trim();
@@ -4107,6 +4427,8 @@ async function saveHomeVisit() {
   if (!document.getElementById('hv-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('hv-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('hv-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/home-visit`, {
@@ -4218,6 +4540,8 @@ async function saveFollowupCall() {
   if (!document.getElementById('fc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('fc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('fc-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
 
   const body = {
     event_id:          _followupCallEventId,
@@ -4305,6 +4629,8 @@ async function savePatientCall() {
   if (!document.getElementById('pc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('pc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (document.getElementById('pc-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
 
   const therapistInitiated = document.getElementById('pc-therapist-initiated').checked;
   const reason = document.getElementById('pc-reason').value.trim();
@@ -4328,6 +4654,26 @@ async function savePatientCall() {
 
   saveBtn.disabled = false;
   hideModal('patient-call-modal');
+
+  // Update cache and re-render immediately without re-fetching
+  const newCall = {
+    id: data.id,
+    completion_date: dateVal,
+    duration_minutes: parseInt(duration),
+    notes,
+    call_type,
+    reason: therapistInitiated ? reason : undefined,
+    attachment: data.attachment,
+    attachment_caption: data.attachment_caption,
+  };
+
+  if (!_callLogsCache) _callLogsCache = { patient_calls: [], followup_calls: [] };
+  if (!_callLogsCache.patient_calls) _callLogsCache.patient_calls = [];
+  _callLogsCache.patient_calls.push(newCall);
+
+  const container = document.getElementById('call-logs-content');
+  if (container) _renderCallLogs(container, _callLogsCache);
+
   await loadPatientEvents();
 }
 
@@ -4808,6 +5154,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Auto-open modal if ?action=<event_id> is in the URL, then clean up the URL
   const actionId = new URLSearchParams(window.location.search).get('action');
+
   if (actionId) {
     history.replaceState(null, '', window.location.pathname);
     const ev = eventsCache.find(e => e.id === actionId);
@@ -4817,3 +5164,365 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 });
+
+// ── Other Device Issue Modal ──────────────────────────────────────────────────
+
+function _esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+let _odiEventId   = null;
+let _odiAssigned  = []; // [{dtype, device_id, label}] assigned to patient
+
+async function openOtherDeviceIssueModal(ev) {
+  _odiEventId  = ev.id;
+  _odiAssigned = [];
+  setError('odi-error', '');
+
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const todayDate = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  document.getElementById('odi-completion-date').value = nowStr;
+  document.getElementById('odi-completion-date').max   = nowStr;
+  document.getElementById('odi-issue-occur-date').value = '';
+  document.getElementById('odi-issue-occur-date').max   = todayDate;
+  document.getElementById('odi-notes').value = '';
+  document.getElementById('odi-device-rows').innerHTML =
+    '<p class="text-sm text-slate-400 italic">Loading devices…</p>';
+
+  const ctx = document.getElementById('odi-context');
+  if (ev.triggered_by) {
+    const triggerName = _AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type.replace(/_/g, ' ');
+    const triggerEv   = (_completeEventsCache || []).find(e => e.id === ev.triggered_by.id);
+    const dateStr     = triggerEv?.completion_date ? ` on ${_fmtDateTime(triggerEv.completion_date)}` : '';
+    ctx.textContent   = `Other device issue reported during ${triggerName}${dateStr}`;
+    ctx.classList.remove('hidden');
+  } else {
+    ctx.classList.add('hidden');
+  }
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates();
+  _setIssueModalDateBounds(dates.enroll_date, null, 'odi-issue-occur-date', 'odi-completion-date');
+
+  showModal('other-device-issue-modal');
+
+  try {
+    const res = await fetch('/devices/api/inventory');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const inv = await res.json();
+
+    // Build flat list of devices assigned to this patient
+    (inv.modems  || []).filter(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID)
+                       .forEach(d => _odiAssigned.push({ dtype: 'modems',  device_id: d.id, label: `Modem — ${d.id}` }));
+    (inv.laptops || []).filter(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID)
+                       .forEach(d => _odiAssigned.push({ dtype: 'laptops', device_id: d.id, label: `Laptop — ${d.id}` }));
+    // SIM linked to patient's modem
+    const patientModem = (inv.modems || []).find(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID);
+    if (patientModem?.sim_id) {
+      const sim = (inv.sims || []).find(s => s.id === patientModem.sim_id && !s.removal_date);
+      if (sim) _odiAssigned.push({ dtype: 'sims', device_id: sim.id, label: `SIM — ${sim.phoneNumber || sim.id}` });
+    }
+
+    _odiBuildSections();
+  } catch (e) {
+    setError('odi-error', 'Failed to load device inventory: ' + e.message);
+    document.getElementById('odi-device-rows').innerHTML = '';
+  }
+}
+
+function _odiBuildSections() {
+  const container = document.getElementById('odi-device-rows');
+  container.innerHTML = '';
+
+  if (!_odiAssigned.length) {
+    container.innerHTML = '<p class="text-sm text-slate-400 italic">No modem, laptop or SIM assigned to this patient.</p>';
+    return;
+  }
+
+  _odiAssigned.forEach((dev, i) => {
+    const sec = document.createElement('div');
+    sec.className = 'border border-slate-200 rounded-xl p-4';
+    sec.innerHTML = `
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" id="odi-on-${i}" class="w-4 h-4 rounded border-slate-300 accent-purple-600">
+        <span class="text-sm font-semibold text-slate-800">${_esc(dev.label)}</span>
+      </label>
+      <div id="odi-form-${i}" class="hidden mt-3 space-y-3 pl-6">
+        <div>
+          <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+          <div class="space-y-1">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="odi-outcome-${i}" value="visit_required" class="w-4 h-4 accent-purple-600">
+              <span class="text-sm text-slate-700">Visit required — engineer needs to come</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="odi-outcome-${i}" value="resolved_over_call" class="w-4 h-4 accent-purple-600">
+              <span class="text-sm text-slate-700">Resolved over call — no visit needed</span>
+            </label>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+          <textarea id="odi-notes-${i}" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none"
+            placeholder="Device-specific notes…"></textarea>
+        </div>
+      </div>
+    `;
+    container.appendChild(sec);
+
+    document.getElementById(`odi-on-${i}`).onchange = function () {
+      document.getElementById(`odi-form-${i}`).classList.toggle('hidden', !this.checked);
+      if (!this.checked) {
+        document.querySelectorAll(`input[name="odi-outcome-${i}"]`).forEach(r => r.checked = false);
+        document.getElementById(`odi-notes-${i}`).value = '';
+      }
+    };
+  });
+}
+
+async function saveOtherDeviceIssueCall() {
+  const completionDate  = document.getElementById('odi-completion-date').value;
+  let issueOccurDate    = document.getElementById('odi-issue-occur-date').value;
+  const notes           = document.getElementById('odi-notes').value.trim();
+
+  // Convert dd-mm-yyyy to YYYY-MM-DD if needed
+  if (issueOccurDate && /^\d{2}-\d{2}-\d{4}$/.test(issueOccurDate)) {
+    const parts = issueOccurDate.split('-');
+    issueOccurDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+
+  if (!completionDate)  { setError('odi-error', 'Call date is required.'); return; }
+  if (!issueOccurDate)  { setError('odi-error', 'Issue first occurred date is required.'); return; }
+
+  // Validate dates
+  const today = new Date().toISOString().split('T')[0];
+  const callDateStr = completionDate.split('T')[0];
+
+  if (issueOccurDate > today) {
+    setError('odi-error', 'Issue occurred date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('odi-issue-occur-date').min;
+  if (minDate && issueOccurDate < minDate) {
+    setError('odi-error', `Issue occurred date must be on or after enrollment date (${minDate}).`);
+    return;
+  }
+  if (callDateStr > today) {
+    setError('odi-error', 'Call date cannot be in the future.');
+    return;
+  }
+  if (callDateStr < issueOccurDate) {
+    setError('odi-error', 'Call date must be on or after issue occurred date.');
+    return;
+  }
+
+  const devices = [];
+  for (let i = 0; i < _odiAssigned.length; i++) {
+    if (!document.getElementById(`odi-on-${i}`)?.checked) continue;
+    const outcome  = document.querySelector(`input[name="odi-outcome-${i}"]:checked`)?.value || '';
+    const devNotes = document.getElementById(`odi-notes-${i}`)?.value.trim();
+    const dev      = _odiAssigned[i];
+    if (!outcome) { setError('odi-error', `Select an outcome for ${dev.label}.`); return; }
+    devices.push({ device_type: dev.dtype, device_id: dev.device_id, outcome, notes: devNotes || null });
+  }
+
+  if (!devices.length) { setError('odi-error', 'Select at least one device with an issue.'); return; }
+
+  setLoading('odi-save', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue-call`,
+    { event_id: _odiEventId, completion_date: completionDate,
+      issue_occur_date: issueOccurDate, notes: notes || null, devices }
+  );
+  setLoading('odi-save', false);
+  if (!ok) { setError('odi-error', data.error || 'Failed to save.'); return; }
+
+  hideModal('other-device-issue-modal');
+  loadPatientEvents();
+}
+
+// ── Other Device Issue — Engineer Visit ──────────────────────────────────────
+
+let _odivEventId   = null;
+let _odivDevices   = []; // devices that need visit (from linked call event)
+let _odivInventory = {}; // available replacement devices by type
+
+async function openOtherDeviceIssueVisitModal(ev) {
+  _odivEventId = ev.id;
+  setError('odiv-error', '');
+
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  document.getElementById('odiv-completion-date').value = nowStr;
+  document.getElementById('odiv-completion-date').max   = nowStr;
+  document.getElementById('odiv-notes').value = '';
+  document.getElementById('odiv-device-rows').innerHTML =
+    '<p class="text-sm text-slate-400 italic">Loading device info…</p>';
+
+  // Context and issue_occur_date from linked call
+  const callId    = (ev.triggered_by || {}).id;
+  const callEvent = (_completeEventsCache || []).concat(
+    Object.values((eventsCache?.free || {})).flat()
+  ).find(e => e.id === callId);
+  const issueOccurDate = callEvent?.issue_occur_date || null;
+
+  const ctx = document.getElementById('odiv-context');
+  ctx.textContent = callEvent
+    ? `Following call on ${callEvent.completion_date?.slice(0, 16).replace('T', ' ') || '—'}`
+    : 'Engineer visit';
+  ctx.classList.remove('hidden');
+
+  const occRow = document.getElementById('odiv-issue-occur-row');
+  const occDiv = document.getElementById('odiv-issue-occur-date');
+  if (issueOccurDate) {
+    occDiv.textContent = issueOccurDate.slice(0, 16).replace('T', ' ');
+    occRow.classList.remove('hidden');
+  } else {
+    occRow.classList.add('hidden');
+  }
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'odiv-completion-date');
+
+  showModal('other-device-issue-visit-modal');
+
+  try {
+    const res = await fetch('/devices/api/inventory');
+    if (!res.ok) throw new Error();
+    const inv = await res.json();
+    _odivInventory = {
+      modems:  (inv.modems  || []).filter(d => !d.removal_date && !d.assigned_to),
+      laptops: (inv.laptops || []).filter(d => !d.removal_date && !d.assigned_to),
+      sims:    (inv.sims    || []).filter(s => !s.removal_date),
+    };
+
+    const visitDevices = (callEvent?.devices || []).filter(d => d.outcome === 'visit_required');
+    _odivDevices = visitDevices;
+
+    const container = document.getElementById('odiv-device-rows');
+    container.innerHTML = '';
+    if (!visitDevices.length) {
+      container.innerHTML = '<p class="text-sm text-slate-400 italic">No devices flagged for visit.</p>';
+      return;
+    }
+    visitDevices.forEach((d, i) => _odivBuildRow(container, d, i));
+  } catch (e) {
+    setError('odiv-error', 'Failed to load device inventory.');
+    document.getElementById('odiv-device-rows').innerHTML = '';
+  }
+}
+
+function _odivBuildRow(container, d, idx) {
+  const dtype    = d.device_type || d.dtype;
+  const deviceId = d.device_id;
+  const label    = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+  const avail    = _odivInventory[dtype] || [];
+  // For SIMs, filter to only unlinked SIMs (where !modem_id)
+  const filtered = dtype === 'sims'
+                   ? avail.filter(r => !r.removal_date && !r.modem_id)
+                   : avail.filter(r => !r.removal_date && !r.assigned_to);
+  const replOpts = filtered.filter(r => r.id !== deviceId)
+                           .map(r => `<option value="${_esc(r.id)}">${_esc(r.id)}</option>`).join('');
+
+  const row = document.createElement('div');
+  row.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+  row.innerHTML = `
+    <div class="flex items-center justify-between">
+      <span class="text-sm font-semibold text-slate-800">${_esc(label)}</span>
+      <span class="text-xs text-slate-500">Current: <span class="font-mono">${_esc(deviceId)}</span></span>
+    </div>
+    <div>
+      <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+      <div class="space-y-2">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="odiv-outcome-${idx}" value="repaired" class="w-4 h-4 accent-purple-600"
+            onchange="_odivOutcomeChange(${idx})">
+          <span class="text-sm text-slate-700">Repaired on site</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="odiv-outcome-${idx}" value="replaced" class="w-4 h-4 accent-purple-600"
+            onchange="_odivOutcomeChange(${idx})">
+          <span class="text-sm text-slate-700">Replaced with another device</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="odiv-outcome-${idx}" value="neither" class="w-4 h-4 accent-purple-600"
+            onchange="_odivOutcomeChange(${idx})">
+          <span class="text-sm text-slate-700">Neither — still has issue</span>
+        </label>
+      </div>
+    </div>
+    <div id="odiv-replace-section-${idx}" class="hidden space-y-2 pl-2 border-l-2 border-purple-200">
+      <label class="block text-xs font-medium text-slate-600 mb-1">Replacement Device <span class="text-red-400">*</span></label>
+      <select id="odiv-new-device-${idx}"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 bg-white">
+        <option value="">Select replacement…</option>
+        ${replOpts || '<option value="" disabled>No available devices</option>'}
+      </select>
+    </div>
+    <div class="pl-2 border-l-2 border-slate-100">
+      <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+      <textarea id="odiv-device-notes-${idx}" rows="2"
+                class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none"
+                placeholder="What was done…"></textarea>
+    </div>
+  `;
+  container.appendChild(row);
+}
+
+function _odivOutcomeChange(idx) {
+  const outcome = document.querySelector(`input[name="odiv-outcome-${idx}"]:checked`)?.value;
+  document.getElementById(`odiv-replace-section-${idx}`).classList.toggle('hidden', outcome !== 'replaced');
+}
+
+async function saveOtherDeviceIssueVisit() {
+  const completionDate = document.getElementById('odiv-completion-date').value;
+  const notes          = document.getElementById('odiv-notes').value.trim();
+
+  if (!completionDate) { setError('odiv-error', 'Visit date is required.'); return; }
+
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (completionDate.split('T')[0] > today) {
+    setError('odiv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('odiv-completion-date').min;
+  if (minDate && completionDate.split('T')[0] < minDate) {
+    setError('odiv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+    return;
+  }
+
+  const outcomes = [];
+  for (let i = 0; i < _odivDevices.length; i++) {
+    const d       = _odivDevices[i];
+    const outcome = document.querySelector(`input[name="odiv-outcome-${i}"]:checked`)?.value || '';
+    const newId   = document.getElementById(`odiv-new-device-${i}`)?.value || null;
+    const dNotes  = document.getElementById(`odiv-device-notes-${i}`)?.value.trim() || null;
+    const dtype   = d.device_type || d.dtype;
+    const label   = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+
+    if (!outcome) { setError('odiv-error', `Select an outcome for ${label} ${d.device_id}.`); return; }
+    if (outcome === 'replaced' && !newId) { setError('odiv-error', `Select a replacement device for ${label} ${d.device_id}.`); return; }
+
+    outcomes.push({ device_type: dtype, device_id: d.device_id, outcome, new_device_id: newId, notes: dNotes });
+  }
+
+  if (!outcomes.length) { setError('odiv-error', 'No device outcomes to record.'); return; }
+
+  setLoading('odiv-save', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue-visit`,
+    { event_id: _odivEventId, completion_date: completionDate, notes: notes || null, device_outcomes: outcomes }
+  );
+  setLoading('odiv-save', false);
+  if (!ok) { setError('odiv-error', data.error || 'Failed to save.'); return; }
+
+  hideModal('other-device-issue-visit-modal');
+  loadPatientEvents();
+}

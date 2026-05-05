@@ -414,5 +414,6 @@ class Config:
         "adverse_events_occurred",
         "adverse_events_description",
         "satisfaction_rating",
-        "comments"
+        "comme"
+        "nts"
     ]
