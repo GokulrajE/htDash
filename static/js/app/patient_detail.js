@@ -99,22 +99,61 @@ function _nowForInput() {
 
 function _attachSessionEndGuard(startInputId, endInputId, errorId) {
   // Fires on change of the end input; validates same date and end > start immediately.
+  const startInput = document.getElementById(startInputId);
   const endInput = document.getElementById(endInputId);
-  if (!endInput) return;
-  if (endInput._sessionEndGuard) endInput.removeEventListener('change', endInput._sessionEndGuard);
+  if (!endInput || !startInput) return;
+
+  if (endInput._sessionEndGuard) {
+    endInput.removeEventListener('change', endInput._sessionEndGuard);
+    endInput.removeEventListener('input', endInput._sessionEndGuard);
+  }
+
   endInput._sessionEndGuard = () => {
-    const startVal = document.getElementById(startInputId)?.value;
-    const endVal   = endInput.value;
-    if (!startVal || !endVal) return;
-    if (startVal.split('T')[0] !== endVal.split('T')[0]) {
-      setError(errorId, 'Session start and end must be on the same date.');
-    } else if (endVal <= startVal) {
-      setError(errorId, 'Session end must be after session start.');
-    } else {
-      setError(errorId, '');
-    }
+    _validateSessionEndInput(startInput, endInput, errorId);
   };
+
   endInput.addEventListener('change', endInput._sessionEndGuard);
+  endInput.addEventListener('input', endInput._sessionEndGuard);
+
+  // Also validate start input changes
+  if (startInput._sessionStartGuard) {
+    startInput.removeEventListener('change', startInput._sessionStartGuard);
+    startInput.removeEventListener('input', startInput._sessionStartGuard);
+  }
+
+  startInput._sessionStartGuard = () => {
+    _validateSessionEndInput(startInput, endInput, errorId);
+  };
+
+  startInput.addEventListener('change', startInput._sessionStartGuard);
+  startInput.addEventListener('input', startInput._sessionStartGuard);
+}
+
+function _validateSessionEndInput(startInput, endInput, errorId) {
+  // Validate session start/end pairs for keyboard input
+  const startVal = startInput?.value;
+  const endVal   = endInput?.value;
+
+  if (!startVal || !endVal) {
+    setError(errorId, '');
+    return true;
+  }
+
+  const startDate = startVal.split('T')[0];
+  const endDate   = endVal.split('T')[0];
+
+  if (startDate !== endDate) {
+    setError(errorId, 'Session start and end must be on the same date.');
+    return false;
+  }
+
+  if (endVal <= startVal) {
+    setError(errorId, 'Session end must be after session start.');
+    return false;
+  }
+
+  setError(errorId, '');
+  return true;
 }
 
 function _attachDateGuard(inputId, errorId) {
@@ -125,14 +164,63 @@ function _attachDateGuard(inputId, errorId) {
   // Remove any previously attached guard listener to avoid duplicates
   if (input._dateGuard) input.removeEventListener('change', input._dateGuard);
   input._dateGuard = () => {
-    if (input.value && input.value > input.max) {
-      setError(errorId, 'Date cannot be in the future.');
-      input.value = '';
-    } else {
-      setError(errorId, '');
-    }
+    _validateDateInput(input, errorId);
   };
   input.addEventListener('change', input._dateGuard);
+  input.addEventListener('input', input._dateGuard);
+}
+
+function _validateDateInput(input, errorId) {
+  // Comprehensive validation for keyboard-entered dates against min/max constraints
+  if (!input.value) {
+    setError(errorId, '');
+    return true;
+  }
+
+  const value = input.value;
+  let errorMsg = '';
+
+  // Check min constraint
+  if (input.min && value < input.min) {
+    const minDate = input.min.includes('T') ? input.min.split('T')[0] : input.min;
+    const valueDate = value.includes('T') ? value.split('T')[0] : value;
+    errorMsg = `Date cannot be before ${_formatDateForDisplay(minDate)}.`;
+  }
+
+  // Check max constraint
+  if (!errorMsg && input.max && value > input.max) {
+    const maxDate = input.max.includes('T') ? input.max.split('T')[0] : input.max;
+    const valueDate = value.includes('T') ? value.split('T')[0] : value;
+    errorMsg = `Date cannot be after ${_formatDateForDisplay(maxDate)}.`;
+  }
+
+  setError(errorId, errorMsg);
+  return !errorMsg;
+}
+
+function _formatDateForDisplay(dateStr) {
+  // Convert YYYY-MM-DD to readable format (e.g., "30 Apr 2026")
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
+function _hasDateValidationErrors(errorElementIds) {
+  // Check if any date validation error elements have visible errors
+  // errorElementIds: array of error element IDs to check (e.g., ['activation-error', 'device-setup-error'])
+  // Returns: true if any errors are visible, false if all clear
+  if (!errorElementIds || errorElementIds.length === 0) return false;
+
+  for (const errorId of errorElementIds) {
+    const el = document.getElementById(errorId);
+    if (el && !el.classList.contains('hidden') && el.textContent.trim()) {
+      return true; // Found a visible error
+    }
+  }
+  return false; // No visible errors
 }
 
 function setLoading(btnId, loading) {
@@ -2618,6 +2706,12 @@ function onSetupSimChange() {
 }
 
 async function submitDeviceSetup() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors(['device-setup-error'])) {
+    setError('device-setup-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const eventDate = document.getElementById('device-setup-date').value;
   const plutoId   = document.getElementById('device-setup-pluto').value;
   const marsId    = document.getElementById('device-setup-mars').value;
@@ -2696,6 +2790,12 @@ async function openActivationModal(evId) {
 }
 
 async function submitActivation() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors(['activation-error'])) {
+    setError('activation-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const sessionStart = document.getElementById('activation-session-start').value;
   const sessionEnd   = document.getElementById('activation-session-end').value;
   const notes        = document.getElementById('activation-notes').value;
@@ -4301,6 +4401,12 @@ function openHomeVisitModal(ev) {
 }
 
 async function saveHomeVisit() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors(['hv-error'])) {
+    setError('hv-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const sessionStart = document.getElementById('hv-session-start').value;
   const sessionEnd   = document.getElementById('hv-session-end').value;
   const notes        = document.getElementById('hv-notes').value.trim();

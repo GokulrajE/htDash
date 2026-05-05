@@ -246,6 +246,14 @@ async function _loadIssuesSection(type) {
     const activeIssues  = issues.filter(ev => !retiredIds.has(ev.device_id));
     const retiredIssues = issues.filter(ev =>  retiredIds.has(ev.device_id));
 
+    const _attachLink = (ev, label, color) => {
+      if (!ev?.attachment) return '';
+      const url = `/devices/api/download-event-attachment?type=${encodeURIComponent(type)}&device_id=${encodeURIComponent(ev.device_id)}&event_id=${encodeURIComponent(ev.id)}`;
+      return `<a href="${url}" class="inline-flex items-center gap-1 text-xs font-medium ${color} hover:underline" target="_blank">
+        <i class="fas fa-paperclip"></i>${_esc(label)}
+      </a>`;
+    };
+
     container.innerHTML = `
       <div class="bg-white rounded-2xl border border-red-200 shadow-sm overflow-hidden">
         <div class="flex items-center gap-3 px-6 py-4 border-b border-red-100 bg-red-50">
@@ -254,20 +262,24 @@ async function _loadIssuesSection(type) {
         </div>
         <div class="divide-y divide-slate-100">
           ${activeIssues.map(ev => `
-            <div class="flex items-start gap-4 px-6 py-4">
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 mb-1">
-                  <span class="font-mono text-sm font-semibold text-slate-800">${_esc(ev.device_id)}</span>
-                  ${ev.homer_id ? `<span class="text-xs text-slate-500">Patient: ${_esc(ev.homer_id)}</span>` : ''}
-                </div>
-                ${ev.notes ? `<p class="text-sm text-slate-600">${_esc(ev.notes)}</p>` : ''}
-                ${ev.date ? `<p class="text-xs text-slate-400 mt-1">${_fmtDate(ev.issue_occur_date || ev.event_date || ev.date)} · ${_esc(ev.by)}</p>` : '<p class="text-xs text-slate-400 mt-1">Flagged in inventory</p>'}
+            <div class="px-6 py-4 space-y-2">
+              <div class="flex items-center gap-2">
+                <span class="font-mono text-sm font-semibold text-slate-800">${_esc(ev.device_id)}</span>
+                ${ev.homer_id ? `<span class="text-xs text-slate-500">Patient: ${_esc(ev.homer_id)}</span>` : ''}
+              </div>
+              ${ev.notes ? `<p class="text-sm text-slate-600"><span class="text-xs font-semibold text-red-600 mr-1">Issue:</span>${_esc(ev.notes)}</p>` : ''}
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <span class="text-red-600 font-medium"><i class="fas fa-exclamation-circle mr-1"></i>${_fmtDate(ev.issue_occur_date || ev.event_date || ev.date)}</span>
+                ${ev.by ? `<span class="text-slate-500">· ${_esc(ev.by)}</span>` : ''}
+                ${_attachLink(ev, 'Report doc', 'text-blue-600')}
               </div>
               ${_canManage ? `
-                <button onclick="openIssueModal('${type}', '${_esc(ev.device_id)}')"
-                        class="flex-shrink-0 px-3 py-1.5 text-xs font-semibold bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:scale-95 transition-all">
-                  <i class="fas fa-check mr-1"></i>Resolve
-                </button>` : ''}
+                <div class="pt-2">
+                  <button onclick="openIssueModal('${type}', '${_esc(ev.device_id)}')"
+                          class="px-3 py-1.5 text-xs font-semibold bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:scale-95 transition-all">
+                    <i class="fas fa-check mr-1"></i>Resolve
+                  </button>
+                </div>` : ''}
             </div>`).join('')}
           ${retiredIssues.map(ev => `
             <div class="flex items-start gap-4 px-6 py-4 opacity-40 pointer-events-none">
@@ -862,6 +874,10 @@ function onIssueDeviceChange() {
   // Fetch patient enrollment date and device issue date for validation
   _setDateValidationBounds(type, sel.value);
 
+  // Attach real-time keyboard validation for date inputs
+  _attachDateKeyboardValidation('issue-occurred-date', 'issue-modal-error');
+  _attachDateKeyboardValidation('issue-resolve-date', 'issue-modal-error');
+
   const hasIssue = d.faulty || d.has_issue;
 
   // Show status info
@@ -968,9 +984,78 @@ function _clearDateBounds() {
   occurrInput.removeAttribute('max');
   resolveInput.removeAttribute('min');
   resolveInput.removeAttribute('max');
+  // Remove keyboard validation listeners
+  if (occurrInput._keyboardValidate) {
+    occurrInput.removeEventListener('input', occurrInput._keyboardValidate);
+    occurrInput.removeEventListener('change', occurrInput._keyboardValidate);
+  }
+  if (resolveInput._keyboardValidate) {
+    resolveInput.removeEventListener('input', resolveInput._keyboardValidate);
+    resolveInput.removeEventListener('change', resolveInput._keyboardValidate);
+  }
+}
+
+function _attachDateKeyboardValidation(inputId, errorId) {
+  // Real-time validation for keyboard-entered dates against min/max constraints
+  const input = document.getElementById(inputId);
+  if (!input) return;
+
+  // Remove previous listeners to avoid duplicates
+  if (input._keyboardValidate) {
+    input.removeEventListener('input', input._keyboardValidate);
+    input.removeEventListener('change', input._keyboardValidate);
+  }
+
+  input._keyboardValidate = () => {
+    if (!input.value) {
+      _setError(errorId, '');
+      return;
+    }
+
+    const value = input.value;
+    const today = new Date().toISOString().split('T')[0];
+    let errorMsg = '';
+
+    // Check min constraint
+    if (input.min && value < input.min) {
+      errorMsg = `Date cannot be before ${_formatDateForKeyboardValidation(input.min)}.`;
+    }
+
+    // Check max constraint
+    if (!errorMsg && input.max && value > input.max) {
+      errorMsg = `Date cannot be after ${_formatDateForKeyboardValidation(input.max)}.`;
+    }
+
+    _setError(errorId, errorMsg);
+  };
+
+  input.addEventListener('input', input._keyboardValidate);
+  input.addEventListener('change', input._keyboardValidate);
+}
+
+function _formatDateForKeyboardValidation(dateStr) {
+  // Convert YYYY-MM-DD to readable format (e.g., "30 Apr 2026")
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
+function _hasDateValidationErrors(errorElementId) {
+  // Check if date validation error element has visible errors
+  const el = document.getElementById(errorElementId);
+  return el && !el.classList.contains('hidden') && el.textContent.trim();
 }
 
 async function saveIssueAction() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors('issue-modal-error')) {
+    _setError('issue-modal-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const device_id = document.getElementById('issue-device-select').value;
   if (!device_id) { _setError('issue-modal-error', 'Please select a device.'); return; }
 
@@ -1232,6 +1317,9 @@ function openAddSimModal() {
   document.getElementById('add-sim-expiry-note').textContent = '';
   document.getElementById('add-sim-reminder').value = '5';
   _setError('add-sim-error', '');
+  // Attach real-time keyboard validation
+  _attachDateKeyboardValidation('add-sim-recharge', 'add-sim-error');
+  _attachDateKeyboardValidation('add-sim-expiry', 'add-sim-error');
   document.getElementById('add-sim-modal').classList.remove('hidden');
 }
 
@@ -1350,6 +1438,9 @@ function openRechargeSimModal(simId) {
   document.getElementById('recharge-sim-expiry').classList.remove('bg-slate-100');
   document.getElementById('recharge-sim-expiry-note').textContent = '';
   _setError('recharge-sim-error', '');
+  // Attach real-time keyboard validation
+  _attachDateKeyboardValidation('recharge-sim-recharge', 'recharge-sim-error');
+  _attachDateKeyboardValidation('recharge-sim-expiry', 'recharge-sim-error');
   document.getElementById('recharge-sim-modal').classList.remove('hidden');
 }
 

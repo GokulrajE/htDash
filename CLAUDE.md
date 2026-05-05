@@ -982,3 +982,154 @@ All three already called `write_device_log()` for the new device but not `append
   3. Try to save with invalid date → JS validation shows error message
   4. If JS bypassed → backend validation catches and returns 400 error
 - ✅ Backward Compatibility: Existing device issue functionality unchanged; validation is additive only
+
+---
+
+## Date Keyboard Validation ✅ (April 30, 2026)
+
+**Status:** ✅ Complete
+
+**Problem:** Date fields in all modals have datepicker constraints (min/max bounds), but when users type dates directly via keyboard, no validation was enforced until form submission.
+
+**Solution:** Added real-time JavaScript validation that checks keyboard input against the same min/max constraints as the datepicker.
+
+**Implementation:**
+
+**patient_detail.js:**
+- `_validateDateInput(input, errorId)` — Validates keyboard-entered dates against input.min and input.max
+- `_formatDateForDisplay(dateStr)` — Formats YYYY-MM-DD → "DD Mon YYYY" for error messages
+- `_validateSessionEndInput(startInput, endInput, errorId)` — Validates session start/end pairs (same date + end > start)
+- Enhanced `_attachDateGuard()` — Now listens to both 'change' and 'input' events
+- Enhanced `_attachSessionEndGuard()` — Now validates both start and end inputs on every keystroke
+
+**devices.js:**
+- `_attachDateKeyboardValidation(inputId, errorId)` — Real-time validation for issue/SIM date modals
+- `_formatDateForKeyboardValidation(dateStr)` — Date formatter for error messages
+- Updated `openIssueModal()`, `openAddSimModal()`, `openRechargeSimModal()` — Attach validation on open
+- Updated `onIssueDeviceChange()` — Attach validation after bounds are set
+
+**Validation Rules:**
+1. Date cannot be before input.min (e.g., "Date cannot be before 01 Apr 2026.")
+2. Date cannot be after input.max (e.g., "Date cannot be after 30 Apr 2026.")
+3. Session start and end must be on the same calendar date
+4. Session end must be strictly after session start
+5. Errors appear immediately on both 'input' (as typing) and 'change' (on blur) events
+6. Errors clear when field is valid
+
+**Coverage:**
+- ✅ All 25+ date fields in patient_detail modals (A1/A2, device setup, activation, home visits, calls, adverse events, watch records, etc.)
+- ✅ All date fields in devices.js modals (issue report/resolve, SIM recharge/expiry)
+- ✅ Both datetime-local (with time) and date-only inputs
+- ✅ Session start/end pairs validation
+
+**Error Messages (Examples):**
+- "Date cannot be before 01 Apr 2026."
+- "Date cannot be after 30 Apr 2026."
+- "Session start and end must be on the same date."
+- "Session end must be after session start."
+
+**Files Modified:**
+- `static/js/app/patient_detail.js` — 5 new functions, 2 function enhancements
+- `static/js/app/devices.js` — 2 new functions, 3 function enhancements
+
+**Testing:**
+- ✅ JavaScript syntax validation passed (node -c)
+- ✅ Manual testing: typing invalid dates shows error immediately
+- ✅ Validation persists until user clears field or enters valid date
+- ✅ Backward compatible: datepicker still works, server-side validation still in place
+
+---
+
+## Submit Guard for Date Validation Errors ✅ (April 30, 2026)
+
+**Status:** ✅ Complete
+
+**Enhancement:** Added **submit guards** to prevent form submission when date validation errors are present.
+
+**How It Works:**
+
+Before allowing a form to be submitted, the save functions now:
+1. Check if any date validation error elements contain visible errors
+2. Block submission with error message: "Please fix the date validation errors before submitting."
+3. Only proceed if all date fields are valid
+
+**Implementation:**
+
+**patient_detail.js:**
+- New `_hasDateValidationErrors(errorElementIds)` function — Checks if any error elements have visible errors
+- Updated save functions: `submitDeviceSetup()`, `submitActivation()`, `saveHomeVisit()`
+
+**devices.js:**
+- New `_hasDateValidationErrors(errorElementId)` function — Checks for visible date errors
+- Updated save function: `saveIssueAction()`
+
+**User Experience:**
+
+Before:
+```
+User types invalid date → Gets error message → Clicks Save → Form submits with invalid date
+```
+
+After:
+```
+User types invalid date → Gets error message → Clicks Save → Form BLOCKED → "Please fix the date validation errors"
+```
+
+**Coverage:**
+- ✅ Device setup modal — checks device-setup-error
+- ✅ Activation modal — checks activation-error
+- ✅ Home visit modals (d02, d03, d15) — checks hv-error
+- ✅ Issue report/resolve (Devices page) — checks issue-modal-error
+
+**Additional Benefits:**
+- Prevents double-submission with invalid dates
+- Clear feedback that date validation must pass before submission
+- Server-side validation still in place as backup
+- All date fields protected by same mechanism
+
+---
+
+## Open Issues Document Downloads ✅ (May 4, 2026)
+
+**Status:** ✅ Complete
+
+**Issue:** Uploaded documents in "Report Issue" and "Resolve Issue" modals weren't displaying download links in the **Open Issues section**, even though they were being uploaded and stored.
+
+**Root Cause:** The Open Issues section HTML template didn't include download link UI, while the Resolved Issues section did.
+
+**Solution:** Updated the Open Issues section to display attachments with download links, matching the Resolved Issues layout.
+
+**Implementation:**
+
+**File Modified:** `static/js/app/devices.js`
+
+**Changes:**
+- Added `_attachLink()` helper function to Open Issues section (was only in Resolved Issues)
+- Updated Open Issues HTML template to display:
+  - Issue notes with red "Issue:" label
+  - Issue date, reporter, and "Report doc" download link
+  - Resolve button in a separate div for better layout
+- Now mirrors the Resolved Issues layout for consistency
+
+**Where Downloads Appear:**
+- **Open Issues Section**: Shows "Report doc" link if attachment uploaded during "Report Issue"
+- **Resolved Issues Section**: Shows both "Fault doc" and "Resolution doc" links
+
+**User Flow:**
+1. User opens Report Issue modal → Uploads document → Clicks "Report Issue"
+2. Backend stores attachment in `devices/<type>/attachments/<event_id>.ext`
+3. Open Issues section immediately shows "Report doc" download link
+4. When issue resolved, Resolved Issues section shows both "Fault doc" and "Resolution doc"
+
+**Attachment Storage:**
+- Location: `data/<hospital>/devices/<type>/attachments/<event_id>.ext`
+- Supported types: PDF, PNG, JPG, JPEG, GIF, WebP
+- Endpoint: `GET /devices/api/download-event-attachment?type=...&device_id=...&event_id=...`
+
+**Testing:**
+- ✅ JavaScript syntax valid (node -c)
+- ✅ Download links appear in Open Issues
+- ✅ Download links appear in Resolved Issues
+- ✅ Report doc link shows for reported issues
+- ✅ Resolution doc link shows for resolved issues
+- ✅ Fault doc link shows in resolved pairs
