@@ -188,13 +188,22 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   - `GET /api/patients/<homer_id>/prescription/vcg_prescription_d01` (or `d15`)
   - `GET /api/patients/<homer_id>/agwatch-timing/vcg_agwatch_timing_d03` (or `d15`)
 
-- **Adverse Events tab** — `admin` and `therapist` only (engineers cannot see this tab). Shows one card per adverse event, assembled client-side from the events API. Each card presents:
-  - AE header: date + description + `training_blocked` badge (red "Training blocked" pill if true)
-  - Below the header: a chronological list of all follow-up activity referencing this AE's ID — any `adverse_event_followup` call entry whose `ae_discussions` list contains this AE's ID, any `adverse_event_followup_visit` or `adverse_event_clinical_visit` completed entry with this AE's ID, and any `patient_call` entry where `ae_discussed: true` (shown as "Patient call — \<date\>", greyed out when the only connection is `ae_discussed` rather than explicit `ae_id` linkage). Each activity row shows: event type, date, and the per-AE discussion notes from `ae_discussions[*].notes`.
-  - Resolved AEs show a green "Resolved" badge + resolution date (`can_resume_from` if available, else discussion date)
-  - Unresolved AEs show an amber "Ongoing" badge
-  - Cards sorted: unresolved first (most recent first), then resolved (most recent first)
-  - Assembly: data fetched from `GET /api/patients/<homer_id>/events` (which returns all `free` arrays); assembled per-AE by joining on `ae_id` across event types — no separate endpoint required
+- **Adverse Events tab** — `admin` and `therapist` only (engineers cannot see this tab). Shows one collapsible card per adverse event, assembled client-side from the events API.
+  - **Alias:** each AE is assigned a stable alias `AE01`, `AE02`, … in chronological order (oldest = AE01). The alias never changes even as new AEs are filed.
+  - **Display order:** newest first (most recently reported at the top).
+  - **Card header** (always visible, click to expand/collapse):
+    - Left: alias (`AE01`) + status badge
+    - Right: chevron (rotates on open)
+    - Status badge variants: red pill "Ongoing — Training blocked" (`training_blocked: true`, unresolved); amber pill "Ongoing" (unresolved, no block); green pill "Resolved"
+  - **Meta row** (always visible, below header): `Reported: <date> | Resolved: <date> | Duration: N days | Day X`
+    - Resolved date and Duration shown only when resolved. When ongoing, Duration shows "N days ongoing" (elapsed since report date). Day X from activation.
+  - **Expanded body:**
+    - Description and action taken
+    - Triggered-by event (type + date)
+    - Attachment download link (if present)
+    - **Follow-up history** section: chronological list of all `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit` entries whose `ae_discussions` contains this AE's ID. Each row shows: event type, date, event notes, per-AE discussion notes, resolved/unresolved status, `can_resume_from` (if resolved and set), attachment link (if present).
+  - **Color theme per card:** red border/header (training blocked + unresolved), amber border/header (unresolved, no block), green border/header (resolved).
+  - Assembly: data fetched from `GET /api/patients/<homer_id>/events` (which returns all `free` arrays); assembled per-AE by filtering on `adverse_event_id` across follow-up event types — no separate endpoint required.
 
 - **Stub tabs** — Devices, Call Logs, Watch Records, Robot Issues show "Coming soon"
 

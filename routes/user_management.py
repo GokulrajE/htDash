@@ -1523,7 +1523,7 @@ def api_complete_adverse_event_followup(homer_id):
     completion_date = (body.get('completion_date') or '').strip()
     duration_str    = str(body.get('duration_minutes', '')).strip()
     notes           = (body.get('notes') or '').strip()
-    resolutions     = body.get('resolutions', [])
+    ae_discussions  = body.get('ae_discussions', [])
 
     if not event_id:
         return jsonify({'error': 'event_id is required.'}), 400
@@ -1544,8 +1544,8 @@ def api_complete_adverse_event_followup(homer_id):
         return jsonify({'error': 'Duration must be a positive integer.'}), 400
     if not notes:
         return jsonify({'error': 'Notes are required.'}), 400
-    if not isinstance(resolutions, list):
-        return jsonify({'error': 'resolutions must be a list.'}), 400
+    if not isinstance(ae_discussions, list):
+        return jsonify({'error': 'ae_discussions must be a list.'}), 400
 
     events_data = read_protocol_events(folder, homer_id)
     if not events_data:
@@ -1560,13 +1560,13 @@ def api_complete_adverse_event_followup(homer_id):
     if not entry:
         return jsonify({'error': 'Follow-up stub not found.'}), 404
 
-    # Validate resolutions against the stub's AE list
+    # Validate ae_discussions against the stub's AE list
     stub_ae_ids = entry.get('adverse_event_ids', [])
-    resolved_ids = {r['adverse_event_id'] for r in resolutions if r.get('resolved')}
+    resolved_ids = {r['adverse_event_id'] for r in ae_discussions if r.get('resolved')}
 
     # Look up each AE to check training_blocked
     free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
-    for r in resolutions:
+    for r in ae_discussions:
         ae_id = r.get('adverse_event_id')
         if ae_id not in stub_ae_ids:
             return jsonify({'error': f'Unknown adverse_event_id: {ae_id}'}), 400
@@ -1586,7 +1586,7 @@ def api_complete_adverse_event_followup(homer_id):
         'filed_at':         filed_at,
         'duration_minutes': duration_minutes,
         'notes':            notes,
-        'resolutions':      resolutions,
+        'ae_discussions':   ae_discussions,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
     events_data.setdefault('free', {}).setdefault('adverse_event_followup', []).append(complete_entry)
@@ -1616,7 +1616,7 @@ def api_complete_adverse_event_followup(homer_id):
             # Compute cumulativePauseDays from max can_resume_from across all pausing AEs
             training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
             resume_dates = []
-            for r in resolutions:
+            for r in ae_discussions:
                 ae = free_aes.get(r.get('adverse_event_id'), {})
                 if r.get('resolved') and ae.get('training_blocked') and r.get('can_resume_from'):
                     try:
@@ -1651,7 +1651,7 @@ def api_complete_adverse_event_followup(homer_id):
     return jsonify({'ok': True, 'id': event_id})
 
 
-def _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes, filed_at, event_id, folder, homer_id, loginid, session_id):
+def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_aes, filed_at, event_id, folder, homer_id, loginid, session_id):
     """Clear trainingPausedDate if all AEs resolved and no resolve_robot_issue_visit stubs remain."""
     resolve_ri_stubs = [
         e for e in events_data.get('incomplete', [])
@@ -1661,7 +1661,7 @@ def _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes
         return
     training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
     resume_dates = []
-    for r in resolutions:
+    for r in ae_discussions:
         ae = free_aes.get(r.get('adverse_event_id'), {})
         if r.get('resolved') and ae.get('training_blocked') and r.get('can_resume_from'):
             try:
@@ -1684,11 +1684,11 @@ def _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
 
 
-def _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, resolutions, free_aes,
+def _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
                                      patient_meta, filed_at, event_id,
                                      folder, homer_id, loginid, session_id):
     """Seed next follow-up stub for unresolved AEs, or clear pause if all resolved."""
-    resolved_ids   = {r['adverse_event_id'] for r in resolutions if r.get('resolved')}
+    resolved_ids   = {r['adverse_event_id'] for r in ae_discussions if r.get('resolved')}
     unresolved_ids = [ae_id for ae_id in stub_ae_ids if ae_id not in resolved_ids]
     today_str = date.today().strftime('%Y-%m-%dT%H:%M')
     tomorrow  = (date.today() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M')
@@ -1701,7 +1701,7 @@ def _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, resolutions, free_
             'filed_at':          filed_at,
         })
     else:
-        _clear_ae_pause_if_resolved(patient_meta, events_data, resolutions, free_aes,
+        _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_aes,
                                      filed_at, event_id, folder, homer_id, loginid, session_id)
 
 
@@ -2988,7 +2988,7 @@ def api_complete_resolve_robot_issue_visit(homer_id):
                 pass
         free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
         for aef in events_data.get('free', {}).get('adverse_event_followup', []):
-            for r in aef.get('resolutions', []):
+            for r in aef.get('ae_discussions', []):
                 ae = free_aes.get(r.get('adverse_event_id'), {})
                 if r.get('resolved') and ae.get('training_blocked') and r.get('can_resume_from'):
                     try:
@@ -3310,6 +3310,11 @@ def api_complete_watch_record(homer_id):
             if old_lost:
                 mark_device_lost(folder, 'agwatch', old_id, lost_date_str)
                 write_device_log(folder, old_id, loginid, session_id, f'Lost — reported by {homer_id}')
+                append_device_event(folder, 'agwatch', old_id, 'lost', loginid,
+                                    homer_id=homer_id, notes=f'Lost — reported by {homer_id}')
+            else:
+                append_device_event(folder, 'agwatch', old_id, 'available', loginid,
+                                    homer_id=homer_id, notes=f'Returned by {homer_id}')
         if new_id and new_id != old_id:
             assignments.append({
                 'id':            str(uuid.uuid4()),
@@ -3323,6 +3328,8 @@ def api_complete_watch_record(homer_id):
                 'notes':         notes,
             })
             write_device_log(folder, new_id, loginid, session_id, f'Assigned to {homer_id} ({limb})')
+            append_device_event(folder, 'agwatch', new_id, 'assign', loginid,
+                                homer_id=homer_id, notes=f'Assigned ({limb})')
     write_device_assignments(folder, 'agwatch', assignments)
 
     write_patient_log(folder, homer_id, loginid, session_id, 'Watch record filed')

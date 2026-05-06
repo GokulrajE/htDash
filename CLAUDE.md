@@ -70,7 +70,7 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 17. ⬜ Adverse Event Follow-up Visit modal (new)
 18. ⬜ Adverse Event Clinical Visit modal (new)
 19. ⬜ Assessment modals (a1, a2)
-20. ⬜ Patient detail tab content — Call Logs, Adverse Events, Watch Records, Robot Issues (exp only)
+20. ⬜ Patient detail tab content — Call Logs, ✅ Adverse Events, Watch Records, Robot Issues (exp only)
 21. ✅ Devices page — inventory, assignments, SIM management (integrated)
 22. ✅ SIM management — integrated into Devices page (no separate page)
 23. ⬜ Cleanup — remove old `dashboard.html` and unused JS
@@ -183,7 +183,7 @@ The script shifts the patient's entire timeline by N days (positive or negative)
   - Watch record trigger toggle is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
 - **`adverse_event_followup` chain:** seeded whenever any adverse event is filed (regardless of `training_blocked`). One stub exists at a time in `incomplete`, carrying `adverse_event_ids` — a list of all currently unresolved AE IDs. When a new AE is filed while a stub already exists, its ID is appended to the existing stub's list. `scheduled_date = [today, today + 1 day]` — active window for 1 day, overdue the day after. On completion (via follow-up call, visit, or clinical visit) the therapist records per-AE `ae_discussions` (notes, resolved, can_resume_from). Unresolved AEs carry into the next seeded stub (back to a call-based follow-up). Chain ends when all AEs are resolved. `can_resume_from` (date only) is required per resolved AE that had `training_blocked: true`. Pause clears only when all pausing AEs have `can_resume_from` set AND no `resolve_robot_issue_visit` stubs remain.
   - **`adverse_event_followup_visit` / `adverse_event_clinical_visit`:** scheduled from the follow-up call modal (or directly from the File AE modal). Stubs are cancellable. Both carry `adverse_event_ids` and follow the same per-AE `ae_discussions` structure. On completion, unresolved AEs re-seed a follow-up call stub (chain reverts to call-based). Pause clears on the same condition as above.
-  - **`ae_discussions` (replaces `resolutions`):** the key per-AE field on all follow-up event types. Each entry: `{ae_id, notes, resolved, can_resume_from}`. Stored on `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit`.
+  - **`ae_discussions`:** the key per-AE field on all follow-up event types. Each entry: `{ae_id, notes, resolved, can_resume_from}`. Stored on `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit`.
   - **`patient_initiated` toggle** on `adverse_event_followup`: when the patient contacted the clinic first, the therapist should first file a `patient_call` (with `ae_discussed: true`) and then open the follow-up call stub. Setting `patient_initiated: true` reveals a **Related patient call** selector (required) — a dropdown of `patient_call` entries for this patient where `ae_discussed: true`. Stored as `related_patient_call_id` on the completed follow-up record.
 - **`resolve_robot_issue_visit` stub:** created when a `robot_issue_visit` (or a subsequent `resolve_robot_issue_visit`) assigns no replacement for a taken-back device (`new_device_id: null`). Patient has no device; training paused. Resolved by engineer/admin: delivers replacement(s); may also optionally attend to the other device. Records `can_resume_from`. If null selected again, another stub is created. Pause clears only when no `resolve_robot_issue_visit` stubs remain AND no `adverse_event_followup` stubs remain.
 - **`pauseHistory` array:** tracks each continuous pause epoch on the patient JSON. One entry per uninterrupted pause period — append a new entry when `trainingPausedDate` transitions from `null`; close it (fill `end` and `days`) when the pause clears. If a second cause fires while already paused, append to the current open entry's `reasons` list (no new entry). Each reason carries `{type: "robot_issue"|"adverse_event", event_id: <uuid>}` referencing the causative `robot_issue_visit` or `adverse_event` entry in `free`. `cumulativePauseDays` is still stored as a scalar for quick status derivation but is now also derivable as `sum(e["days"] for e in pauseHistory if e["days"] is not None)`.
@@ -1133,3 +1133,34 @@ User types invalid date → Gets error message → Clicks Save → Form BLOCKED 
 - ✅ Report doc link shows for reported issues
 - ✅ Resolution doc link shows for resolved issues
 - ✅ Fault doc link shows in resolved pairs
+
+---
+
+## Adverse Events Tab — Collapsible Cards with AE Aliases ✅ (May 2026)
+
+**Status:** ✅ Complete
+
+**Feature:** Adverse Events tab on the patient detail page redesigned as collapsible cards with stable aliases, color-coded by severity, and a built-in follow-up history.
+
+**Card design:**
+
+| Element | Details |
+|---|---|
+| Alias | `AE01`, `AE02`, … assigned chronologically (oldest = AE01). Stable — never changes. |
+| Display order | Newest first |
+| Header | Alias + status badge + chevron (click anywhere to expand/collapse) |
+| Status badge | Red "Ongoing — Training blocked" / Amber "Ongoing" / Green "Resolved" |
+| Meta row | `Reported: <date> \| Resolved: <date> \| Duration: N days \| Day X` (always visible) |
+| Card color | Red border (blocked+ongoing), Amber border (ongoing), Green border (resolved) |
+
+**Expanded body:**
+- Description, action taken, triggered-by, attachment link
+- **Follow-up history** section: all `adverse_event_followup`, `_visit`, `_clinical_visit` entries that reference this AE's ID, in chronological order. Each row shows type, date, event notes, per-AE discussion notes, resolved/unresolved status, `can_resume_from` if set, attachment link.
+
+**Duration field:**
+- Resolved: `resolve_date − report_date` in days
+- Ongoing: elapsed days since report date ("N days ongoing")
+
+**Files Modified:**
+- `static/js/app/patient_detail.js` — replaced `renderAdverseEventsTab()` and `_adverseEventCard()`; added `_toggleAeCard()`, `_AEF_TYPE_LABELS`, `_AE_FOLLOWUP_TYPES` constants
+- `docs/pages.md` — updated Adverse Events tab spec

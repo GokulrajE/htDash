@@ -635,7 +635,7 @@ const _FIELD_ORDER = [
   'description', 'action_taken', 'training_blocked',
   'visit_start', 'visit_end',
   'duration_minutes',
-  'ae_discussions', 'resolutions',
+  'ae_discussions',
 ];
 
 const _FIELD_LABELS = {
@@ -666,7 +666,6 @@ const _FIELD_LABELS = {
   visit_start:          'Visit Start',
   visit_end:            'Visit End',
   ae_discussions:       'AE Discussions',
-  resolutions:          'AE Resolutions',
   training_blocked:     'Training Blocked',
   paused:              'Paused',
   notes:               'Notes',
@@ -735,7 +734,7 @@ function _timelineExtraFields(ev) {
         const note = d.notes ? ` (${d.notes})` : '';
         return `${dev}: ${from} → ${to}${note}`;
       }).join('; ');
-    } else if ((key === 'ae_discussions' || key === 'resolutions') && Array.isArray(val)) {
+    } else if (key === 'ae_discussions' && Array.isArray(val)) {
       if (!val.length) continue;
       display = val.map(r => {
         const status = r.resolved ? '✓ Resolved' : '○ Ongoing';
@@ -1042,15 +1041,23 @@ function _callCard(c) {
 
 // ── Adverse Events tab ────────────────────────────────────────────────────────
 
+const _AEF_TYPE_LABELS = {
+  adverse_event_followup:        'Follow-up Call',
+  adverse_event_followup_visit:  'Follow-up Visit',
+  adverse_event_clinical_visit:  'Clinical Visit',
+};
+const _AE_FOLLOWUP_TYPES = ['adverse_event_followup', 'adverse_event_followup_visit', 'adverse_event_clinical_visit'];
+
 function renderAdverseEventsTab() {
   const container = document.getElementById('adverse-events-content');
   if (!container) return;
 
-  const events = (_completeEventsCache || [])
+  // Oldest first → stable alias numbers (AE01, AE02, …)
+  const chronological = (_completeEventsCache || [])
     .filter(e => e.protocol_event_id === 'adverse_event')
-    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+    .sort((a, b) => (a.completion_date || '').localeCompare(b.completion_date || ''));
 
-  if (!events.length) {
+  if (!chronological.length) {
     container.innerHTML = `
       <div class="flex flex-col items-center justify-center py-16 text-slate-300">
         <i class="fas fa-exclamation-triangle text-3xl mb-3"></i>
@@ -1058,14 +1065,86 @@ function renderAdverseEventsTab() {
       </div>`;
     return;
   }
-  container.innerHTML = events.map(_adverseEventCard).join('');
+
+  const followupEvents = (_completeEventsCache || []).filter(e => _AE_FOLLOWUP_TYPES.includes(e.protocol_event_id));
+
+  // Display newest first; alias is position in chronological order
+  container.innerHTML = [...chronological].reverse().map(ev => {
+    const alias = String(chronological.indexOf(ev) + 1).padStart(2, '0');
+    return _adverseEventCard(ev, alias, followupEvents);
+  }).join('');
 }
 
-function _adverseEventCard(ev) {
-  const dayNum   = _dayNumber(ev.completion_date);
-  const dayBadge = dayNum !== null ? `<span class="text-xs font-semibold text-red-500">Day ${dayNum}</span>` : '';
-  const dateStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
+function _toggleAeCard(cardId) {
+  const body    = document.getElementById(`ae-body-${cardId}`);
+  const chevron = document.getElementById(`ae-chevron-${cardId}`);
+  if (!body) return;
+  const isHidden = body.classList.toggle('hidden');
+  if (chevron) chevron.style.transform = isHidden ? '' : 'rotate(180deg)';
+}
 
+function _adverseEventCard(ev, alias, followupEvents) {
+  // Find all follow-ups referencing this AE, sorted chronologically
+  const related = followupEvents
+    .filter(fe => (fe.ae_discussions || []).some(d => d.adverse_event_id === ev.id))
+    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+
+  let resolvedEntry = null;
+  for (const fe of related) {
+    const disc = (fe.ae_discussions || []).find(d => d.adverse_event_id === ev.id);
+    if (disc?.resolved) { resolvedEntry = { fe, disc }; break; }
+  }
+
+  const isResolved = !!resolvedEntry;
+  const isBlocked  = ev.training_blocked && !isResolved;
+
+  // Color theme
+  let borderCls, headerBg, headerText, statusBadge;
+  if (isBlocked) {
+    borderCls   = 'border-red-300';
+    headerBg    = 'bg-red-100';
+    headerText  = 'text-red-900';
+    statusBadge = `<span class="inline-flex items-center gap-1 text-xs bg-red-600 text-white rounded-full px-2 py-0.5 font-medium">
+                     <i class="fas fa-pause text-[10px]"></i>Ongoing — Training blocked</span>`;
+  } else if (!isResolved) {
+    borderCls   = 'border-amber-300';
+    headerBg    = 'bg-amber-50';
+    headerText  = 'text-amber-900';
+    statusBadge = `<span class="inline-flex items-center gap-1 text-xs bg-amber-100 text-amber-800 border border-amber-300 rounded-full px-2 py-0.5">
+                     <i class="fas fa-clock text-[10px]"></i>Ongoing</span>`;
+  } else {
+    borderCls   = 'border-green-200';
+    headerBg    = 'bg-green-50';
+    headerText  = 'text-green-900';
+    statusBadge = `<span class="inline-flex items-center gap-1 text-xs bg-green-100 text-green-800 border border-green-200 rounded-full px-2 py-0.5">
+                     <i class="fas fa-check text-[10px]"></i>Resolved</span>`;
+  }
+
+  // Dates and duration
+  const reportDateStr = ev.completion_date ? _fmtDate(ev.completion_date) : '—';
+  let resolveDateStr = '';
+  let durationStr    = '';
+  if (isResolved && resolvedEntry.fe.completion_date) {
+    resolveDateStr = _fmtDate(resolvedEntry.fe.completion_date);
+    const d1   = new Date(ev.completion_date);
+    const d2   = new Date(resolvedEntry.fe.completion_date);
+    const days = Math.max(0, Math.round((d2 - d1) / 86400000));
+    durationStr = `${days} day${days !== 1 ? 's' : ''}`;
+  } else if (!isResolved && ev.completion_date) {
+    const days = Math.max(0, Math.round((Date.now() - new Date(ev.completion_date)) / 86400000));
+    durationStr = `${days} day${days !== 1 ? 's' : ''} ongoing`;
+  }
+
+  const dayNum = _dayNumber(ev.completion_date);
+  const sep    = `<span class="text-slate-300 mx-1.5">|</span>`;
+  const metaParts = [
+    `<span class="text-xs text-slate-500"><span class="text-slate-400">Reported:</span> ${reportDateStr}</span>`,
+    resolveDateStr ? `<span class="text-xs text-slate-500"><span class="text-slate-400">Resolved:</span> ${resolveDateStr}</span>` : '',
+    durationStr    ? `<span class="text-xs text-slate-500"><span class="text-slate-400">Duration:</span> ${durationStr}</span>` : '',
+    dayNum !== null ? `<span class="text-xs text-slate-400">Day ${dayNum}</span>` : '',
+  ].filter(Boolean).join(sep);
+
+  // Triggered by
   let triggerStr = '';
   if (ev.triggered_by) {
     const typeLabel   = _WR_TRIGGER_NAMES[ev.triggered_by.type] || (ev.triggered_by.type || '').replace(/_/g, ' ');
@@ -1074,30 +1153,66 @@ function _adverseEventCard(ev) {
     triggerStr = `<div class="text-xs text-slate-500"><span class="text-slate-400">Triggered by:</span> ${typeLabel}${triggerDate}</div>`;
   }
 
-  const pausedStr = ev.paused
-    ? `<div class="inline-flex items-center gap-1 text-xs bg-red-50 text-red-700 border border-red-200 rounded-full px-2 py-0.5"><i class="fas fa-pause text-[10px]"></i>Training paused</div>`
-    : '';
-
   const attachmentStr = (ev.attachment && ev.id)
     ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${ev.id}" target="_blank"
          class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
-         <i class="fas fa-paperclip"></i>Download attachment</a>` : '';
+         <i class="fas fa-paperclip"></i>Attachment</a>`
+    : '';
+
+  // Follow-up history rows
+  const followupRows = related.map(fe => {
+    const disc      = (fe.ae_discussions || []).find(d => d.adverse_event_id === ev.id);
+    const typeLabel = _AEF_TYPE_LABELS[fe.protocol_event_id] || fe.protocol_event_id;
+    const feDate    = fe.completion_date ? _fmtDateTime(fe.completion_date) : '—';
+    const feNotes   = fe.notes   ? `<p class="text-xs text-slate-500 mt-0.5">${fe.notes}</p>`        : '';
+    const discNotes = disc?.notes ? `<p class="text-xs text-slate-500 mt-0.5 italic">${disc.notes}</p>` : '';
+    const resumeStr = disc?.can_resume_from
+      ? ` <span class="text-xs text-slate-400">(resume from ${disc.can_resume_from})</span>` : '';
+    const statusEl  = disc?.resolved
+      ? `<span class="inline-flex items-center gap-1 text-xs text-green-700"><i class="fas fa-check-circle text-[10px]"></i>Resolved${resumeStr}</span>`
+      : `<span class="inline-flex items-center gap-1 text-xs text-amber-700"><i class="fas fa-circle text-[10px]"></i>Unresolved</span>`;
+    const feAttach  = (fe.attachment && fe.id)
+      ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${fe.id}" target="_blank"
+           class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
+           <i class="fas fa-paperclip"></i>Attachment</a>` : '';
+    return `
+      <div class="py-2 border-t border-slate-100">
+        <div class="flex items-center justify-between flex-wrap gap-1 mb-0.5">
+          <span class="text-xs font-medium text-slate-700">${typeLabel}</span>
+          <span class="text-xs text-slate-400">${feDate}</span>
+        </div>
+        ${feNotes}${discNotes}
+        <div class="mt-1 flex items-center gap-3 flex-wrap">${statusEl}${feAttach}</div>
+      </div>`;
+  }).join('');
+
+  const followupSection = related.length
+    ? `<div class="mt-3 pt-2 border-t border-slate-200">
+         <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Follow-up history</p>
+         ${followupRows}
+       </div>`
+    : '';
+
+  const cardId = ev.id.replace(/-/g, '');
 
   return `
-    <div class="bg-white rounded-xl border border-red-200 shadow-sm mb-3 overflow-hidden">
-      <div class="bg-red-50 border-b border-red-100 px-4 py-2.5 flex items-center justify-between">
-        <span class="text-sm font-semibold text-red-800">Adverse Event</span>
-        <div class="flex items-center gap-3">
-          ${dayBadge}
-          <span class="text-xs text-slate-500">${dateStr}</span>
+    <div class="rounded-xl border ${borderCls} shadow-sm mb-3 overflow-hidden">
+      <div class="${headerBg} px-4 py-2.5 cursor-pointer select-none flex items-center justify-between"
+           onclick="_toggleAeCard('${cardId}')">
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <span class="text-sm font-bold ${headerText}">AE${alias}</span>
+          ${statusBadge}
         </div>
+        <i class="fas fa-chevron-down text-xs ${headerText}" id="ae-chevron-${cardId}"
+           style="transition: transform 0.15s"></i>
       </div>
-      <div class="px-4 py-3 space-y-1.5">
-        ${ev.description ? `<p class="text-sm text-slate-700">${ev.description}</p>` : ''}
+      <div class="px-4 py-2 border-b border-slate-100 bg-white flex items-center flex-wrap gap-0">${metaParts}</div>
+      <div id="ae-body-${cardId}" class="hidden bg-white px-4 py-3 space-y-1.5">
+        ${ev.description  ? `<p class="text-sm text-slate-700">${ev.description}</p>` : ''}
         ${ev.action_taken ? `<div class="text-xs text-slate-500"><span class="text-slate-400">Action taken:</span> ${ev.action_taken}</div>` : ''}
-        ${pausedStr}
         ${triggerStr}
         ${attachmentStr}
+        ${followupSection}
       </div>
     </div>`;
 }
@@ -1883,7 +1998,7 @@ async function saveAdverseEventFollowup() {
   if (!duration || duration <= 0) { setError('aef-error', 'Duration must be a positive number.'); return; }
   if (!notes)  { setError('aef-error', 'Notes are required.'); return; }
 
-  const resolutions = [];
+  const ae_discussions = [];
   for (let i = 0; i < _aefAeDetails.length; i++) {
     const ae       = _aefAeDetails[i];
     const resolved = document.getElementById(`aef-resolved-${i}`).checked;
@@ -1895,7 +2010,7 @@ async function saveAdverseEventFollowup() {
         return;
       }
     }
-    resolutions.push({ adverse_event_id: ae.id, resolved, can_resume_from });
+    ae_discussions.push({ adverse_event_id: ae.id, resolved, can_resume_from });
   }
 
   if (!_validateAttachment('aef', 'aef-error')) return;
@@ -1903,7 +2018,7 @@ async function saveAdverseEventFollowup() {
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event-followup`,
-    { event_id: _aefEventId, completion_date: date, duration_minutes: duration, notes, resolutions }
+    { event_id: _aefEventId, completion_date: date, duration_minutes: duration, notes, ae_discussions }
   );
   if (!ok) { setError('aef-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
