@@ -2035,18 +2035,14 @@ def api_complete_robot_issue_call(homer_id):
     # Validate issue_occur_date (required for robot issues)
     if not issue_occur_date:
         return jsonify({'error': 'Issue occurred date is required.'}), 400
-    print(f"DEBUG: Received issue_occur_date: '{issue_occur_date}' (type: {type(issue_occur_date)})")
     try:
         issue_dt = _parse_date_flex(issue_occur_date)
-        print(f"DEBUG: Parsed issue_dt: {issue_dt}")
         if not issue_dt:
             return jsonify({'error': f'Invalid issue occurred date format: {issue_occur_date}'}), 400
         today = datetime.now()
-        print(f"DEBUG: Today's date: {today.date()}")
         if issue_dt > today:
             return jsonify({'error': 'Issue occurred date cannot be in the future.'}), 400
         if patient and patient.get('activationDate'):
-            print(f"DEBUG: activationDate = {patient.get('activationDate')}")
             activation_dt = _parse_date_flex(patient['activationDate'])
             if not activation_dt:
                 return jsonify({'error': f"Invalid activation date format: {patient['activationDate']}"}), 400
@@ -2158,17 +2154,14 @@ def api_complete_other_device_issue_call(homer_id):
 
     # Validate issue_occur_date (if provided)
     if issue_occur_date:
-        print(f"DEBUG: Received issue_occur_date: '{issue_occur_date}' (type: {type(issue_occur_date)})")
         try:
             issue_dt = _parse_date_flex(issue_occur_date)
-            print(f"DEBUG: Parsed issue_dt: {issue_dt}")
             if not issue_dt:
                 return jsonify({'error': f'Invalid issue occurred date format: {issue_occur_date}'}), 400
             today = datetime.now()
             if issue_dt > today:
                 return jsonify({'error': 'Issue occurred date cannot be in the future.'}), 400
             if patient and patient.get('activationDate'):
-                print(f"DEBUG: activationDate = {patient.get('activationDate')}")
                 activation_dt = _parse_date_flex(patient['activationDate'])
                 if not activation_dt:
                     return jsonify({'error': f"Invalid activation date format: {patient['activationDate']}"}), 400
@@ -2588,7 +2581,6 @@ def api_complete_robot_issue_visit(homer_id):
         try:
             issue_dt = _parse_date_flex(call_issue_occur_date)
             if issue_dt and visit_dt.date() < issue_dt.date():
-                print(f"DEBUG: call_issue_occur_date = {call_issue_occur_date}, issue_dt = {issue_dt.date()}, visit_dt = {visit_dt.date().date()}")
                 return jsonify({'error': f'Visit date must be on or after issue occurred date ({call_issue_occur_date}).'}), 400
         except ValueError:
             pass
@@ -3640,14 +3632,7 @@ def api_upload_attachment(homer_id):
         pdf_file.save(str(attachment_path))
 
   
-    # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
     friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
-    print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
-
-  
-    # Extract just the filename from the path (e.g., "prescription_d01.pdf" from "attachments/prescription_d01.pdf")
-    friendly_filename = pdf_path_mapping.split('/')[-1] if '/' in pdf_path_mapping else pdf_path_mapping
-    print(f'[FILENAME DEBUG] protocol_event_id={protocol_event_id}, friendly_filename={friendly_filename}')
 
     # Stamp fields on the entry
     entry['attachment']         = pdf_path_mapping
@@ -3713,7 +3698,6 @@ def api_download_attachment(homer_id, event_id):
     # Get the friendly filename from protocol_event_id
     events_data = read_protocol_events(folder, homer_id)
     friendly_name = 'prescription_attachment.pdf'  # Default fallback
-    print(f'[DOWNLOAD DEBUG] event_id={event_id}')
 
     if events_data:
         # Search in complete events
@@ -3721,7 +3705,6 @@ def api_download_attachment(homer_id, event_id):
             if entry.get('id') == event_id:
                 protocol_event_id = entry.get('protocol_event_id', '')
                 friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
-                print(f'[DOWNLOAD DEBUG] Found in complete, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                 break
         # Search in free events if not found
         if friendly_name == 'prescription_attachment.pdf':
@@ -3731,10 +3714,7 @@ def api_download_attachment(homer_id, event_id):
                         if entry.get('id') == event_id:
                             protocol_event_id = entry.get('protocol_event_id', '')
                             friendly_name = _PRINTOUT_PDF_FILES.get(protocol_event_id, 'prescription_attachment.pdf')
-                            print(f'[DOWNLOAD DEBUG] Found in free, protocol_event_id={protocol_event_id}, friendly_name={friendly_name}')
                             break
-
-    print(f'[DOWNLOAD DEBUG] Using friendly_name={friendly_name}')
 
     # Read the PDF file
     with open(str(attachment_path), 'rb') as f:
@@ -3754,15 +3734,7 @@ def api_download_attachment(homer_id, event_id):
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response.headers['Pragma'] = 'no-cache'
 
-    print(f'[DOWNLOAD DEBUG] Response headers set:')
-    print(f'  Content-Type: application/pdf')
-    print(f'  Content-Length: {len(pdf_data)}')
-    print(f'  Content-Disposition: attachment; filename="{friendly_name}"')
-
     return response
-#     return send_file(str(attachment_path), mimetype='application/pdf',
-#                      as_attachment=False,
-#                      download_name=attachment_path.name)
 
 
 @bp.route('/api/patients/<homer_id>/log-patient-call', methods=['POST'])
@@ -4218,9 +4190,7 @@ def create_homer_id():
         
         # Upload to AWS
         upload_success = S3Operations.upload_to_s3(details_path, s3_key)
-        if upload_success:
-            print(f"DEBUG: Uploaded homerIdDetails.json to S3 for {current_session.login_place}")
-        else:
+        if not upload_success:
             print(f"WARNING: Failed to upload homerIdDetails.json to S3")
     except Exception as upload_err:
         print(f"ERROR: Could not upload to AWS: {upload_err}")
@@ -4637,8 +4607,6 @@ def get_config_dates(homer_id):
         current_device = request.args.get(
             "device", "Pluto"
         )  # Default to Pluto if not specified
-        print(f"DEBUG: Getting dates for {homer_id}, current device: {current_device}")
-
         start_date = None
         end_date = None
         group = None
@@ -4668,27 +4636,18 @@ def get_config_dates(homer_id):
                                 end_date = user.get("endDate") or user.get("end_date")
                                 if start_date and end_date:
                                     found_source = "homerIdDetails.json (control group)"
-                                    print(
-                                        f"DEBUG: Control group - Found dates in homerIdDetails.json: {start_date} - {end_date}"
-                                    )
                             break
             except Exception as e:
-                print(f"DEBUG: Error reading homerIdDetails.json: {e}")
+                pass
 
         # For EXPERIMENTAL group: Get from device-specific configdata.csv
         if not found_source and user_group == "experimental":
-            print(
-                f"DEBUG: Experimental group - Looking for {current_device}/configdata.csv"
-            )
             base_path = os.path.join(
                 Config.META_DATA_PATH, current_session.login_place, homer_id
             )
 
             # Build path for the specific device
             device_config = os.path.join(base_path, current_device, "configdata.csv")
-            print(
-                f"DEBUG: Checking device config: {device_config} - Exists: {os.path.exists(device_config)}"
-            )
 
             if os.path.exists(device_config):
                 try:
@@ -4703,16 +4662,10 @@ def get_config_dates(homer_id):
                             found_source = (
                                 f"{current_device}/configdata.csv (experimental group)"
                             )
-                            print(
-                                f"DEBUG: Found dates in {current_device}: {start_date} - {end_date}"
-                            )
                 except Exception as e:
-                    print(f"DEBUG: Error reading {current_device} config: {e}")
+                    pass
             else:
                 # Fallback: If device config not found for experimental group, try others
-                print(
-                    f"DEBUG: {current_device} config not found, checking other devices..."
-                )
                 base_path = os.path.join(
                     Config.META_DATA_PATH, current_session.login_place, homer_id
                 )
@@ -4722,9 +4675,6 @@ def get_config_dates(homer_id):
                         continue  # Already checked this
 
                     device_config = os.path.join(base_path, device, "configdata.csv")
-                    print(
-                        f"DEBUG: Checking fallback device {device}: {device_config} - Exists: {os.path.exists(device_config)}"
-                    )
 
                     if os.path.exists(device_config):
                         try:
@@ -4737,19 +4687,14 @@ def get_config_dates(homer_id):
                                     start_date = first_row.get("StartDate")
                                     end_date = last_row.get("EndDate")
                                     found_source = f"{device}/configdata.csv (fallback)"
-                                    print(
-                                        f"DEBUG: Found dates in {device}: {start_date} - {end_date}"
-                                    )
                                     break
                         except Exception as e:
-                            print(f"DEBUG: Error reading {device} config: {e}")
+                            pass
 
         if not start_date or not end_date:
             error_msg = f"Config dates not found for {homer_id} (group: {user_group}, device: {current_device})"
-            print(f"DEBUG: {error_msg}")
             return jsonify({"error": error_msg}), 404
 
-        print(f"DEBUG: Successfully found dates from {found_source}")
         return jsonify(
             {
                 "startDate": start_date,
@@ -4760,12 +4705,7 @@ def get_config_dates(homer_id):
         )
 
     except Exception as e:
-        error_msg = f"Exception in get_config_dates: {str(e)}"
-        print(f"DEBUG: {error_msg}")
-        import traceback
-
-        traceback.print_exc()
-        return jsonify({"error": error_msg}), 500
+        return jsonify({"error": f"Exception in get_config_dates: {str(e)}"}), 500
 
 
 @bp.route("/assign_group_user", methods=["POST"])
@@ -5260,9 +5200,7 @@ def upload_updated_data():
             # S3 upload successful - now save locally as backup/metadata
             _os.makedirs(_os.path.dirname(file_path), exist_ok=True)
             _os.rename(temp_file, file_path)  # Move temp file to local storage
-            
-            print(f"DEBUG: Uploaded to S3 and saved locally: {s3_key}")
-            
+
         except Exception as e:
             # Clean up temp file on error
             if _os.path.exists(temp_file):
@@ -5750,7 +5688,7 @@ def activate_experimental_patient():
                                                 activation_date = datetime.strptime(start_date_str, "%d-%m-%Y")
                                                 break
                                     except Exception as e:
-                                        print(f"DEBUG: Error reading config for activation date: {e}")
+                                        pass
 
                         if not activation_date:
                             activation_date = datetime.now()

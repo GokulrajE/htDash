@@ -1369,7 +1369,6 @@ async function saveAdverseEvent() {
 
 async function _fetchIssueValidationDates(triggeredById) {
   try {
-    console.log('Fetching validation dates for triggered_by_id:', triggeredById);
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/issue-validation-dates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1380,7 +1379,6 @@ async function _fetchIssueValidationDates(triggeredById) {
       return { enroll_date: null, issue_occur_date: null };
     }
     const data = await res.json();
-    console.log('Validation dates received:', data);
     return data;
   } catch (e) {
     console.error('Failed to fetch issue validation dates:', e);
@@ -1390,8 +1388,6 @@ async function _fetchIssueValidationDates(triggeredById) {
 
 function _setIssueModalDateBounds(enrollDate, issueOccurDate, issueOccurInputId, visitInputId) {
   const today = new Date().toISOString().split('T')[0];
-
-  console.log('Setting date bounds:', { enrollDate, issueOccurDate, issueOccurInputId, visitInputId, today });
 
   function formatDateForInput(dateStr, inputElement) {
     if (!dateStr) return null;
@@ -1410,10 +1406,8 @@ function _setIssueModalDateBounds(enrollDate, issueOccurDate, issueOccurInputId,
       const formattedEnrollDate = formatDateForInput(enrollDate, inp);
       if (formattedEnrollDate) {
         inp.min = formattedEnrollDate;
-        console.log(`Set ${issueOccurInputId} min=${formattedEnrollDate}, max=${today}`);
       } else {
         inp.removeAttribute('min');
-        console.log(`Removed min from ${issueOccurInputId}, max=${today}`);
       }
       // For datetime-local, also format today
       if (inp.type === 'datetime-local') {
@@ -1431,10 +1425,8 @@ function _setIssueModalDateBounds(enrollDate, issueOccurDate, issueOccurInputId,
       const formattedIssueDate = formatDateForInput(issueOccurDate, inp);
       if (formattedIssueDate) {
         inp.min = formattedIssueDate;
-        console.log(`Set ${visitInputId} min=${formattedIssueDate}, max=${today}`);
       } else {
         inp.removeAttribute('min');
-        console.log(`Removed min from ${visitInputId}, max=${today}`);
       }
       // For datetime-local, also format today
       if (inp.type === 'datetime-local') {
@@ -3345,17 +3337,7 @@ async function _renderDeviceGraphs(container) {
       // Check if there are actual CSV date files available for this device (dates_with_data)
       // If dates_with_data is missing, empty, or not an array, show "No data available"
       const hasDatesWithData = Array.isArray(d.dates_with_data) && d.dates_with_data.length > 0;
-      console.log(`[Device ${deviceKey}] API Response:`, {
-        dates_with_data: d.dates_with_data,
-        is_array: Array.isArray(d.dates_with_data),
-        length: d.dates_with_data?.length,
-        hasDatesWithData,
-        actualDays
-      });
-      console.log(`[Device ${deviceKey}] Condition check:`, { hasDatesWithData, willShowGraph: hasDatesWithData, willShowNoData: !hasDatesWithData });
-
       if (!hasDatesWithData) {
-        console.log(`[Device ${deviceKey}] Showing "No data available" message because hasDatesWithData is false`);
         const card = document.createElement('div');
         card.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
         card.innerHTML = `
@@ -3376,7 +3358,6 @@ async function _renderDeviceGraphs(container) {
         container.appendChild(card);
         continue;
       }
-      console.log(`[Device ${deviceKey}] Showing graph because hasDatesWithData is true`);
 
       // Prescribed mechanism chips
       const mechChips = Object.entries(d.prescribed || {}).map(([mech, mins]) =>
@@ -3551,8 +3532,6 @@ async function _renderDeviceGraphs(container) {
             const actualValue = d.data[idx];
             const displayDate = shortLabels[idx];
 
-            console.log('Hovered date:', hoveredDate, 'Actual value:', actualValue, 'Has data:', d.dates_with_data.includes(hoveredDate));
-
             // Show detail only if the date has a data file (CSV exists in Dates folder)
             if (d.dates_with_data.includes(hoveredDate)) {
               _loadDeviceDetail(hoveredDate, deviceKey, cfg.label, cfg.color, displayDate);
@@ -3629,8 +3608,6 @@ async function _loadDeviceDetail(date, deviceKey, deviceLabel, color, displayDat
     }
 
     const url = `/api/patients/${PATIENT_HOMER_ID}/activity/${dateParam}/${deviceKey}`;
-    console.log('Fetching device detail:', url, 'Original date:', date, 'Param:', dateParam);
-
     const res = await fetch(url);
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
@@ -3889,8 +3866,6 @@ async function savePrescriptionPrintout() {
     const previewDiv = document.getElementById('presc-printout-preview');
     const htmlContent = previewDiv.innerHTML;
 
-    console.log('Sending HTML to server for server-side PDF rendering...');
-
     // Send HTML to server for server-side PDF generation with Puppeteer
     const { ok: renderOk, data: renderData } = await apiPost(
       `/api/patients/${PATIENT_HOMER_ID}/generate-prescription-pdf`,
@@ -3906,8 +3881,6 @@ async function savePrescriptionPrintout() {
     if (!renderOk) {
       throw new Error(renderData.error || 'Failed to generate PDF');
     }
-
-    console.log('✓ PDF generated and saved successfully');
 
     // Success: close modal and refresh events
     hideModal('prescription-printout-modal');

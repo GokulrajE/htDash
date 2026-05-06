@@ -15,7 +15,7 @@ HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managin
 - **Patient Management:** Enrollment, group assignment (experimental/control), status tracking
 - **Exercise Management:** VCG programs, ADL session recording, call logs
 - **Analytics:** Usage charts per hospital site
-- **Device Management:** Pluto & Mars device assignment, actigraph watch tracking
+- **Device Management:** Pluto & Mars device assignment, actigraph watch tracking, SIM card recharging
 - **Data Sync:** AWS S3 sync for device config data and call records
 - **Access Control:** Role-based: global admin, therapist, engineer
 
