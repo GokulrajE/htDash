@@ -7,6 +7,6 @@
     "install-puppeteer": "npm install"
   },
   "dependencies": {
-    "puppeteer": "^21.11.0"
+    "puppeteer": "^24.42.0"
   }
 }

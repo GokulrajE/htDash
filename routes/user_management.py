@@ -5948,6 +5948,8 @@ def _get_field_labels(language: str) -> dict:
             'description': 'Description',
             'dosage': 'Dosage',
             'items': 'Items Needed',
+            'sets': 'sets',
+            'reps': 'reps',
             'adl_section': 'Activities of Daily Living (ADL)',
             'vcg_section': 'Virtual Center of Gravity (VCG)',
             'scan_video': 'Scan for Video',
@@ -5957,6 +5959,8 @@ def _get_field_labels(language: str) -> dict:
             'description': 'விளக்கம்',
             'dosage': 'தீவிரம்',
             'items': 'தேவையான பொருட்கள்',
+            'sets': 'தொகுப்புகள்',
+            'reps': 'மறுநிகழ்வுகள்',
             'adl_section': 'நாளாந்த வாழ்க்கை நடவடிக்கைகள் (ADL)',
             'vcg_section': 'மெய்ம் ஈர்ப்பு மையம் (VCG)',
             'scan_video': 'வீடியோவுக்கு ஸ்கேன் செய்யவும்',
@@ -5966,6 +5970,8 @@ def _get_field_labels(language: str) -> dict:
             'description': 'వివరణ',
             'dosage': 'మోతాదు',
             'items': 'అవసరమైన వస్తువులు',
+            'sets': 'సెట్లు',
+            'reps': 'పూనుకోవటాలు',
             'adl_section': 'రోజువారీ జీవన కార్యకలాపాలు (ADL)',
             'vcg_section': 'వర్చువల్ గురుత్వాకర్షణ కేంద్రం (VCG)',
             'scan_video': 'వీడియో కోసం స్కాన్ చేయండి',
@@ -5975,6 +5981,8 @@ def _get_field_labels(language: str) -> dict:
             'description': 'ವಿವರಣೆ',
             'dosage': 'ಮಾತ್ರೆ',
             'items': 'ಬೇಕಾದ ವಸ್ತುಗಳು',
+            'sets': 'ಸೆಟ್‌ಗಳು',
+            'reps': 'ಪುನರಾವರ್ತನೆಗಳು',
             'adl_section': 'ದೈನಂದಿನ ಜೀವನ ಚಟುವಟಿಕೆಗಳು (ADL)',
             'vcg_section': 'ವರ್ಚುವಲ್ ಗುರುತ್ವಾಕರ್ಷಣ ಕೇಂದ್ರ (VCG)',
             'scan_video': 'ವೀಡಿಯೋಗಾಗಿ ಸ್ಕ್ಯಾನ್ ಮಾಡಿ',
@@ -5984,6 +5992,8 @@ def _get_field_labels(language: str) -> dict:
             'description': 'विवरण',
             'dosage': 'खुराक',
             'items': 'आवश्यक वस्तुएं',
+            'sets': 'सेट',
+            'reps': 'दोहराव',
             'adl_section': 'दैनिक जीवन कार्यकलाप (ADL)',
             'vcg_section': 'वर्चुअल गुरुत्व केंद्र (VCG)',
             'scan_video': 'वीडियो के लिए स्कैन करें',
@@ -5993,6 +6003,8 @@ def _get_field_labels(language: str) -> dict:
             'description': 'ਵਰਣਨ',
             'dosage': 'ਖੁਰਾਕ',
             'items': 'ਲੋੜੀਂਦੀਆਂ ਵਸਤੂਆਂ',
+            'sets': 'ਸੈਟ',
+            'reps': 'ਦੋਹਾਸ',
             'adl_section': 'ਰੋਜ਼ਾਨਾ ਜੀਵਨ ਦੀਆਂ ਗਤੀਵਿਧੀਆਂ (ADL)',
             'vcg_section': 'ਵਰਚੁਅਲ ਗੁਰੁਤਾ ਕੇਂਦਰ (VCG)',
             'scan_video': 'ਵੀਡੀਓ ਲਈ ਸਕੈਨ ਕਰੋ',
@@ -6063,6 +6075,9 @@ def api_prescription_pamphlet(homer_id):
     if not day_match:
         day_match = 'd01'  # Default to d01 if not found
 
+    # Get labels for formatting dosage with blocks and reps
+    labels = _get_field_labels(language)
+
     # Read ADL prescription
     adl_exercises_list = []
     adl_rel_path = f'adl/adl_prescription_{day_match}.json'
@@ -6076,10 +6091,17 @@ def api_prescription_pamphlet(homer_id):
                 text = _get_exercise_text(ex, language)
                 qr = _make_qr_b64(ex.get('youtube_url', ''))
                 screenshot = _make_screenshot_b64(ex_id)
+                # Build dosage from prescribed blocks and repetitions
+                blocks = presc.get('blocks')
+                reps = presc.get('repetitions')
+                if blocks and reps:
+                    dosage = f"{blocks} {labels['sets']} × {reps} {labels['reps']}"
+                else:
+                    dosage = text['dosage']
                 adl_exercises_list.append({
                     'name': text['name'],
                     'description': text['description'],
-                    'dosage': text['dosage'],
+                    'dosage': dosage,
                     'items': text['items'],
                     'screenshot': screenshot,
                     'qr_code': qr,
@@ -6100,16 +6122,21 @@ def api_prescription_pamphlet(homer_id):
                 text = _get_exercise_text(ex, language)
                 qr = _make_qr_b64(ex.get('youtube_url', ''))
                 screenshot = _make_screenshot_b64(ex_id)
+                # Build dosage from prescribed blocks and repetitions
+                blocks = presc.get('blocks')
+                reps = presc.get('repetitions')
+                if blocks and reps:
+                    dosage = f"{blocks} {labels['sets']} × {reps} {labels['reps']}"
+                else:
+                    dosage = text['dosage']
                 vcg_exercises_list.append({
                     'name': text['name'],
                     'description': text['description'],
-                    'dosage': text['dosage'],
+                    'dosage': dosage,
                     'items': text['items'],
                     'screenshot': screenshot,
                     'qr_code': qr,
                 })
-
-    labels = _get_field_labels(language)
 
     return render_template(
         'prescription_pamphlet.html',

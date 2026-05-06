@@ -1133,3 +1133,101 @@ User types invalid date → Gets error message → Clicks Save → Form BLOCKED 
 - ✅ Report doc link shows for reported issues
 - ✅ Resolution doc link shows for resolved issues
 - ✅ Fault doc link shows in resolved pairs
+
+---
+
+## Exercise Pamphlet — Real Patient Prescription Dosage ✅ (May 6, 2026)
+
+**Status:** ✅ Complete
+
+**Feature:** Exercise prescription pamphlet now displays the therapist's **actual prescribed sets and repetitions** instead of generic static dosage text from the exercise config.
+
+**Before:** Pamphlet showed static text like "2–3 brushing cycles, 2–3 sets" (from `homer_exercises.json`)  
+**After:** Pamphlet shows real prescription: "1 sets × 10 reps" (from patient's `adl_prescription_d01.json`)
+
+### Implementation
+
+**File Modified:** `routes/user_management.py`
+
+**Changes:**
+
+1. **Added `sets` and `reps` translation labels to `_get_field_labels()` function** (line ~5944-6002)
+   - English: `sets` → "sets", `reps` → "reps"
+   - Tamil: `sets` → "தொகுப்புகள்", `reps` → "மறுநிகழ்வுகள்"
+   - Telugu: `sets` → "సెట్లు", `reps` → "పూనుకోవటాలు"
+   - Kannada: `sets` → "ಸೆಟ್‌ಗಳು", `reps` → "ಪುನರಾವರ್ತನೆಗಳು"
+   - Hindi: `sets` → "सेट", `reps` → "दोहराव"
+   - Punjabi: `sets` → "ਸੈਟ", `reps` → "ਦੋਹਾਸ"
+   
+   *(Translations match existing values in `homer_exercises.json` dosage fields, per established conventions)*
+
+2. **Modified `api_prescription_pamphlet()` function** (line ~6035-6149)
+   - Moved `labels = _get_field_labels(language)` before exercise loops (line 6079)
+   - In ADL exercise loop (lines 6087-6108): Extract prescription's `blocks` and `repetitions`; build dosage string `"{N} sets × {M} reps"` with translated labels; fallback to static config if either value missing
+   - In VCG exercise loop (lines 6118-6139): Apply same logic
+
+### User Experience
+
+**Prescription Modal → Printout Pamphlet Flow:**
+1. Therapist completes ADL prescription: selects exercises, enters sets/reps per exercise
+2. Therapist clicks "Prescription Printout (D01)"
+3. Pamphlet modal opens with language selector
+4. Therapist selects language (English, Tamil, Telugu, Kannada, Hindi, Punjabi)
+5. Preview renders with actual prescribed dosage: "2 sets × 15 reps" (or translated equivalent)
+6. Therapist clicks Print or Save PDF
+7. PDF shows prescribed dosage values in selected language
+
+**Example Output:**
+```
+Patient ID: HOCMCV001
+Prescribed Date: 2026-04-29
+
+ADL Exercises
+─────────────
+
+Exercise: Practice Brushing Your Teeth
+Description: Brush your teeth using standard technique
+Dosage: 1 sets × 10 reps          ← Real prescribed value!
+Items Needed: Toothbrush, toothpaste, mirror...
+[Screenshot image]
+[QR code for YouTube video]
+```
+
+### Testing Checklist
+
+✅ Syntax: Python code compiles without errors (`python -m py_compile routes/user_management.py`)  
+✅ Translation labels: All 6 languages have `sets` and `reps` entries  
+✅ Prescription data: ADL/VCG prescription files have `blocks` and `repetitions` fields  
+✅ Dosage construction: `"{blocks} sets × {reps} reps"` built correctly  
+✅ Fallback logic: Uses static dosage if prescription data missing  
+✅ Language rendering: All translations display correctly in pamphlet  
+✅ Backward compatibility: Existing fields (name, description, items, screenshots, QR) unaffected  
+
+### Files Reference
+
+| File | Section | Lines | Change |
+|------|---------|-------|--------|
+| `routes/user_management.py` | `_get_field_labels()` | 5947-6002 | Added `sets` and `reps` keys to all 6 language blocks |
+| `routes/user_management.py` | `api_prescription_pamphlet()` | 6079 | Moved labels creation before loops |
+| `routes/user_management.py` | `api_prescription_pamphlet()` | 6094-6100 | ADL loop: build dosage from prescription using `labels['sets']` |
+| `routes/user_management.py` | `api_prescription_pamphlet()` | 6125-6131 | VCG loop: build dosage from prescription using `labels['sets']` |
+| `static/js/app/patient_detail.js` | ADL/VCG Prescription Modal | 2912 | Changed label text: "Blocks" → "Sets" |
+| `static/js/app/patient_detail.js` | Prescription Display (compact) | 2937 | Changed format: "blocks ×" → "sets ×" |
+| `static/js/app/patient_detail.js` | ADL Tab Exercise Display | 3235 | Changed format: "blocks ×" → "sets ×" |
+| `templates/prescription_pamphlet.html` | (no changes) | — | Already renders `exercise.dosage` as string |
+
+### Data Flow
+
+```
+Patient Prescription File (adl_prescription_d01.json)
+  ├─ exercise_id: "adl_1"
+  ├─ blocks: 1           ← Therapist prescribed value
+  └─ repetitions: 10     ← Therapist prescribed value
+         │
+         ├─→ api_prescription_pamphlet()
+         │   └─→ labels = _get_field_labels(language)
+         │   └─→ Build: "1 sets × 10 reps" (or translated)
+         │
+         └─→ prescription_pamphlet.html
+             └─→ Render in exercise card as dosage field
+```

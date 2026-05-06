@@ -2909,7 +2909,7 @@ function renderPrescSelected(prefix) {
           </div>
           <div class="grid grid-cols-2 gap-2 mb-2">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Blocks</label>
+              <label class="block text-xs text-slate-500 mb-1">Sets</label>
               <input id="${prefix}-blocks-${i}" type="number" min="1" value="${s.blocks}"
                      class="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
@@ -2934,7 +2934,7 @@ function renderPrescSelected(prefix) {
           <span class="flex-1 text-sm font-medium text-slate-800">
             <span class="text-slate-400 mr-1">${i + 1}.</span>${s.exercise.name}
           </span>
-          <span class="text-xs text-slate-500 whitespace-nowrap">${s.blocks} blocks × ${s.reps} reps</span>
+          <span class="text-xs text-slate-500 whitespace-nowrap">${s.blocks} sets × ${s.reps} reps</span>
           <button type="button" onclick="editExercise('${prefix}',${i})"
                   class="text-slate-400 hover:text-blue-600 text-xs font-medium px-2 py-1 rounded border border-slate-200 hover:border-blue-300">
             Edit
@@ -3232,7 +3232,7 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
           ${notesHtml}
         </div>
         <div class="flex-shrink-0 text-right">
-          <p class="text-xs font-medium text-slate-500 whitespace-nowrap">${pe.blocks} blocks × ${pe.repetitions} reps</p>
+          <p class="text-xs font-medium text-slate-500 whitespace-nowrap">${pe.blocks} sets × ${pe.repetitions} reps</p>
           ${timingLines}
         </div>
       </div>`;
