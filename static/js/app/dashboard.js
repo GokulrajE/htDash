@@ -101,9 +101,10 @@
 
     function eventRow(ev) {
       const sched = ev.scheduled_date;
+      const onHold = !!ev.on_hold;
       const isActiveWindow = !!ev.active_window;
       const isOverdue = !isActiveWindow && ev.days <= 0;
-      const isUpcoming = !isActiveWindow && ev.days > 0;
+      const isUpcoming = !isActiveWindow && (ev.days > 0 || onHold);
       const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
       const d = new Date((refDate || '').replace(' ', 'T'));
       const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
@@ -139,6 +140,8 @@
         </div>`;
       const rightLabel = blocked
         ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
+        : onHold
+        ? `<span class="text-xs font-semibold text-slate-600 bg-white border border-slate-300 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">On hold</span>`
         : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>`;
       return `
         <${tag} ${href} class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 ${extra}">

@@ -153,6 +153,7 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
      - **Upcoming** — incomplete events whose `scheduled_date[0]` (start) > today, sorted ascending by start date. No cap (all future events shown). Within the same date, events that appear in another event's `depends_on` are sorted before their dependents. **Upcoming events are never clickable** — rendered as a plain `<div>` with label "Available from \<date\>" in place of the urgency label. This applies regardless of `depends_on` state.
      - The three states are mutually exclusive. Categorisation always uses `start` for upcoming and `end` for overdue/broken-protocol.
      - **Blocked events** (unmet `depends_on`): rendered as a non-clickable `<div>` with an amber badge on the right reading "Needs: \<event name\>". A muted lock icon appears next to the event name. Applies only to overdue events — upcoming events use the "Available from" label regardless.
+     - **On-hold events** (training paused + event is not an AE/RI follow-up + `scheduled_date[0]` ≤ today): rendered in the upcoming section even though their window has opened or passed. Gray/muted styling, non-clickable `<div>`, slate "On hold" badge on the right. Events whose window has not yet opened (`scheduled_date[0]` > today) continue to show normally with "Available from" label. The server sets `on_hold: true` on the event record; both event APIs apply this rule consistently.
 
 - **Timeline tab** — full-width vertical timeline, most recent first. Combines completed protocol events with two synthetic patient milestones injected client-side:
   - **Patient Enrolled** — from `enrollDate` in `<homer_id>.json`
@@ -347,20 +348,33 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Allowed users: `admin`, `therapist`
 - Prerequisites: all events listed in `depends_on` for `activation` in `study_protocol.json` must be in `complete` (e.g. `exp_device_install` for experimental patients)
 - Modal fields:
-  - Event Date (datetime, required; cannot be in the future)
-  - **VCG Group** (dropdown: VCG 2 / VCG 3 / VCG 4–5; required; **control patients only**) — therapist selects the patient's VCG level at the activation visit; fixed for the entire study duration
-  - Notes (textarea, optional). The notes text area must be large enough for the user to write their notes comfortably.
-  - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only), and/or watch record as a consequence of this visit. Each toggle shows an info note only — no sub-form fields. Watch Record toggle only shown if at least one watch is currently assigned.
-- Server actions:
-  - Verify `depends_on` prerequisites are met (server-side safety check — the UI already blocks the action, but the endpoint rejects the request if any prerequisite event is not in `complete`)
+  - **Was training completed?** (toggle, required — must be explicitly set before other fields appear)
+  - **If YES (training completed):**
+    - Event Date (datetime, required; cannot be in the future)
+    - **VCG Group** (dropdown: VCG 2 / VCG 3 / VCG 4–5; required; **control patients only**) — therapist selects the patient's VCG level at the activation visit; fixed for the entire study duration
+    - Notes (textarea, optional)
+    - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only) as a consequence of this visit. Each toggle shows an info note only — no sub-form fields. Watch Record toggle always shown (first watch record is seeded on activation).
+  - **If NO (training not completed):**
+    - Visit Date (datetime, required; cannot be in the future)
+    - Notes (textarea, **mandatory** — therapist must explain why training was not completed)
+    - **Triggered events section** — adverse event and robot issue (exp only) toggles only. No watch record toggle (patient not yet activated, no watches assigned).
+- Server actions — **training completed path:**
+  - Verify `depends_on` prerequisites are met
   - Update `<homer_id>.json` with `activationDate` and `vcgGroup` (control patients only)
   - Compute and fill `scheduled_date` for all `reference: "activation"` entries in `protocol_events.json`
   - Seed first `watch_record` entry in `incomplete` with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`
-  - For triggered `adverse_event`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "activation", id: <activation_entry_id>}` — stub is completed later via the standalone modal
-  - For triggered robot issue: append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "activation", id: <activation_entry_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
-  - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
-- Log message: `Patient activated`
-- UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` (no `href`) with a muted lock icon next to the event name and an amber badge on the right reading "Needs: \<blocking event name\>" in place of the date/urgency label
+  - For triggered `adverse_event`: append stub to `incomplete` with `triggered_by: {type: "activation", id: <activation_entry_id>}`
+  - For triggered robot issue: append `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "activation", id: <activation_entry_id>}`
+  - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open chain entry
+  - Log message: `Patient activated`
+- Server actions — **training not completed path:**
+  - Append `activation_attempt` entry to `free.activation_attempt[]` in `protocol_events.json` with `visit_date`, `notes`, `triggered: [...]`
+  - `activation` protocol event remains in `incomplete` — nothing changes on patient JSON
+  - For triggered `adverse_event`: append stub to `incomplete` with `triggered_by: {type: "activation_attempt", id: <attempt_entry_id>}`
+  - For triggered robot issue: append `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "activation_attempt", id: <attempt_entry_id>}`
+  - Log message: `Activation attempt recorded — training not completed`
+- UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` with a muted lock icon and amber "Needs: \<blocking event name\>" badge
+- **Event row deadline label:** the activation event row uses "Expires today" / "Expires in X days" instead of the standard "Due today" / "Xd left" label. Activation is the only event with this label — it is a true hard cutoff (after Day 5, activation is permanently impossible). All other windowed events use the standard overdue/upcoming labels.
 
 ---
 
@@ -513,15 +527,46 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Allowed users: `admin`, `therapist`
 - Modal: `home-visit-modal` (dedicated; not shared)
   - Title: event name (e.g. "Home Visit Day 02")
-  - Event Date (datetime, required; cannot be in the future)
-  - Notes (textarea, optional)
-  - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only), and/or watch record as a consequence of this visit. Each toggle shows an info note only — no sub-form fields. Watch Record toggle only shown if at least one watch is currently assigned.
-- Server actions:
-  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`, `triggered: [...]`
-  - For triggered `adverse_event`: append a stub to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}` — stub is completed later via the standalone modal
-  - For triggered robot issue: append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
-  - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open `watch_record` chain entry
-- Log message: `Home visit recorded — Day <N>`
+  - **Was training completed?** (toggle, required — must be explicitly set before other fields appear)
+  - **If YES (training completed):**
+    - Session Start (datetime, required; cannot be in the future)
+      - **D02 and D03 only:** the date portion is **pre-filled and locked** to the exact Day 2 or Day 3 calendar date derived from `activationDate`. The therapist selects time only. The date field is read-only. Rationale: if training was completed, it must have been on that day — locking the date prevents entry errors and eliminates any broken protocol ambiguity on this path.
+      - **D15:** date is editable as normal (no lock).
+    - Session End (datetime, required; must be same calendar date as start and strictly after start)
+    - Notes (textarea, optional)
+    - **Triggered events section** — adverse event, robot issue (exp only), watch record (if watch assigned). Each toggle shows an info note only — no sub-form fields.
+  - **If NO (training not completed):**
+    - **Why was training not completed?** (single-select pill buttons, **mandatory**):
+      - `Adverse Event` — creates an AE stub with `training_stopped: true`; pre-checks `Training Blocked` in the File AE modal
+      - `Robot Issue` *(experimental only)* — creates a `robot_issue_call` stub with `training_stopped: true`; pre-checks `Visit Required` for all devices in the RI Call modal
+      - `Other Device Issue` *(experimental only)* — creates an `other_device_issue_call` stub with `training_stopped: true`; pre-checks `Visit Required` for all devices in the ODI Call modal
+      - `Other` — no stub; notes field becomes mandatory
+    - Visit Date (datetime, required; cannot be in the future)
+    - Notes (textarea; **mandatory when primary reason = Other**, optional otherwise)
+    - **Additional events** — secondary trigger toggles for any other events that arose from this visit (same as existing section). The toggle matching the primary reason is **hidden** (duplicate stub prevention).
+- Client validation — **training not completed path (D02 and D03 only):**
+  - Before submitting, show a **double confirmation popup**:
+    - First popup: "Training was not completed on Day N. This will mark the patient as broken protocol. Continue?"
+    - Second popup: "This cannot be undone without admin intervention. Confirm broken protocol?"
+  - Only proceed to server save if both are confirmed. Include `confirmed_broken_protocol: true` in the request body.
+- Server actions — **training completed path** (all three visits):
+  - For D02 and D03: validate that `session_start` and `session_end` fall on the expected calendar date (`activationDate + N − 1 days`); reject with 400 if not
+  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date` (= session start), `session_start`, `session_end`, `filed_at`, `notes`, `triggered: [...]`
+  - For triggered `adverse_event`: append stub to `incomplete` with `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}`
+  - For triggered robot issue: append `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "<home_visit_event_id>", id: <entry_id>}`
+  - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open chain entry
+  - Log message: `Home visit recorded — Day <N>`
+- Server actions — **training not completed path (D02 and D03):**
+  - Require `confirmed_broken_protocol: true` in request body; reject with 409 if absent
+  - Move entry from `incomplete` to `complete` with `training_not_done: true`, `primary_reason`, `completion_date` (= visit date), `filed_at`, `notes`, `triggered: [...]`
+  - Set `brokenProtocolDate` on `<homer_id>.json` immediately
+  - For triggered events: same stub creation as training completed path (excluding watch record). The stub for the primary reason gets `training_stopped: true` added.
+  - Log message: `Home visit recorded — Day <N> — training not completed — broken protocol`
+- Server actions — **training not completed path (D15 only):**
+  - Append `d15_attempt` entry to `free.d15_attempt[]` in `protocol_events.json` with `visit_date`, `primary_reason`, `notes`, `triggered: [...]`
+  - `home_visit_d15` remains in `incomplete`
+  - For triggered events: same stub creation, with `triggered_by: {type: "d15_attempt", id: <attempt_entry_id>}`. Primary reason stub gets `training_stopped: true`.
+  - Log message: `D15 attempt recorded — training not completed`
 
 ---
 
@@ -571,6 +616,38 @@ Each action is defined once here. Pages above reference which actions apply to t
     - **Robot issue** (exp only): append a `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "patient_call", id: <call_id>}`, `scheduled_date: [now, now]` — no intermediate `robot_issue` event
     - **Watch record**: stamp `triggered_by: {type: "patient_call", id: <call_id>}` onto the existing open `watch_record` entry in `incomplete`, and update its `scheduled_date` to `[now, now]` — no new entry is created; the entry immediately becomes overdue; the therapist completes it via the Watch Record modal
 - Log message: `Patient call recorded`; additional log entries for each triggered event (e.g. `Adverse event stub created`, `Robot issue stub created`, `Watch record triggered`)
+
+---
+
+### Activation Attempt (`activation_attempt`)
+
+- Trigger: choosing "No" on the "Was training completed?" toggle in the Activate modal
+- Allowed users: `admin`, `therapist`
+- Purpose: records a therapist visit where activation was attempted but training could not be completed. A ghost/free event — not planned in advance, can happen multiple times. `activation` protocol event remains `incomplete`.
+- Modal fields (rendered inline within the Activate modal when training not completed):
+  - Visit Date (datetime, required; cannot be in the future)
+  - Notes (textarea, **mandatory** — must explain why training was not completed)
+  - **Triggered events section** — adverse event and robot issue (exp only) toggles. No watch record (patient not yet activated).
+- Storage: appended to `free.activation_attempt[]` in `protocol_events.json`
+- Entry fields: `id`, `visit_date`, `notes`, `filed_at`, `triggered: [...]`, `triggered_by: null`
+- Consequence: none immediate — `activation` stays in `incomplete` and follows its normal window expiry logic. If an AE is triggered with `training_blocked: true`, `activation` goes On Hold during the pause and becomes active or broken-protocol when the pause clears, depending on whether the window is still open.
+- Log message: `Activation attempt recorded — training not completed`
+
+---
+
+### D15 Attempt (`d15_attempt`)
+
+- Trigger: choosing "No" on the "Was training completed?" toggle in the Home Visit D15 modal
+- Allowed users: `admin`, `therapist`
+- Purpose: records a therapist visit on or around Day 15 where training could not be completed. A ghost/free event — not planned in advance, can happen multiple times. `home_visit_d15` protocol event remains `incomplete`.
+- Modal fields (rendered inline within the Home Visit modal when training not completed):
+  - Visit Date (datetime, required; cannot be in the future)
+  - Notes (textarea, **mandatory** — must explain why training was not completed)
+  - **Triggered events section** — adverse event, robot issue (exp only), and watch record (if watch assigned) toggles.
+- Storage: appended to `free.d15_attempt[]` in `protocol_events.json`
+- Entry fields: `id`, `visit_date`, `notes`, `filed_at`, `triggered: [...]`, `triggered_by: null`
+- Consequence: `home_visit_d15` stays `incomplete` and becomes overdue at its absolute protocol position. D15 dependents (prescriptions, agwatch timing) stay blocked by `home_visit_d15` until it is eventually completed.
+- Log message: `D15 attempt recorded — training not completed`
 
 ---
 
@@ -750,7 +827,8 @@ Each action is defined once here. Pages above reference which actions apply to t
   - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids: [<all AE IDs in this call>]`, `triggered_by: {type: "adverse_event_followup", id: <this_event_id>}`
   - If clinical visit scheduled: same for `adverse_event_clinical_visit`
   - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
-  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: increment `cumulativePauseDays` by `(max(can_resume_from across all pausing AEs) − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
+  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: compute `max_resume = max(can_resume_from across all pausing AEs)`; increment `cumulativePauseDays` by `(max_resume − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
+  - **D02/D03 broken protocol check (Path 3):** after pause clears, check if `max_resume > scheduled_date[1]` for `home_visit_d02` or `home_visit_d03` and those visits are still in `incomplete`. If so, the server returns a 409 with `broken_protocol_warning: true` and the affected day(s). The client shows the double confirmation popup. On re-submit with `confirmed_broken_protocol: true`, the server sets `brokenProtocolDate` and completes the follow-up.
   - If all AEs resolved but `resolve_robot_issue_visit` stubs still remain: no change to pause fields (robot issue still blocking)
 - Log message: `Adverse event follow-up call recorded`; if visits scheduled: `AE follow-up visit scheduled` / `AE clinical visit scheduled`; if all resolved: also `Adverse event(s) resolved`
 
@@ -795,24 +873,29 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ### Adverse Event Follow-up Visit (`adverse_event_followup_visit`)
 
-- Trigger: `adverse_event_followup_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a follow-up visit is scheduled.
+- Trigger: `adverse_event_followup_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the File Adverse Event modal, the Adverse Event Follow-up Call modal, or any other Adverse Event Follow-up Visit or Clinical Visit modal when a new follow-up visit is scheduled.
 - Allowed users: `admin`, `therapist`
 - Cancellable: yes — a **Cancel Visit** button is shown in the modal footer. Clicking it prompts for a cancellation reason (textarea, required). Cancellation moves the stub to the top-level `cancelled` array in `protocol_events.json` with `cancelled_at` timestamp and `cancellation_reason`. No further stubs are created.
 - Modal: `adverse-event-followup-visit-modal`
-  - **Context banner** (read-only): lists all adverse events covered by this visit (names + dates), derived from `adverse_event_ids`
+  - **Context banner** (read-only): lists all adverse events covered by this visit (aliases + dates), derived from `adverse_event_ids`
   - Visit start (datetime, required; cannot be in the future)
   - Visit end (datetime, required; must be same calendar date as start; must be after start)
   - **Per adverse event** — one section per AE in `adverse_event_ids`:
-    - AE name/date (read-only label)
+    - AE alias + date (read-only label, e.g. "AE02 — 2026-05-01")
     - **Discussion notes** (textarea, optional) — what was discussed / observed during this visit for this AE
     - **Resolved** (checkbox)
     - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
   - Visit-level notes (textarea, optional)
+  - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_followup_visit` stub already exists covering all current `adverse_event_ids`.
+  - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_clinical_visit` stub already exists covering all current `adverse_event_ids`.
+  - Trigger toggles: Adverse Event, Robot Issue (experimental only), Watch Record — same as other follow-up modals
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete`
   - Append completed entry to `free.adverse_event_followup_visit` with `completion_date` (= visit start), `filed_at`, `visit_start`, `visit_end`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `notes`, `triggered_by` (from stub), `attachment` (if uploaded)
-  - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]` (back to call-based follow-up)
+  - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids` = unresolved AE IDs, `triggered_by: {type: "adverse_event_followup_visit", id: <this_event_id>}`
+  - If clinical visit scheduled: same for `adverse_event_clinical_visit`
+  - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
   - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: clear pause (same logic as follow-up call)
 - Log message: `Adverse event follow-up visit recorded`; if all resolved: also `Adverse event(s) resolved`
 
@@ -820,24 +903,29 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ### Adverse Event Clinical Visit (`adverse_event_clinical_visit`)
 
-- Trigger: `adverse_event_clinical_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the Adverse Event Follow-up Call modal (or directly from the File Adverse Event modal) when a clinical visit is scheduled.
+- Trigger: `adverse_event_clinical_visit` event row on patient detail — only appears when a stub exists in `incomplete`. Stubs are created by the File Adverse Event modal, the Adverse Event Follow-up Call modal, or any other Adverse Event Follow-up Visit or Clinical Visit modal when a new clinical visit is scheduled.
 - Allowed users: `admin`, `therapist`
 - Cancellable: yes — same cancellation behaviour as `adverse_event_followup_visit` (reason required, stored as `cancellation_reason`)
 - Modal: `adverse-event-clinical-visit-modal`
-  - **Context banner** (read-only): lists all adverse events covered by this visit (names + dates)
+  - **Context banner** (read-only): lists all adverse events covered by this visit (aliases + dates), derived from `adverse_event_ids`
   - Visit start (datetime, required; cannot be in the future)
   - Visit end (datetime, required; same calendar date; after start)
   - **Per adverse event** — one section per AE in `adverse_event_ids`:
-    - AE name/date (read-only label)
+    - AE alias + date (read-only label, e.g. "AE02 — 2026-05-01")
     - **Discussion notes** (textarea, optional) — notes from the consultant / therapist discussion about this AE
     - **Resolved** (checkbox)
     - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
   - Visit-level notes (textarea, optional)
+  - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_followup_visit` stub already exists covering all current `adverse_event_ids`.
+  - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_clinical_visit` stub already exists covering all current `adverse_event_ids`.
+  - Trigger toggles: Adverse Event, Robot Issue (experimental only), Watch Record — same as other follow-up modals
   - Attachment (optional PDF)
 - Server actions:
   - Remove the stub from `incomplete`
   - Append completed entry to `free.adverse_event_clinical_visit` with `completion_date` (= visit start), `filed_at`, `visit_start`, `visit_end`, `ae_discussions` (per-AE: `ae_id`, `notes`, `resolved`, `can_resume_from`), `notes`, `triggered_by` (from stub), `attachment` (if uploaded)
-  - If any AEs remain unresolved: seed next `adverse_event_followup` stub (back to call-based chain)
+  - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids` = unresolved AE IDs, `triggered_by: {type: "adverse_event_clinical_visit", id: <this_event_id>}`
+  - If clinical visit scheduled: same for `adverse_event_clinical_visit`
+  - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
   - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain: clear pause (same logic)
 - Log message: `Adverse event clinical visit recorded`; if all resolved: also `Adverse event(s) resolved`
 
@@ -933,3 +1021,73 @@ This ensures the device inventory accurately reflects availability for new patie
 - An "Add Note" button opening a simple modal with a textarea (required)
 - Notes stored in `free.clinical_notes` array
 - Notes are read-only after filing; amendment via admin only (same amendment pattern as AE)
+
+---
+
+## D01–D03 Broken Protocol Detection & Auto-Shift on Resume
+
+> **Status: ✅ Implemented.**
+
+### Background
+
+The first three consecutive training days (D01 = activation, D02, D03) are a critical uninterrupted block. If any of these days is missed due to a training-blocking AE or robot issue, the patient cannot be counted in the study. The `training_blocked` flag continues to live in the "File AE" modal as it does today — home visit modals are not changed.
+
+When training pauses, all non-AE/RI events are frozen in the upcoming section with an "On hold" badge — they never move to overdue. Only AE/RI follow-up stubs appear as overdue. The system detects when the D02/D03 window passes while still paused and alerts the therapist via the at-risk banner.
+
+---
+
+### Scenario summary
+
+| Day | Situation | Training done? | Outcome |
+|---|---|---|---|
+| D01 | AE/RI before training | No | Activation never filed → existing activation window expiry rule → broken protocol |
+| D01 | AE/RI after training | Yes | Normal pause flow (`trainingPausedDate` set) |
+| D02 | Pause from D01 not resolved by D02 | No | Broken protocol |
+| D02 | Pause from D01 resolves but D02 not filed | No | Broken protocol |
+| D02 | AE/RI before training | No | Normal pause → broken protocol (D02 window passes while paused) |
+| D02 | AE/RI after training | Yes | Normal pause flow |
+| D03 | Pause from D02 not resolved by D03 | No | Broken protocol |
+| D03 | Pause from D02 resolves but D03 not filed | No | Broken protocol |
+| D03 | AE/RI before training | No | Normal pause → broken protocol (D03 window passes while paused) |
+| D03 | AE/RI after training | Yes | Normal pause flow |
+
+---
+
+### Rule 1 — Broken protocol check inside pause-clearing routes
+
+Implemented in `_clear_ae_pause_if_resolved()` and the two inline pause-clearing blocks in `routes/user_management.py`.
+
+When a pause clears, `_check_d0203_broken_protocol(events_data, max_resume)` is called before writing the updated patient meta. If D02 or D03 is not in `complete` and its `scheduled_date[1]` is before `max_resume` (the date training can resume), `brokenProtocolDate` is set. The pause is still cleared — `derive_status()` reads `brokenProtocolDate` first and returns `broken_protocol` regardless of `trainingPausedDate`.
+
+This catches: pause resolves but the D02/D03 window already passed before training could resume.
+
+---
+
+### Rule 2 — Dashboard live check for currently-paused patients
+
+In `routes/dashboard.py`, the per-patient loop gains a live check for `paused` patients: if D02 or D03 is not in `complete` and its `scheduled_date[1]` < today, a `discontinuation_reminder` is injected immediately (without waiting for the pause to be cleared).
+
+This catches: pause still ongoing when D02/D03 window expires — the dashboard flags it proactively.
+
+Note: this check does **not** write `brokenProtocolDate` to disk (no side-effects from a GET endpoint). `brokenProtocolDate` is set when the pause is eventually cleared via Rule 1.
+
+---
+
+### Rule 3 — D02/D03 at-risk banner
+
+Implemented via `_checkD0203AtRisk(p)` in `static/js/app/patient_detail.js`, called on every `loadPatientEvents()` refresh.
+
+When a patient is paused and D02 or D03's window has passed (derived client-side from `activationDate + 1d` / `activationDate + 2d`), an orange banner appears on the overview tab above the pause banner. Message: *"Training at risk — Day 2/3 home visit window has passed while training is paused. Broken protocol will be flagged when the pause is cleared."* Banner clears when the condition no longer holds.
+
+---
+
+### Rule 4 — Auto-shift all future events on resume
+
+Implemented via `_shift_future_incomplete_events(events_data, pause_days)` in `routes/user_management.py`, called at all three pause-clearing sites immediately after `trainingPausedDate` is cleared.
+
+**Shift logic:**
+- For every entry in `incomplete` with a non-null `scheduled_date [start, end]`: add `pause_days` calendar days to both elements.
+- `pause_days` = `max(can_resume_from across all pausing AEs/RIs)` − `trainingPausedDate`.
+- Applied server-side at the moment `trainingPausedDate` is cleared (same write as `cumulativePauseDays` update).
+- Free events (null `scheduled_date`) and already-completed events are not touched.
+- If broken protocol was set (Rule 1), the shift still runs — the shifted dates don't matter for a broken-protocol patient, but it keeps the data consistent.

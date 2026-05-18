@@ -308,6 +308,7 @@ function renderOverview(p) {
   if (robotBtn) robotBtn.classList.toggle('hidden', p.group !== 'experimental');
 
   renderPauseBanner(p);
+  _checkD0203AtRisk(p);
   renderPauseHistoryTable(p);
   renderActions(p);
 }
@@ -373,6 +374,42 @@ function renderPauseBanner(p) {
 
   _renderPauseReasonPills();
   banner.classList.remove('hidden');
+}
+
+// ── D02/D03 at-risk banner ─────────────────────────────────────────────────────
+
+function _checkD0203AtRisk(p) {
+  const banner = document.getElementById('d0203-atrisk-banner');
+  if (!banner) return;
+
+  if (p.status !== 'paused' || !p.activationDate) {
+    banner.classList.add('hidden');
+    return;
+  }
+
+  const today      = new Date(); today.setHours(0, 0, 0, 0);
+  const activation = new Date(p.activationDate); activation.setHours(0, 0, 0, 0);
+  // 1-based day numbering: day 2 end = activation + 1d; day 3 end = activation + 2d
+  const d02End = new Date(activation); d02End.setDate(d02End.getDate() + 1);
+  const d03End = new Date(activation); d03End.setDate(d03End.getDate() + 2);
+
+  const completeIds = new Set((_completeEventsCache || []).map(e => e.protocol_event_id));
+  let atRiskLabel = null;
+  if (!completeIds.has('home_visit_d02') && today > d02End) {
+    atRiskLabel = 'Day 2';
+  } else if (!completeIds.has('home_visit_d03') && today > d03End) {
+    atRiskLabel = 'Day 3';
+  }
+
+  if (atRiskLabel) {
+    const msgEl = document.getElementById('d0203-atrisk-msg');
+    if (msgEl) {
+      msgEl.textContent = `Training at risk — ${atRiskLabel} home visit window has passed while training is paused. Broken protocol will be flagged when the pause is cleared.`;
+    }
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
 }
 
 function _renderPauseReasonPills() {
@@ -564,8 +601,9 @@ async function loadPatientEvents() {
       discontinuedBanner.classList.add('hidden');
     }
     _renderPauseReasonPills();
-    // Re-render pause banner and history table with updated patient data
+    // Re-render pause banner, at-risk banner, and history table with updated patient data
     renderPauseBanner(patientData);
+    _checkD0203AtRisk(patientData);
     renderPauseHistoryTable(patientData);
     renderTimelineTab();
     renderAdverseEventsTab();
@@ -1052,12 +1090,11 @@ function renderAdverseEventsTab() {
   const container = document.getElementById('adverse-events-content');
   if (!container) return;
 
-  // Oldest first → stable alias numbers (AE01, AE02, …)
-  const chronological = (_completeEventsCache || [])
+  const aeEvents = (_completeEventsCache || [])
     .filter(e => e.protocol_event_id === 'adverse_event')
-    .sort((a, b) => (a.completion_date || '').localeCompare(b.completion_date || ''));
+    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || '')); // newest first
 
-  if (!chronological.length) {
+  if (!aeEvents.length) {
     container.innerHTML = `
       <div class="flex flex-col items-center justify-center py-16 text-slate-300">
         <i class="fas fa-exclamation-triangle text-3xl mb-3"></i>
@@ -1067,12 +1104,7 @@ function renderAdverseEventsTab() {
   }
 
   const followupEvents = (_completeEventsCache || []).filter(e => _AE_FOLLOWUP_TYPES.includes(e.protocol_event_id));
-
-  // Display newest first; alias is position in chronological order
-  container.innerHTML = [...chronological].reverse().map(ev => {
-    const alias = String(chronological.indexOf(ev) + 1).padStart(2, '0');
-    return _adverseEventCard(ev, alias, followupEvents);
-  }).join('');
+  container.innerHTML = aeEvents.map(ev => _adverseEventCard(ev, followupEvents)).join('');
 }
 
 function _toggleAeCard(cardId) {
@@ -1083,7 +1115,7 @@ function _toggleAeCard(cardId) {
   if (chevron) chevron.style.transform = isHidden ? '' : 'rotate(180deg)';
 }
 
-function _adverseEventCard(ev, alias, followupEvents) {
+function _adverseEventCard(ev, followupEvents) {
   // Find all follow-ups referencing this AE, sorted chronologically
   const related = followupEvents
     .filter(fe => (fe.ae_discussions || []).some(d => d.adverse_event_id === ev.id))
@@ -1200,7 +1232,7 @@ function _adverseEventCard(ev, alias, followupEvents) {
       <div class="${headerBg} px-4 py-2.5 cursor-pointer select-none flex items-center justify-between"
            onclick="_toggleAeCard('${cardId}')">
         <div class="flex items-center gap-2.5 flex-wrap">
-          <span class="text-sm font-bold ${headerText}">AE${alias}</span>
+          <span class="text-sm font-bold ${headerText}">${ev.alias || ''}</span>
           ${statusBadge}
         </div>
         <i class="fas fa-chevron-down text-xs ${headerText}" id="ae-chevron-${cardId}"
@@ -1392,13 +1424,14 @@ function _robotIssueCard(ev) {
 // ── Adverse Event modal ────────────────────────────────────────────────────────
 
 const _AE_TRIGGER_NAMES = {
-  activation:        'Patient Activation',
-  home_visit_d02:    'Home Visit Day 02',
-  home_visit_d03:    'Home Visit Day 03',
-  home_visit_d15:    'Home Visit Day 15',
-  followup_call_d07: 'Follow-up Call Day 07',
-  followup_call_d21: 'Follow-up Call Day 21',
-  patient_call:      'Patient Call',
+  activation:         'Patient Activation',
+  activation_attempt: 'Activation Attempt (training not completed)',
+  home_visit_d02:     'Home Visit Day 02',
+  home_visit_d03:     'Home Visit Day 03',
+  home_visit_d15:     'Home Visit Day 15',
+  followup_call_d07:  'Follow-up Call Day 07',
+  followup_call_d21:  'Follow-up Call Day 21',
+  patient_call:       'Patient Call',
 };
 
 let _aeEventId = null;
@@ -1412,7 +1445,7 @@ function openAdverseEventModal(ev) {
   document.getElementById('ae-date').value         = '';
   document.getElementById('ae-description').value  = '';
   document.getElementById('ae-action-taken').value = '';
-  document.getElementById('ae-paused').checked     = false;
+  document.getElementById('ae-paused').checked     = !!ev.training_stopped;
 
   document.getElementById('ae-schedule-visit').checked    = false;
   document.getElementById('ae-visit-date-wrap').classList.add('hidden');
@@ -1618,6 +1651,19 @@ async function openRobotIssueCallModal(ev) {
       }
       _ricUpdateNotesLabel();
     };
+  }
+
+  // Pre-check visit_required for all devices when this stub was the primary training-stop reason
+  if (ev.training_stopped) {
+    for (const device of ['pluto', 'mars']) {
+      const onCb = document.getElementById(`ric-${device}-on`);
+      if (onCb && !onCb.checked) {
+        onCb.checked = true;
+        document.getElementById(`ric-${device}-form`).classList.remove('hidden');
+        const visitRadio = document.querySelector(`input[name="ric-${device}-outcome"][value="visit_required"]`);
+        if (visitRadio) visitRadio.checked = true;
+      }
+    }
   }
 
   _ricUpdateNotesLabel();
@@ -1934,19 +1980,28 @@ function openAdverseEventFollowupModal(ev) {
     const ae = (_completeEventsCache || []).find(e => e.id === id);
     return {
       id:               id,
+      alias:            ae?.alias || '',
       date:             ae?.completion_date || '',
       training_blocked: ae?.training_blocked || false,
     };
   });
 
+  // Set modal title with aliases
+  const aliases = _aefAeDetails.map(ae => ae.alias).filter(Boolean);
+  const titleEl = document.getElementById('aef-title');
+  if (titleEl) titleEl.textContent = aliases.length
+    ? `Adverse Event Follow-up — ${aliases.join(', ')}`
+    : 'Adverse Event Follow-up';
+
   // Build context banner
   const banner = document.getElementById('aef-context-banner');
   banner.innerHTML = _aefAeDetails.length
     ? _aefAeDetails.map(ae => {
-        const dateStr = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
+        const label    = ae.alias || 'Adverse Event';
+        const dateStr  = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
         const pauseTag = ae.training_blocked
           ? ' <span class="text-red-600 font-medium">(training blocked)</span>' : '';
-        return `<div>Adverse Event${dateStr}${pauseTag}</div>`;
+        return `<div>${label}${dateStr}${pauseTag}</div>`;
       }).join('')
     : '<div class="text-slate-400">No adverse events found.</div>';
 
@@ -1960,7 +2015,7 @@ function openAdverseEventFollowupModal(ev) {
            <input type="date" id="aef-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
          </div>` : '';
     return `<div class="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-      <div class="text-sm font-medium text-slate-700">Adverse Event — ${dateStr}</div>
+      <div class="text-sm font-medium text-slate-700">${ae.alias || 'Adverse Event'} — ${dateStr}</div>
       <label class="flex items-center gap-2 cursor-pointer select-none">
         <input type="checkbox" id="aef-resolved-${i}" onchange="_aefToggleResume(${i})" class="w-4 h-4 rounded border-slate-300">
         <span class="text-sm text-slate-700">Resolved</span>
@@ -2049,7 +2104,7 @@ function _buildAeVisitRows(prefix, aeDetails) {
            <input type="date" id="${prefix}-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
          </div>` : '';
     return `<div class="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-      <div class="text-sm font-medium text-slate-700">Adverse Event — ${dateStr}${pauseTag}</div>
+      <div class="text-sm font-medium text-slate-700">${ae.alias || 'Adverse Event'} — ${dateStr}${pauseTag}</div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">Discussion notes</label>
         <textarea id="${prefix}-disc-${i}" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="What was discussed for this AE…"></textarea>
@@ -2092,7 +2147,7 @@ function _collectAeDiscussions(prefix, aeDetails) {
 function _loadAeDetails(aeIds) {
   return aeIds.map(id => {
     const ae = (_completeEventsCache || []).find(e => e.id === id);
-    return { id, date: ae?.completion_date || '', training_blocked: ae?.training_blocked || false };
+    return { id, alias: ae?.alias || '', date: ae?.completion_date || '', training_blocked: ae?.training_blocked || false };
   });
 }
 
@@ -2100,10 +2155,11 @@ function _buildAeContextBanner(prefix, aeDetails) {
   const el = document.getElementById(`${prefix}-context-banner`);
   el.innerHTML = aeDetails.length
     ? aeDetails.map(ae => {
+        const label    = ae.alias || 'Adverse Event';
         const dateStr  = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
         const pauseTag = ae.training_blocked
           ? ' <span class="text-red-600 font-medium">(training blocked)</span>' : '';
-        return `<div>Adverse Event${dateStr}${pauseTag}</div>`;
+        return `<div>${label}${dateStr}${pauseTag}</div>`;
       }).join('')
     : '<div class="text-slate-400">No adverse events found.</div>';
 }
@@ -2111,6 +2167,11 @@ function _buildAeContextBanner(prefix, aeDetails) {
 function openAeFollowupVisitModal(ev) {
   _aefvEventId   = ev.id;
   _aefvAeDetails = _loadAeDetails(ev.adverse_event_ids || []);
+  const aefvAliases = _aefvAeDetails.map(ae => ae.alias).filter(Boolean);
+  const aefvTitle = document.getElementById('aefv-title');
+  if (aefvTitle) aefvTitle.textContent = aefvAliases.length
+    ? `Adverse Event Follow-up Visit — ${aefvAliases.join(', ')}`
+    : 'Adverse Event Follow-up Visit';
   _buildAeContextBanner('aefv', _aefvAeDetails);
   document.getElementById('aefv-ae-rows').innerHTML = _buildAeVisitRows('aefv', _aefvAeDetails);
   document.getElementById('aefv-start').value = '';
@@ -2164,6 +2225,11 @@ let _aecvAeDetails = [];
 function openAeClinicalVisitModal(ev) {
   _aecvEventId   = ev.id;
   _aecvAeDetails = _loadAeDetails(ev.adverse_event_ids || []);
+  const aecvAliases = _aecvAeDetails.map(ae => ae.alias).filter(Boolean);
+  const aecvTitle = document.getElementById('aecv-title');
+  if (aecvTitle) aecvTitle.textContent = aecvAliases.length
+    ? `Adverse Event Clinical Visit — ${aecvAliases.join(', ')}`
+    : 'Adverse Event Clinical Visit';
   _buildAeContextBanner('aecv', _aecvAeDetails);
   document.getElementById('aecv-ae-rows').innerHTML = _buildAeVisitRows('aecv', _aecvAeDetails);
   document.getElementById('aecv-start').value = '';
@@ -2667,34 +2733,37 @@ const EVENT_OPENERS = {
 
 function patientEventRow(ev) {
   const sched = ev.scheduled_date;
+  const onHold = !!ev.on_hold;
   const isActiveWindow = !!ev.active_window;
   const isOverdue   = !isActiveWindow && ev.days <= 0;
-  const isUpcoming  = !isActiveWindow && ev.days > 0;
-  // For display date: upcoming → start, active-window or past-due → end
+  const isUpcoming  = !isActiveWindow && (ev.days > 0 || onHold);
+  // For display date: upcoming/on-hold → start, active-window or past-due → end
   const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
   const d = new Date((refDate || '').replace(' ', 'T'));
   const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
   const abs = Math.abs(ev.days);
   let whenLabel;
-  if (isActiveWindow) {
+  if (onHold) {
+    whenLabel = 'On hold';
+  } else if (isActiveWindow) {
     whenLabel = ev.days === 0 ? 'Due today' : `Due now · ${ev.days}d left`;
   } else if (isOverdue) {
     whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
   } else {
     whenLabel = `Available from ${dateStr}`;
   }
-  const urgency   = isOverdue      ? 'border-red-200 bg-red-50'
+  const urgency   = isOverdue       ? 'border-red-200 bg-red-50'
                   : isActiveWindow  ? 'border-amber-200 bg-amber-50'
-                  : ev.days <= 2   ? 'border-orange-200 bg-orange-50'
+                  : ev.days <= 2    ? 'border-orange-200 bg-orange-50'
                   : 'border-slate-100 bg-slate-50';
-  const textColor = isOverdue      ? 'text-red-600'
+  const textColor = isOverdue       ? 'text-red-600'
                   : isActiveWindow  ? 'text-amber-700'
-                  : ev.days <= 2   ? 'text-orange-600'
+                  : ev.days <= 2    ? 'text-orange-600'
                   : 'text-slate-500';
 
-  const blocked   = ev.blocked_by && ev.blocked_by.length > 0;
+  const blocked   = !onHold && ev.blocked_by && ev.blocked_by.length > 0;
   const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
-  const clickable = hasOpener && !blocked && !isUpcoming && !_patientDiscontinued;
+  const clickable = hasOpener && !blocked && !isUpcoming && !onHold && !_patientDiscontinued;
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
@@ -2704,6 +2773,8 @@ function patientEventRow(ev) {
     : `<div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>`;
   const rightLabel = blocked
     ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
+    : onHold
+    ? `<span class="text-xs font-semibold text-slate-600 bg-white border border-slate-300 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">On hold</span>`
     : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap flex-shrink-0">${whenLabel}</span>`;
 
   return `
@@ -2857,47 +2928,111 @@ async function submitDeviceSetup() {
 
 let _activationEventId = null;
 
+let _activationTrainingCompleted = null; // null = not chosen, true = yes, false = no
+
 function _actToggleSubform(type) {
-  const noteId  = { adverse: 'act-adverse-note', robot: 'act-robot-note', watch: 'act-watch-note' }[type];
+  const noteId = {
+    adverse: 'act-adverse-note', robot: 'act-robot-note',
+    watch: 'act-watch-note', 'other-device': 'act-other-device-note',
+  }[type];
   const checked = document.getElementById(`act-trigger-${type}`).checked;
-  document.getElementById(noteId).classList.toggle('hidden', !checked);
+  if (noteId) document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+function _actNoToggleSubform(type) {
+  const noteId = {
+    adverse: 'act-no-adverse-note', robot: 'act-no-robot-note',
+    'other-device': 'act-no-other-device-note',
+  }[type];
+  const checked = document.getElementById(`act-no-trigger-${type}`).checked;
+  if (noteId) document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+function _setActivationTrainingToggle(val) {
+  _activationTrainingCompleted = val;
+  const yesBtn = document.getElementById('act-train-yes-btn');
+  const noBtn  = document.getElementById('act-train-no-btn');
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  if (val === true) {
+    yesBtn.classList.add(...activeClass);    yesBtn.classList.remove(...inactiveClass);
+    noBtn.classList.remove(...activeClass);  noBtn.classList.add(...inactiveClass);
+  } else {
+    noBtn.classList.add(...activeClass);     noBtn.classList.remove(...inactiveClass);
+    yesBtn.classList.remove(...activeClass); yesBtn.classList.add(...inactiveClass);
+  }
+  document.getElementById('act-training-yes-section').classList.toggle('hidden', val !== true);
+  document.getElementById('act-training-no-section').classList.toggle('hidden', val !== false);
+  document.getElementById('activation-submit').textContent = val === false ? 'Log Attempt' : 'Activate Patient';
 }
 
 async function openActivationModal(evId) {
-  _activationEventId = typeof evId === 'object' ? evId.id : evId;
+  _activationEventId        = typeof evId === 'object' ? evId.id : evId;
+  _activationTrainingCompleted = null;
   document.getElementById('activation-homer-id').textContent = PATIENT_HOMER_ID;
+
+  // Reset toggle to unselected state
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  ['act-train-yes-btn', 'act-train-no-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    btn.classList.remove(...activeClass);
+    btn.classList.add(...inactiveClass);
+  });
+  document.getElementById('act-training-yes-section').classList.add('hidden');
+  document.getElementById('act-training-no-section').classList.add('hidden');
+  document.getElementById('activation-submit').textContent = 'Activate Patient';
+
+  // Reset YES section fields
   document.getElementById('activation-session-start').value = '';
   document.getElementById('activation-session-end').value   = '';
   document.getElementById('activation-notes').value         = '';
-  setError('activation-error', '');
   _resetAttachment('activation');
   _attachDateGuard('activation-session-start', 'activation-error');
   _attachSessionEndGuard('activation-session-start', 'activation-session-end', 'activation-error');
 
-  // Show VCG group row for control patients only
+  const isControl      = patientData?.group === 'control';
+  const isExperimental = patientData?.group === 'experimental';
   const vcgRow = document.getElementById('activation-vcg-group-row');
   const vcgSel = document.getElementById('activation-vcg-group');
-  const isControl = patientData?.group === 'control';
   if (vcgRow) vcgRow.classList.toggle('hidden', !isControl);
   if (vcgSel) vcgSel.value = '';
 
-  // Reset triggered section
-  ['adverse', 'robot', 'watch'].forEach(type => {
+  ['adverse', 'robot', 'watch', 'other-device'].forEach(type => {
     const cb = document.getElementById(`act-trigger-${type}`);
     if (cb) { cb.checked = false; _actToggleSubform(type); }
   });
-  document.getElementById('act-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
-  // Watch record toggle only shown once a watch is assigned (seeded at activation, but triggered_by is for post-seed)
-  // Per spec: "Watch Record toggle only shown if at least one watch is currently assigned."
-  // At activation time, no watch is assigned yet, so we hide it.
+  document.getElementById('act-trigger-robot-wrap').classList.toggle('hidden', !isExperimental);
   document.getElementById('act-trigger-watch-wrap').classList.toggle('hidden',
     !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
+  document.getElementById('act-trigger-other-device-wrap').classList.toggle('hidden', !isExperimental);
 
+  // Reset NO section fields
+  document.getElementById('act-no-visit-date').value = '';
+  document.getElementById('act-no-notes').value      = '';
+  _attachDateGuard('act-no-visit-date', 'activation-error');
+  ['adverse', 'robot', 'other-device'].forEach(type => {
+    const cb = document.getElementById(`act-no-trigger-${type}`);
+    if (cb) { cb.checked = false; _actNoToggleSubform(type); }
+  });
+  document.getElementById('act-no-trigger-robot-wrap').classList.toggle('hidden', !isExperimental);
+  document.getElementById('act-no-trigger-other-device-wrap').classList.toggle('hidden', !isExperimental);
+
+  setError('activation-error', '');
   showModal('activation-modal');
 }
 
 async function submitActivation() {
-  // Check for date validation errors before proceeding
+  if (_activationTrainingCompleted === null) {
+    setError('activation-error', 'Please indicate whether training was completed.');
+    return;
+  }
+  if (_activationTrainingCompleted === false) {
+    await _submitActivationAttempt();
+    return;
+  }
+
+  // ── YES path: full activation ────────────────────────────────────────
   if (_hasDateValidationErrors(['activation-error'])) {
     setError('activation-error', 'Please fix the date validation errors before submitting.');
     return;
@@ -2928,7 +3063,6 @@ async function submitActivation() {
   }
   if (!_validateAttachment('activation', 'activation-error')) return;
 
-  // Collect triggered events
   const triggered = [];
   if (document.getElementById('act-trigger-adverse').checked)
     triggered.push({ type: 'adverse_event' });
@@ -2938,7 +3072,8 @@ async function submitActivation() {
   if (!document.getElementById('act-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('act-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
-  if (document.getElementById('act-trigger-other-device').checked)
+  if (!document.getElementById('act-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('act-trigger-other-device').checked)
     triggered.push({ type: 'other_device_issue_call' });
   body.triggered = triggered;
 
@@ -2954,6 +3089,40 @@ async function submitActivation() {
   setLoading('activation-submit', false);
   hideModal('activation-modal');
   await loadPatient();
+  loadPatientEvents();
+}
+
+async function _submitActivationAttempt() {
+  if (_hasDateValidationErrors(['activation-error'])) {
+    setError('activation-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
+  const visitDate = document.getElementById('act-no-visit-date').value;
+  const notes     = document.getElementById('act-no-notes').value.trim();
+
+  if (!visitDate) { setError('activation-error', 'Visit date is required.'); return; }
+  if (!notes)     { setError('activation-error', 'Notes are required — explain why training was not completed.'); return; }
+
+  const triggered = [];
+  if (document.getElementById('act-no-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (!document.getElementById('act-no-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('act-no-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue_call' });
+  if (!document.getElementById('act-no-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('act-no-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
+
+  setLoading('activation-submit', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/log-activation-attempt`,
+    { visitDate, notes, triggered }
+  );
+  if (!ok) { setLoading('activation-submit', false); setError('activation-error', data.error || 'Failed to log activation attempt.'); return; }
+
+  setLoading('activation-submit', false);
+  hideModal('activation-modal');
   loadPatientEvents();
 }
 
@@ -4444,40 +4613,159 @@ async function saveSimpleEvent() {
 
 // ── Home Visit modal ───────────────────────────────────────────────────────────
 
-let _hvEventId         = null;
-let _hvProtocolEventId = null;
+let _hvEventId           = null;
+let _hvProtocolEventId   = null;
+let _hvTrainingCompleted = null;
+let _hvNoPrimaryReason   = null;
+
+const _HV_ACTIVATION_OFFSETS = { home_visit_d02: 1, home_visit_d03: 2 };
 
 function _hvToggleSubform(type) {
-  const noteId  = { adverse: 'hv-adverse-note', robot: 'hv-robot-note', watch: 'hv-watch-note' }[type];
+  const map = {
+    adverse:         'hv-adverse-note',
+    robot:           'hv-robot-note',
+    watch:           'hv-watch-note',
+    'other-device':  'hv-other-device-note',
+  };
+  const noteId = map[type];
+  if (!noteId) return;
   const checked = document.getElementById(`hv-trigger-${type}`).checked;
   document.getElementById(noteId).classList.toggle('hidden', !checked);
 }
 
-const _HV_ACTIVATION_OFFSETS = { home_visit_d02: 1, home_visit_d03: 2 };
+function _hvNoToggleSubform(type) {
+  const map = {
+    adverse:        'hv-no-adverse-note',
+    robot:          'hv-no-robot-note',
+    'other-device': 'hv-no-other-device-note',
+  };
+  const noteId = map[type];
+  if (!noteId) return;
+  const checked = document.getElementById(`hv-no-trigger-${type}`).checked;
+  document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+function _setHvNoPrimaryReason(reason) {
+  _hvNoPrimaryReason = reason;
+  const pills = {
+    adverse_event:           'hv-no-reason-ae',
+    robot_issue_call:        'hv-no-reason-robot',
+    other_device_issue_call: 'hv-no-reason-odi',
+    other:                   'hv-no-reason-other',
+  };
+  const active   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactive = ['border-slate-200', 'text-slate-600'];
+  Object.entries(pills).forEach(([r, id]) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const on = r === reason;
+    active.forEach(c => btn.classList.toggle(c, on));
+    inactive.forEach(c => btn.classList.toggle(c, !on));
+  });
+
+  const isExp = patientData?.group === 'experimental';
+  // Reset secondary trigger wraps to group-based visibility, then hide primary's wrap
+  const wrapVisibility = {
+    'hv-no-trigger-ae-wrap':           true,
+    'hv-no-trigger-robot-wrap':        isExp,
+    'hv-no-trigger-other-device-wrap': isExp,
+  };
+  const reasonToWrap = {
+    adverse_event:           'hv-no-trigger-ae-wrap',
+    robot_issue_call:        'hv-no-trigger-robot-wrap',
+    other_device_issue_call: 'hv-no-trigger-other-device-wrap',
+  };
+  Object.entries(wrapVisibility).forEach(([wrapId, groupVisible]) => {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    const isPrimary = reasonToWrap[reason] === wrapId;
+    wrap.classList.toggle('hidden', !groupVisible || isPrimary);
+    if (isPrimary || !groupVisible) {
+      // Uncheck and collapse the hidden trigger
+      const cbId = wrapId === 'hv-no-trigger-ae-wrap'    ? 'hv-no-trigger-adverse'
+                 : wrapId === 'hv-no-trigger-robot-wrap' ? 'hv-no-trigger-robot'
+                 :                                          'hv-no-trigger-other-device';
+      const cb = document.getElementById(cbId);
+      if (cb && cb.checked) { cb.checked = false; _hvNoToggleSubform(cbId.replace('hv-no-trigger-', '')); }
+    }
+  });
+
+  // Notes label: required asterisk only for 'other'
+  const notesLabel = document.getElementById('hv-no-notes-star');
+  if (notesLabel) notesLabel.textContent = reason === 'other' ? '* — explain why training was not completed' : '';
+  setError('hv-error', '');
+}
+
+function _setHvTrainingToggle(val) {
+  _hvTrainingCompleted = val;
+  const yesBtn = document.getElementById('hv-train-yes-btn');
+  const noBtn  = document.getElementById('hv-train-no-btn');
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  if (val === true) {
+    yesBtn.classList.add(...activeClass);    yesBtn.classList.remove(...inactiveClass);
+    noBtn.classList.remove(...activeClass);  noBtn.classList.add(...inactiveClass);
+  } else {
+    noBtn.classList.add(...activeClass);     noBtn.classList.remove(...inactiveClass);
+    yesBtn.classList.remove(...activeClass); yesBtn.classList.add(...inactiveClass);
+  }
+  document.getElementById('hv-yes-section').classList.toggle('hidden', val !== true);
+  document.getElementById('hv-no-section').classList.toggle('hidden',  val !== false);
+  setError('hv-error', '');
+}
 
 function openHomeVisitModal(ev) {
-  _hvEventId         = ev.id;
-  _hvProtocolEventId = ev.protocol_event_id;
+  _hvEventId           = ev.id;
+  _hvProtocolEventId   = ev.protocol_event_id;
+  _hvTrainingCompleted = null;
   document.getElementById('hv-title').textContent = ev.event_name;
-  document.getElementById('hv-notes').value       = '';
-  _resetAttachment('hv');
   setError('hv-error', '');
 
-  // Pre-fill session start for d02/d03
-  const offset = _HV_ACTIVATION_OFFSETS[ev.protocol_event_id];
-  if (offset !== undefined && patientData?.activationDate) {
-    const d = new Date(patientData.activationDate);
-    d.setDate(d.getDate() + offset);
-    document.getElementById('hv-session-start').value = d.toISOString().slice(0, 10) + 'T09:00';
-  } else {
-    document.getElementById('hv-session-start').value = '';
-  }
-  document.getElementById('hv-session-end').value = '';
+  // Reset toggle to unselected
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  ['hv-train-yes-btn', 'hv-train-no-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.classList.remove(...activeClass);
+    btn.classList.add(...inactiveClass);
+  });
+  document.getElementById('hv-yes-section').classList.add('hidden');
+  document.getElementById('hv-no-section').classList.add('hidden');
+
+  // ── YES section setup ──
+  document.getElementById('hv-notes').value = '';
+  _resetAttachment('hv');
+
+  const offset   = _HV_ACTIVATION_OFFSETS[ev.protocol_event_id];
+  const isLocked = offset !== undefined && patientData?.activationDate;
+  // Attach guards first, then override min/max for locked dates (guards set max=now by default)
   _attachDateGuard('hv-session-start', 'hv-error');
   _attachSessionEndGuard('hv-session-start', 'hv-session-end', 'hv-error');
 
-  // Reset triggered section
-  ['adverse', 'robot', 'watch'].forEach(type => {
+  if (isLocked) {
+    const d = new Date(patientData.activationDate);
+    d.setDate(d.getDate() + offset);
+    const lockedDate = d.toISOString().slice(0, 10);
+    document.getElementById('hv-session-start').value = lockedDate + 'T09:00';
+    document.getElementById('hv-session-end').value   = lockedDate + 'T10:00';
+    document.getElementById('hv-session-start').min   = lockedDate + 'T00:00';
+    document.getElementById('hv-session-start').max   = lockedDate + 'T23:59';
+    document.getElementById('hv-session-end').min     = lockedDate + 'T00:00';
+    document.getElementById('hv-session-end').max     = lockedDate + 'T23:59';
+    document.getElementById('hv-date-lock-label').textContent = `Day ${offset + 1} (${lockedDate})`;
+    document.getElementById('hv-date-lock-note').classList.remove('hidden');
+  } else {
+    document.getElementById('hv-session-start').value = '';
+    document.getElementById('hv-session-end').value   = '';
+    document.getElementById('hv-session-start').min   = '';
+    document.getElementById('hv-session-start').max   = '';
+    document.getElementById('hv-session-end').min     = '';
+    document.getElementById('hv-session-end').max     = '';
+    document.getElementById('hv-date-lock-note').classList.add('hidden');
+  }
+
+  ['adverse', 'robot', 'watch', 'other-device'].forEach(type => {
     const cb = document.getElementById(`hv-trigger-${type}`);
     if (cb) { cb.checked = false; _hvToggleSubform(type); }
   });
@@ -4485,11 +4773,56 @@ function openHomeVisitModal(ev) {
   document.getElementById('hv-trigger-watch-wrap').classList.toggle('hidden',
     !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
 
+  // ── NO section setup ──
+  _hvNoPrimaryReason = null;
+  document.getElementById('hv-no-notes').value      = '';
+  document.getElementById('hv-no-visit-date').value = '';
+  _resetAttachment('hv-no');
+  _attachDateGuard('hv-no-visit-date', 'hv-error');
+
+  const isD0203 = ev.protocol_event_id === 'home_visit_d02' || ev.protocol_event_id === 'home_visit_d03';
+  document.getElementById('hv-no-broken-protocol-warn').classList.toggle('hidden', !isD0203);
+
+  // Reset primary reason pills
+  const isExp = patientData?.group === 'experimental';
+  const pillActive   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const pillInactive = ['border-slate-200', 'text-slate-600'];
+  ['hv-no-reason-ae', 'hv-no-reason-robot', 'hv-no-reason-odi', 'hv-no-reason-other'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.classList.remove(...pillActive);
+    btn.classList.add(...pillInactive);
+  });
+  document.getElementById('hv-no-reason-robot').classList.toggle('hidden', !isExp);
+  document.getElementById('hv-no-reason-odi').classList.toggle('hidden', !isExp);
+  const notesLabel = document.getElementById('hv-no-notes-star');
+  if (notesLabel) notesLabel.textContent = '';
+
+  // Reset secondary triggers
+  ['adverse', 'robot', 'other-device'].forEach(type => {
+    const cb = document.getElementById(`hv-no-trigger-${type}`);
+    if (cb) { cb.checked = false; _hvNoToggleSubform(type); }
+  });
+  document.getElementById('hv-no-trigger-ae-wrap').classList.remove('hidden');
+  document.getElementById('hv-no-trigger-robot-wrap').classList.toggle('hidden', !isExp);
+  document.getElementById('hv-no-trigger-other-device-wrap').classList.toggle('hidden', !isExp);
+
   showModal('home-visit-modal');
 }
 
 async function saveHomeVisit() {
-  // Check for date validation errors before proceeding
+  if (_hvTrainingCompleted === null) {
+    setError('hv-error', 'Please indicate whether training was completed.');
+    return;
+  }
+  if (_hvTrainingCompleted) {
+    await _saveHomeVisitYes();
+  } else {
+    await _saveHomeVisitNo();
+  }
+}
+
+async function _saveHomeVisitYes() {
   if (_hasDateValidationErrors(['hv-error'])) {
     setError('hv-error', 'Please fix the date validation errors before submitting.');
     return;
@@ -4505,7 +4838,6 @@ async function saveHomeVisit() {
   if (sessionStart >= sessionEnd) { setError('hv-error', 'Session end must be after session start.'); return; }
   if (!_validateAttachment('hv', 'hv-error')) return;
 
-  // Collect triggered events
   const triggered = [];
   if (document.getElementById('hv-trigger-adverse').checked)
     triggered.push({ type: 'adverse_event' });
@@ -4532,6 +4864,68 @@ async function saveHomeVisit() {
   const { file, caption } = _readAttachment('hv');
   if (file) {
     const uploaded = await _uploadAttachment(_hvEventId, file, caption, 'hv-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('home-visit-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
+async function _saveHomeVisitNo() {
+  const visitDate = document.getElementById('hv-no-visit-date').value;
+  const notes     = document.getElementById('hv-no-notes').value.trim();
+  const saveBtn   = document.getElementById('hv-save');
+
+  if (!_hvNoPrimaryReason) { setError('hv-error', 'Please select a reason why training was not completed.'); return; }
+  if (!visitDate) { setError('hv-error', 'Visit date is required.'); return; }
+  if (new Date(visitDate) > new Date()) { setError('hv-error', 'Visit date cannot be in the future.'); return; }
+  if (_hvNoPrimaryReason === 'other' && !notes) { setError('hv-error', 'Notes are required when reason is "Other".'); return; }
+  if (!_validateAttachment('hv-no', 'hv-error')) return;
+
+  // Build triggered list: primary reason first (with training_stopped flag), then secondary triggers
+  const triggered = [];
+  if (_hvNoPrimaryReason !== 'other') {
+    triggered.push({ type: _hvNoPrimaryReason, training_stopped: true });
+  }
+  if (_hvNoPrimaryReason !== 'adverse_event' &&
+      document.getElementById('hv-no-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (_hvNoPrimaryReason !== 'robot_issue_call' &&
+      !document.getElementById('hv-no-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-no-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue_call' });
+  if (_hvNoPrimaryReason !== 'other_device_issue_call' &&
+      !document.getElementById('hv-no-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-no-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
+
+  const isD0203 = _hvProtocolEventId === 'home_visit_d02' || _hvProtocolEventId === 'home_visit_d03';
+  let confirmedBrokenProtocol = false;
+  if (isD0203) {
+    const dayLabel = _hvProtocolEventId === 'home_visit_d02' ? 'Day 2' : 'Day 3';
+    if (!window.confirm(`Training was not completed on ${dayLabel}. This will mark the patient as BROKEN PROTOCOL. Continue?`)) return;
+    if (!window.confirm('Are you sure? This action cannot be undone. The patient will be marked as broken protocol.')) return;
+    confirmedBrokenProtocol = true;
+  }
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/home-visit`, {
+    event_id:                  _hvEventId,
+    protocol_event_id:         _hvProtocolEventId,
+    training_not_done:         true,
+    primary_reason:            _hvNoPrimaryReason,
+    visit_date:                visitDate,
+    notes,
+    triggered,
+    confirmed_broken_protocol: confirmedBrokenProtocol,
+  });
+  if (!ok) { setError('hv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('hv-no');
+  if (file) {
+    const uploadId = (_hvProtocolEventId === 'home_visit_d15') ? data.attempt_id : _hvEventId;
+    const uploaded = await _uploadAttachment(uploadId, file, caption, 'hv-error');
     if (!uploaded) { saveBtn.disabled = false; return; }
   }
 
@@ -5257,12 +5651,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function _esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-let _odiEventId   = null;
-let _odiAssigned  = []; // [{dtype, device_id, label}] assigned to patient
+let _odiEventId         = null;
+let _odiAssigned        = []; // [{dtype, device_id, label}] assigned to patient
+let _odiTrainingStopped = false;
 
 async function openOtherDeviceIssueModal(ev) {
-  _odiEventId  = ev.id;
-  _odiAssigned = [];
+  _odiEventId         = ev.id;
+  _odiAssigned        = [];
+  _odiTrainingStopped = !!ev.training_stopped;
   setError('odi-error', '');
 
   const now = new Date();
@@ -5369,6 +5765,14 @@ function _odiBuildSections() {
         document.getElementById(`odi-notes-${i}`).value = '';
       }
     };
+
+    // Pre-check visit_required when this stub was the primary training-stop reason
+    if (_odiTrainingStopped) {
+      document.getElementById(`odi-on-${i}`).checked = true;
+      document.getElementById(`odi-form-${i}`).classList.remove('hidden');
+      const visitRadio = document.querySelector(`input[name="odi-outcome-${i}"][value="visit_required"]`);
+      if (visitRadio) visitRadio.checked = true;
+    }
   });
 }
 

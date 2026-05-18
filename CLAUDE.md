@@ -31,6 +31,7 @@ HOMER Therapy Dashboard (htDash) is a Flask-based clinical dashboard for managin
 | `docs/pages.md` | URL structure, page specs, all actions and modals defined in one place |
 | `docs/devices.md` | Device state machine, assignment rules, clinic logic, SIM linkage, 28-day auto-reset |
 | `docs/device_data_schemas.md` | Detailed field-level schemas for all device inventory, assignment, SIM, and log files |
+| `docs/ae_ri_logic.md` | Full AE/RI logic: stub lifecycle, follow-up chain, pause mechanics, broken protocol detection, auto-shift |
 
 ---
 
@@ -73,9 +74,10 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 20. ⬜ Patient detail tab content — Call Logs, ✅ Adverse Events, Watch Records, Robot Issues (exp only)
 21. ✅ Devices page — inventory, assignments, SIM management (integrated)
 22. ✅ SIM management — integrated into Devices page (no separate page)
-23. ⬜ Cleanup — remove old `dashboard.html` and unused JS
-24. ⬜ Test all routes and functionality
-25. ⬜ Merge to `main`
+23. ✅ **D01–D03 broken protocol detection + auto-shift on resume** (see design spec in `docs/pages.md`)
+24. ⬜ Cleanup — remove old `dashboard.html` and unused JS
+25. ⬜ Test all routes and functionality
+26. ⬜ Merge to `main`
 
 ---
 
@@ -164,29 +166,20 @@ The script shifts the patient's entire timeline by N days (positive or negative)
   3. Future-date guard applies to `session_start`
   - `completion_date` is set to `session_start` — there is no separate event date input.
   - These represent the clock times of the therapy session conducted during that home visit.
+  - **D02 and D03 date lock (training completed path):** the date portion of `session_start`/`session_end` is pre-filled and read-only, locked to `activationDate + 1` (D02) or `activationDate + 2` (D03). Therapist selects time only. Server validates and rejects mismatched dates. D15 is not locked.
 - **AG Watch timing session bounds (hard validation):** the `adl_agwatch_timing_d03` / `vcg_agwatch_timing_d03` modals enforce that every non-null exercise `start`/`end` falls within the `session_start`/`session_end` from `home_visit_d03`. The `adl_agwatch_timing_d15` / `vcg_agwatch_timing_d15` modals apply the same hard constraint using `home_visit_d15`. The form cannot be saved if any timing falls outside the session window.
 - Status is never stored — always derived by `derive_status()` in `utils/data_access.py`
 - **Timeline transition badges** are also never stored — derived client-side by `_deriveTransitions(patient, events)` in `patient_detail.js`. Returns a `Map<event_id, badge>`. Four badge types: `"paused"` (amber), `"resumed"` (green), `"broken_protocol"` (red), `"discontinued"` (slate). Detection rules: paused = event id in `pauseHistory[*].reasons[*].event_id`; resumed = event id matches `pauseHistory[*].end_event_id` (set by the route that closes the epoch); broken_protocol = event `completion_date[:10]` matches `brokenProtocolDate`; discontinued = event `completion_date[:10]` matches `discontinuationDate`.
 - Free event types: `patient_call`, `adverse_event`, `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit`, `robot_issue_call` (experimental only), `robot_issue_visit` (experimental only), `resolve_robot_issue_visit` (experimental only), `watch_record`, `discontinuation`. There is no standalone `robot_issue` event — the chain starts directly at `robot_issue_call`.
-- **Cancellable events:** some free events (currently `adverse_event_followup_visit` and `adverse_event_clinical_visit`) carry `cancellable: true` in their stub. The modal shows a **Cancel Visit** button. Clicking it prompts for a `cancellation_reason` (textarea, required). On cancellation the stub is moved to a top-level `cancelled` array in `protocol_events.json` with `cancelled_at` timestamp and `cancellation_reason`. No further stubs are auto-created. Cancellable stubs are otherwise identical to regular stubs — they appear as overdue events and have `EVENT_OPENERS` entries.
-- **Triggered events:** `adverse_event`, `robot_issue_call`, and `watch_record` can only be created as triggered events — never standalone. They are triggered by: `activation`, `home_visit_d02`, `home_visit_d03`, `home_visit_d15`, `patient_call`, `followup_call_d07`, or `followup_call_d21`. `robot_issue_call` is experimental-only and hidden for control patients in all modals.
-  - Bidirectional references: the triggering event stores `triggered: [{type, id}, ...]`; the spawned event stores `triggered_by: {type, id}`.
-  - **`adverse_event` uses a two-phase model:**
-    1. **Trigger phase** (in the triggering modal): checking the toggle shows an info note only — no sub-form fields. On save, a stub entry is appended to `incomplete` with `protocol_event_id = "adverse_event"`, `scheduled_date = [now, now]`, and `triggered_by`. The stub appears immediately as an overdue event.
-    2. **Complete phase** (via standalone modal): the therapist opens the `adverse-event-modal`, fills in description/action, and saves. The stub moves from `incomplete` to `free.adverse_event`.
-  - **`robot_issue_call` is created directly by the triggering modal** — no intermediate `robot_issue` event. Checking the "robot issue" toggle appends a `robot_issue_call` stub to `incomplete` with `triggered_by` pointing to the triggering event. `scheduled_date = [now, now]`.
-  - **Robot issue chain** (engineer-owned, experimental only): `robot_issue_call` → (if visit needed) `robot_issue_visit` → (if device taken back with no replacement) `resolve_robot_issue_visit`. Each step auto-creates the next stub. Training pauses only when a device is taken back without a replacement; pause clears when all `resolve_robot_issue_visit` stubs are resolved.
-  - **`swap_type`** on swapped outcomes in `robot_issue_visit` and `resolve_robot_issue_visit`: `"fault_driven"` (device suspected/confirmed faulty — creates a pending fault report stub; old device marked faulty in inventory) or `"preventive"` (precautionary replacement — device NOT marked faulty; no fault report stub). Both types create `resolve_robot_issue_visit` stubs if no replacement is available.
-  - **`robot_fault_report`** stubs (engineering only, not visible to therapist): created only for `"fault_driven"` swaps. Stored in `devices/fault_reports/<type>.json`. Have `resolution: null` until completed via the Devices page "Complete Fault Report" action (future feature). `"repaired_on_site"` outcomes do not create fault report stubs — fault details deferred to Devices page.
-  - **`resolve_robot_issue_visit` modal** shows: (1) taken-back device replacement dropdown (required — can only replace, not repair); (2) optional "other device" section with full outcome sub-form (Repaired / Swapped / Neither) identical to `robot_issue_visit`.
-  - For `watch_record` triggered by any of the above: the existing open `incomplete` chain entry is **claimed** (no new entry created). `triggered_by` is stamped on the `incomplete` entry at save time. `scheduled_date` is also updated to `[now, now]` so it appears immediately as overdue.
-  - Watch record trigger toggle is **hidden** when both `agWatchRightID` and `agWatchLeftID` are null on the patient.
-- **`adverse_event_followup` chain:** seeded whenever any adverse event is filed (regardless of `training_blocked`). One stub exists at a time in `incomplete`, carrying `adverse_event_ids` — a list of all currently unresolved AE IDs. When a new AE is filed while a stub already exists, its ID is appended to the existing stub's list. `scheduled_date = [today, today + 1 day]` — active window for 1 day, overdue the day after. On completion (via follow-up call, visit, or clinical visit) the therapist records per-AE `ae_discussions` (notes, resolved, can_resume_from). Unresolved AEs carry into the next seeded stub (back to a call-based follow-up). Chain ends when all AEs are resolved. `can_resume_from` (date only) is required per resolved AE that had `training_blocked: true`. Pause clears only when all pausing AEs have `can_resume_from` set AND no `resolve_robot_issue_visit` stubs remain.
-  - **`adverse_event_followup_visit` / `adverse_event_clinical_visit`:** scheduled from the follow-up call modal (or directly from the File AE modal). Stubs are cancellable. Both carry `adverse_event_ids` and follow the same per-AE `ae_discussions` structure. On completion, unresolved AEs re-seed a follow-up call stub (chain reverts to call-based). Pause clears on the same condition as above.
-  - **`ae_discussions`:** the key per-AE field on all follow-up event types. Each entry: `{ae_id, notes, resolved, can_resume_from}`. Stored on `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit`.
-  - **`patient_initiated` toggle** on `adverse_event_followup`: when the patient contacted the clinic first, the therapist should first file a `patient_call` (with `ae_discussed: true`) and then open the follow-up call stub. Setting `patient_initiated: true` reveals a **Related patient call** selector (required) — a dropdown of `patient_call` entries for this patient where `ae_discussed: true`. Stored as `related_patient_call_id` on the completed follow-up record.
-- **`resolve_robot_issue_visit` stub:** created when a `robot_issue_visit` (or a subsequent `resolve_robot_issue_visit`) assigns no replacement for a taken-back device (`new_device_id: null`). Patient has no device; training paused. Resolved by engineer/admin: delivers replacement(s); may also optionally attend to the other device. Records `can_resume_from`. If null selected again, another stub is created. Pause clears only when no `resolve_robot_issue_visit` stubs remain AND no `adverse_event_followup` stubs remain.
-- **`pauseHistory` array:** tracks each continuous pause epoch on the patient JSON. One entry per uninterrupted pause period — append a new entry when `trainingPausedDate` transitions from `null`; close it (fill `end` and `days`) when the pause clears. If a second cause fires while already paused, append to the current open entry's `reasons` list (no new entry). Each reason carries `{type: "robot_issue"|"adverse_event", event_id: <uuid>}` referencing the causative `robot_issue_visit` or `adverse_event` entry in `free`. `cumulativePauseDays` is still stored as a scalar for quick status derivation but is now also derivable as `sum(e["days"] for e in pauseHistory if e["days"] is not None)`.
+- **State changes are user-input-driven only.** `brokenProtocolDate`, `trainingPausedDate`, `discontinuationDate`, and `cumulativePauseDays` are written exclusively when a user submits a form. The system clock is used for display only (overdue/upcoming labels, day counters). The single exception: `derive_status()` checks today's date to detect activation window expiry (`inactive` → `broken_protocol` when today > enrollment + 5 days and activation is still incomplete). No background jobs or automatic state transitions exist.
+- **AE / Robot Issue logic** — full detail in `docs/ae_ri_logic.md`. Summary:
+  - Triggered events (`adverse_event`, `robot_issue_call`, `watch_record`) are always created via trigger toggles in other modals, never standalone. Bidirectional references: triggering event stores `triggered: [{type, id}]`; spawned event stores `triggered_by: {type, id}`.
+  - `adverse_event_followup_visit` and `adverse_event_clinical_visit` are cancellable — stub moves to top-level `cancelled` array with `cancellation_reason`.
+  - Pause clears when: all pausing AEs resolved (with `can_resume_from`) AND no `resolve_robot_issue_visit` stubs remain. D21 cancellation check and D02/D03 Path 3 broken protocol check run at that moment.
+  - D02/D03 broken protocol — three paths: (1) `training_not_done: true` at the home visit → immediate, double confirmation; (2) training completed → session date locked to Day 2/3, no broken protocol possible; (3) pause follow-up filed, `max(can_resume_from)` falls after D02/D03 window end and visit still unfiled → broken protocol at follow-up filing, double confirmation.
+  - `derive_status()` checks `brokenProtocolDate` first — D02/D03-missed events and cumulative pause > 10 days both set `brokenProtocolDate`.
+  - **AE trigger cutoff** — AE trigger toggle hidden in primary training modals (`activation`, home visits, calls, `patient_call`) once training permanently ends: `trainingCompletionDate` filed, `brokenProtocolDate` set, or `discontinuationDate` set. Within an active AE follow-up chain (`adverse_event_followup`, `_followup_visit`, `_clinical_visit`), the AE trigger toggle remains visible until all AEs are resolved. Once all AEs resolved, trigger disappears from all modals including follow-up modals. Robot issue triggers follow the same cutoff rule for primary modals and are never present in follow-up modals. Client-side helper: `_trainingPermanentlyEnded(patient)`.
+  - **Broken_protocol event visibility** — only these events are interactive: `adverse_event` stubs (unfiled), `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit`, `discontinuation_reminder` (synthetic), `a1_assessment`, `a2_assessment`. All other incomplete events are not shown. `api_patient_events` must return the full `complete` list (no early-return with `[]`); server constant `_BROKEN_PROTOCOL_INTERACTIVE` drives the overdue filter. AE follow-up routes must NOT enforce the `discontinuationDate` guard — AE chains must remain completable after discontinuation until all AEs are resolved.
 - **Watch record chain:** seeded at activation with `scheduled_date = [activationDate, activationDate]` and `triggered_by = {type: "activation", id: <activation_entry_id>}`. On each completion, a new open chain entry is seeded with `scheduled_date = [completion_date + next_followup_days, completion_date + next_followup_days]`.
 - **Lost watch:** when a watch is marked lost in the watch record modal, htDash sets `lost_date` on the inventory record and closes the assignment with `lost: true`. `get_available_devices` filters out devices where `lost_date is not None`. Lost watches are permanently retired — no further assignments or records.
 - **Watch record modal — full interaction model:**
@@ -311,6 +304,8 @@ Both pages that show event rows must render blocked and upcoming events identica
 
 **Upcoming events** (window start > today, `!active_window && days > 0`): non-clickable `<div>`, slate "Available from \<date\>" label on the right. No lock icon.
 
+**On-hold events** (patient is paused AND event is not an AE/RI follow-up AND `scheduled_date[0]` ≤ today): rendered in the upcoming section even though their window has opened or passed. Gray/muted styling, slate "On hold" badge on the right, non-clickable `<div>`. Flagged by `on_hold: true` on the server response. Events whose window genuinely has not opened yet (`scheduled_date[0]` > today) are unaffected and show normally as "Available from". Both event APIs set the `on_hold` flag; both row renderers must handle it. On-hold events never appear in the overdue section while the patient is paused.
+
 | Location | Function | Notes |
 |---|---|---|
 | `static/js/app/patient_detail.js` | `patientEventRow()` | Calls `EVENT_OPENERS` to determine clickability |
@@ -407,6 +402,16 @@ Therapists can generate multi-language exercise pamphlets after ADL and VCG pres
 - **Print button** — Respects CSS `@page` and `page-break-before` rules; generates professional multi-page output with proper page breaks
 - **Save PDF button** — Uses html2canvas to capture DOM as image, then splits into A4 pages; results in continuous image layout rather than optimized page breaks
 - **Recommendation:** Use Print button for final multi-page PDFs; Save PDF for quick archival
+
+---
+
+## Known Gaps (Require Dedicated Design Before Implementation)
+
+**Editing entered events:**
+- Some entered events may need correction after the fact (e.g. `training_blocked` flag set incorrectly in a home visit modal).
+- Editing is a cross-cutting concern: almost every event type could need it, an audit trail (who changed what, when, why) is required, and many edits have cascading implications for downstream events.
+- Current policy: only a global admin can correct errors, via direct data fix. No UI support.
+- This requires a dedicated design session before any implementation — do not add ad-hoc edit endpoints without that design.
 
 ---
 
@@ -1146,7 +1151,7 @@ User types invalid date → Gets error message → Clicks Save → Form BLOCKED 
 
 | Element | Details |
 |---|---|
-| Alias | `AE01`, `AE02`, … assigned chronologically (oldest = AE01). Stable — never changes. |
+| Alias | `AE01`, `AE02`, … assigned **server-side** at Phase 2 filing (`api_complete_adverse_event`), stored as `alias` on the `free.adverse_event` entry. Chronological (oldest = AE01). Stable — never recomputed or reassigned. |
 | Display order | Newest first |
 | Header | Alias + status badge + chevron (click anywhere to expand/collapse) |
 | Status badge | Red "Ongoing — Training blocked" / Amber "Ongoing" / Green "Resolved" |

@@ -110,6 +110,12 @@
         </div>
       </div>
 
+      <!-- D02/D03 at-risk banner (shown when paused and D02/D03 window has passed) -->
+      <div id="d0203-atrisk-banner" class="hidden flex-shrink-0 bg-orange-50 border border-orange-300 rounded-2xl px-5 py-3 flex items-center gap-3">
+        <i class="fas fa-exclamation-triangle text-orange-500 flex-shrink-0 text-xl"></i>
+        <span class="text-sm font-semibold text-orange-800" id="d0203-atrisk-msg"></span>
+      </div>
+
       <!-- Discontinued read-only banner (shown only when discontinuationDate is set) -->
       <div id="discontinued-readonly-banner" class="hidden flex-shrink-0 bg-red-50 border border-red-200 rounded-2xl px-5 py-3 flex items-center gap-3">
         <i class="fas fa-lock text-red-500 flex-shrink-0 text-xl"></i>
@@ -437,78 +443,135 @@
       <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
       <p id="activation-homer-id" class="text-base font-semibold text-slate-800"></p>
     </div>
-    <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">Session Start <span class="text-red-500">*</span></label>
-      <input type="datetime-local" id="activation-session-start"
-             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    </div>
-    <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">Session End <span class="text-red-500">*</span></label>
-      <input type="datetime-local" id="activation-session-end"
-             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    </div>
-    <div id="activation-vcg-group-row" class="mb-4 hidden">
-      <label class="block text-sm font-medium text-slate-700 mb-2">VCG Group <span class="text-red-500">*</span></label>
-      <select id="activation-vcg-group"
-              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-        <option value="">Select VCG group…</option>
-        <option value="vcg2">VCG 2</option>
-        <option value="vcg3">VCG 3</option>
-        <option value="vcg4_5">VCG 4–5</option>
-      </select>
-    </div>
-    <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">Event Notes</label>
-      <textarea id="activation-notes" rows="3"
-                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                placeholder="Optional notes…"></textarea>
-    </div>
-    <div class="mb-4">{{ attachment_section('activation') }}</div>
 
-    <!-- ── Triggered events ──────────────────────────────────────────── -->
-    <div class="mb-4 border-t border-slate-100 pt-4">
-      <p class="text-sm font-semibold text-slate-700 mb-3">What came out of this visit?</p>
+    <!-- ── Was training completed? ───────────────────────────────────── -->
+    <div class="mb-5">
+      <p class="text-sm font-semibold text-slate-700 mb-2">Was training completed? <span class="text-red-500">*</span></p>
+      <div class="flex gap-2">
+        <button type="button" id="act-train-yes-btn"
+                onclick="_setActivationTrainingToggle(true)"
+                class="flex-1 px-4 py-2 rounded-xl border text-sm font-medium transition-colors border-slate-200 text-slate-600 hover:bg-slate-50">
+          Yes
+        </button>
+        <button type="button" id="act-train-no-btn"
+                onclick="_setActivationTrainingToggle(false)"
+                class="flex-1 px-4 py-2 rounded-xl border text-sm font-medium transition-colors border-slate-200 text-slate-600 hover:bg-slate-50">
+          No
+        </button>
+      </div>
+    </div>
 
-      <!-- Adverse Event -->
-      <div class="mb-3">
-        <label class="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" id="act-trigger-adverse" onchange="_actToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
-          <span class="text-sm font-medium text-slate-700">Adverse Event</span>
-        </label>
-        <div id="act-adverse-note" class="hidden mt-2 ml-6 px-3 py-2 bg-red-50 rounded-xl border border-red-100 text-xs text-slate-600">
-          An Adverse Event record will be created and appear in the overdue events panel for completion.
+    <!-- ── YES: training completed ───────────────────────────────────── -->
+    <div id="act-training-yes-section" class="hidden">
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 mb-2">Session Start <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="activation-session-start"
+               class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 mb-2">Session End <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="activation-session-end"
+               class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div id="activation-vcg-group-row" class="mb-4 hidden">
+        <label class="block text-sm font-medium text-slate-700 mb-2">VCG Group <span class="text-red-500">*</span></label>
+        <select id="activation-vcg-group"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">Select VCG group…</option>
+          <option value="vcg2">VCG 2</option>
+          <option value="vcg3">VCG 3</option>
+          <option value="vcg4_5">VCG 4–5</option>
+        </select>
+      </div>
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 mb-2">Event Notes</label>
+        <textarea id="activation-notes" rows="3"
+                  class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  placeholder="Optional notes…"></textarea>
+      </div>
+      <div class="mb-4">{{ attachment_section('activation') }}</div>
+      <div class="mb-4 border-t border-slate-100 pt-4">
+        <p class="text-sm font-semibold text-slate-700 mb-3">What came out of this visit?</p>
+        <div class="mb-3">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="act-trigger-adverse" onchange="_actToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
+            <span class="text-sm font-medium text-slate-700">Adverse Event</span>
+          </label>
+          <div id="act-adverse-note" class="hidden mt-2 ml-6 px-3 py-2 bg-red-50 rounded-xl border border-red-100 text-xs text-slate-600">
+            An Adverse Event record will be created and appear in the overdue events panel for completion.
+          </div>
+        </div>
+        <div class="mb-3" id="act-trigger-robot-wrap">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="act-trigger-robot" onchange="_actToggleSubform('robot')" class="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-300">
+            <span class="text-sm font-medium text-slate-700">Robot Issue</span>
+          </label>
+          <div id="act-robot-note" class="hidden mt-2 ml-6 px-3 py-2 bg-orange-50 rounded-xl border border-orange-100 text-xs text-slate-600">
+            A Robot Issue record will be created and appear in the overdue events panel for completion.
+          </div>
+        </div>
+        <div class="mb-3" id="act-trigger-watch-wrap">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="act-trigger-watch" onchange="_actToggleSubform('watch')" class="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-300">
+            <span class="text-sm font-medium text-slate-700">Watch Record Issue</span>
+          </label>
+          <div id="act-watch-note" class="hidden mt-2 ml-6 px-3 py-2 bg-blue-50 rounded-xl border border-blue-100 text-xs text-slate-600">
+            The currently open watch record will be linked to this visit. Complete it from the Watch Records tab.
+          </div>
+        </div>
+        <div id="act-trigger-other-device-wrap">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="act-trigger-other-device" onchange="_actToggleSubform('other-device')" class="w-4 h-4 rounded border-slate-300 text-purple-500 focus:ring-purple-300">
+            <span class="text-sm font-medium text-slate-700">Other Device Issue</span>
+          </label>
+          <div id="act-other-device-note" class="hidden mt-2 ml-6 px-3 py-2 bg-purple-50 rounded-xl border border-purple-100 text-xs text-slate-600">
+            An Other Device Issue record will be created and appear in overdue events for completion.
+          </div>
         </div>
       </div>
+    </div>
 
-      <!-- Robot Issue (experimental only) -->
-      <div class="mb-3" id="act-trigger-robot-wrap">
-        <label class="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" id="act-trigger-robot" onchange="_actToggleSubform('robot')" class="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-300">
-          <span class="text-sm font-medium text-slate-700">Robot Issue</span>
-        </label>
-        <div id="act-robot-note" class="hidden mt-2 ml-6 px-3 py-2 bg-orange-50 rounded-xl border border-orange-100 text-xs text-slate-600">
-          A Robot Issue record will be created and appear in the overdue events panel for completion.
-        </div>
+    <!-- ── NO: training not completed ───────────────────────────────── -->
+    <div id="act-training-no-section" class="hidden">
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 mb-2">Visit Date <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="act-no-visit-date"
+               class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
       </div>
-
-      <!-- Watch Record -->
-      <div id="act-trigger-watch-wrap">
-        <label class="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" id="act-trigger-watch" onchange="_actToggleSubform('watch')" class="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-300">
-          <span class="text-sm font-medium text-slate-700">Watch Record Issue</span>
-        </label>
-        <div id="act-watch-note" class="hidden mt-2 ml-6 px-3 py-2 bg-blue-50 rounded-xl border border-blue-100 text-xs text-slate-600">
-          The currently open watch record will be linked to this visit. Complete it from the Watch Records tab.
-        </div>
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 mb-2">Notes <span class="text-red-500">*</span> <span class="text-slate-400 font-normal text-xs">— explain why training was not completed</span></label>
+        <textarea id="act-no-notes" rows="3"
+                  class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  placeholder="Required — explain why training was not completed…"></textarea>
       </div>
-      <!-- Other Device Issue -->
-      <div class="mt-3">
-        <label class="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" id="act-trigger-other-device" class="w-4 h-4 rounded border-slate-300 text-purple-500 focus:ring-purple-300">
-          <span class="text-sm font-medium text-slate-700">Other Device Issue</span>
-        </label>
-        <div class="hidden mt-2 ml-6 px-3 py-2 bg-purple-50 rounded-xl border border-purple-100 text-xs text-slate-600" id="act-other-device-note">
-          An Other Device Issue record will be created and appear in overdue events for completion.
+      <div class="mb-4 border-t border-slate-100 pt-4">
+        <p class="text-sm font-semibold text-slate-700 mb-3">What came out of this visit?</p>
+        <div class="mb-3">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="act-no-trigger-adverse" onchange="_actNoToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
+            <span class="text-sm font-medium text-slate-700">Adverse Event</span>
+          </label>
+          <div id="act-no-adverse-note" class="hidden mt-2 ml-6 px-3 py-2 bg-red-50 rounded-xl border border-red-100 text-xs text-slate-600">
+            An Adverse Event record will be created and appear in the overdue events panel for completion.
+          </div>
+        </div>
+        <div class="mb-3 hidden" id="act-no-trigger-robot-wrap">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="act-no-trigger-robot" onchange="_actNoToggleSubform('robot')" class="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-300">
+            <span class="text-sm font-medium text-slate-700">Robot Issue</span>
+          </label>
+          <div id="act-no-robot-note" class="hidden mt-2 ml-6 px-3 py-2 bg-orange-50 rounded-xl border border-orange-100 text-xs text-slate-600">
+            A Robot Issue record will be created and appear in the overdue events panel for completion.
+          </div>
+        </div>
+        <div class="hidden" id="act-no-trigger-other-device-wrap">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="act-no-trigger-other-device" onchange="_actNoToggleSubform('other-device')" class="w-4 h-4 rounded border-slate-300 text-purple-500 focus:ring-purple-300">
+            <span class="text-sm font-medium text-slate-700">Other Device Issue</span>
+          </label>
+          <div id="act-no-other-device-note" class="hidden mt-2 ml-6 px-3 py-2 bg-purple-50 rounded-xl border border-purple-100 text-xs text-slate-600">
+            An Other Device Issue record will be created and appear in overdue events for completion.
+          </div>
         </div>
       </div>
     </div>
@@ -725,68 +788,149 @@
       <button onclick="hideModal('home-visit-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
+
+      <!-- Was training completed? -->
       <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Session Start <span class="text-red-500">*</span></label>
-        <input type="datetime-local" id="hv-session-start" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Session End <span class="text-red-500">*</span></label>
-        <input type="datetime-local" id="hv-session-end" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Event Notes <span class="text-slate-400 font-normal">(optional)</span></label>
-        <textarea id="hv-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Add any notes…"></textarea>
-      </div>
-      {{ attachment_section('hv') }}
-
-      <!-- ── Triggered events ─────────────────────────────────────────── -->
-      <div class="border-t border-slate-100 pt-4">
-        <p class="text-sm font-semibold text-slate-700 mb-3">What came out of this visit?</p>
-
-        <!-- Adverse Event -->
-        <div class="mb-3">
-          <label class="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" id="hv-trigger-adverse" onchange="_hvToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
-            <span class="text-sm font-medium text-slate-700">Adverse Event</span>
-          </label>
-          <div id="hv-adverse-note" class="hidden mt-2 ml-6 px-3 py-2 bg-red-50 rounded-xl border border-red-100 text-xs text-slate-600">
-            An Adverse Event record will be created and appear in the overdue events panel for completion.
-          </div>
-        </div>
-
-        <!-- Robot Issue (experimental only) -->
-        <div class="mb-3" id="hv-trigger-robot-wrap">
-          <label class="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" id="hv-trigger-robot" onchange="_hvToggleSubform('robot')" class="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-300">
-            <span class="text-sm font-medium text-slate-700">Robot Issue</span>
-          </label>
-          <div id="hv-robot-note" class="hidden mt-2 ml-6 px-3 py-2 bg-orange-50 rounded-xl border border-orange-100 text-xs text-slate-600">
-            A Robot Issue record will be created and appear in the overdue events panel for completion.
-          </div>
-        </div>
-
-        <!-- Watch Record -->
-        <div id="hv-trigger-watch-wrap">
-          <label class="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" id="hv-trigger-watch" onchange="_hvToggleSubform('watch')" class="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-300">
-            <span class="text-sm font-medium text-slate-700">Watch Record Issue</span>
-          </label>
-          <div id="hv-watch-note" class="hidden mt-2 ml-6 px-3 py-2 bg-blue-50 rounded-xl border border-blue-100 text-xs text-slate-600">
-            The currently open watch record will be linked to this visit. Complete it from the Watch Records tab.
-          </div>
-        </div>
-        <!-- Other Device Issue -->
-        <div class="mt-3">
-          <label class="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" id="hv-trigger-other-device" class="w-4 h-4 rounded border-slate-300 text-purple-500 focus:ring-purple-300">
-            <span class="text-sm font-medium text-slate-700">Other Device Issue</span>
-          </label>
-          <div class="hidden mt-2 ml-6 px-3 py-2 bg-purple-50 rounded-xl border border-purple-100 text-xs text-slate-600" id="hv-other-device-note">
-            An Other Device Issue record will be created and appear in overdue events for completion.
-          </div>
+        <p class="text-sm font-semibold text-slate-700 mb-2">Was training completed? <span class="text-red-500">*</span></p>
+        <div class="flex gap-2">
+          <button type="button" id="hv-train-yes-btn"
+                  onclick="_setHvTrainingToggle(true)"
+                  class="flex-1 px-4 py-2 rounded-xl border text-sm font-medium transition-colors border-slate-200 text-slate-600 hover:bg-slate-50">
+            Yes
+          </button>
+          <button type="button" id="hv-train-no-btn"
+                  onclick="_setHvTrainingToggle(false)"
+                  class="flex-1 px-4 py-2 rounded-xl border text-sm font-medium transition-colors border-slate-200 text-slate-600 hover:bg-slate-50">
+            No
+          </button>
         </div>
       </div>
-      <div class="h-1"></div>
+
+      <!-- YES section: training completed -->
+      <div id="hv-yes-section" class="hidden space-y-4">
+        <div id="hv-date-lock-note" class="hidden px-3 py-2 bg-blue-50 rounded-xl border border-blue-100 text-xs text-slate-600">
+          <i class="fas fa-lock text-blue-400 mr-1"></i> Date is locked to <span id="hv-date-lock-label"></span>. Select session time only.
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Session Start <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="hv-session-start" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Session End <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="hv-session-end" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Event Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+          <textarea id="hv-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Add any notes…"></textarea>
+        </div>
+        {{ attachment_section('hv') }}
+        <div class="border-t border-slate-100 pt-4">
+          <p class="text-sm font-semibold text-slate-700 mb-3">What came out of this visit?</p>
+          <div class="mb-3">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="hv-trigger-adverse" onchange="_hvToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
+              <span class="text-sm font-medium text-slate-700">Adverse Event</span>
+            </label>
+            <div id="hv-adverse-note" class="hidden mt-2 ml-6 px-3 py-2 bg-red-50 rounded-xl border border-red-100 text-xs text-slate-600">
+              An Adverse Event record will be created and appear in the overdue events panel for completion.
+            </div>
+          </div>
+          <div class="mb-3" id="hv-trigger-robot-wrap">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="hv-trigger-robot" onchange="_hvToggleSubform('robot')" class="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-300">
+              <span class="text-sm font-medium text-slate-700">Robot Issue</span>
+            </label>
+            <div id="hv-robot-note" class="hidden mt-2 ml-6 px-3 py-2 bg-orange-50 rounded-xl border border-orange-100 text-xs text-slate-600">
+              A Robot Issue record will be created and appear in the overdue events panel for completion.
+            </div>
+          </div>
+          <div class="mb-3" id="hv-trigger-watch-wrap">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="hv-trigger-watch" onchange="_hvToggleSubform('watch')" class="w-4 h-4 rounded border-slate-300 text-blue-500 focus:ring-blue-300">
+              <span class="text-sm font-medium text-slate-700">Watch Record Issue</span>
+            </label>
+            <div id="hv-watch-note" class="hidden mt-2 ml-6 px-3 py-2 bg-blue-50 rounded-xl border border-blue-100 text-xs text-slate-600">
+              The currently open watch record will be linked to this visit. Complete it from the Watch Records tab.
+            </div>
+          </div>
+          <div>
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="hv-trigger-other-device" onchange="_hvToggleSubform('other-device')" class="w-4 h-4 rounded border-slate-300 text-purple-500 focus:ring-purple-300">
+              <span class="text-sm font-medium text-slate-700">Other Device Issue</span>
+            </label>
+            <div class="hidden mt-2 ml-6 px-3 py-2 bg-purple-50 rounded-xl border border-purple-100 text-xs text-slate-600" id="hv-other-device-note">
+              An Other Device Issue record will be created and appear in overdue events for completion.
+            </div>
+          </div>
+        </div>
+        <div class="h-1"></div>
+      </div>
+
+      <!-- NO section: training not completed -->
+      <div id="hv-no-section" class="hidden space-y-4">
+        <div id="hv-no-broken-protocol-warn" class="hidden px-3 py-2 bg-red-50 rounded-xl border border-red-200">
+          <p class="text-xs font-semibold text-red-700 mb-0.5"><i class="fas fa-exclamation-triangle mr-1"></i>Broken Protocol Warning</p>
+          <p class="text-xs text-red-600">Training was not completed on this day. This will mark the patient as broken protocol. You will be asked to confirm before saving.</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-2">Why was training not completed? <span class="text-red-500">*</span></label>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" id="hv-no-reason-ae"
+              class="px-3 py-1.5 rounded-full border text-sm font-medium border-slate-200 text-slate-600 hover:border-blue-400"
+              onclick="_setHvNoPrimaryReason('adverse_event')">Adverse Event</button>
+            <button type="button" id="hv-no-reason-robot"
+              class="px-3 py-1.5 rounded-full border text-sm font-medium border-slate-200 text-slate-600 hover:border-blue-400 hidden"
+              onclick="_setHvNoPrimaryReason('robot_issue_call')">Robot Issue</button>
+            <button type="button" id="hv-no-reason-odi"
+              class="px-3 py-1.5 rounded-full border text-sm font-medium border-slate-200 text-slate-600 hover:border-blue-400 hidden"
+              onclick="_setHvNoPrimaryReason('other_device_issue_call')">Other Device Issue</button>
+            <button type="button" id="hv-no-reason-other"
+              class="px-3 py-1.5 rounded-full border text-sm font-medium border-slate-200 text-slate-600 hover:border-blue-400"
+              onclick="_setHvNoPrimaryReason('other')">Other</button>
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Visit Date &amp; Time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="hv-no-visit-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span id="hv-no-notes-star" class="text-slate-400 font-normal text-xs"></span></label>
+          <textarea id="hv-no-notes" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Add any notes…"></textarea>
+        </div>
+        {{ attachment_section('hv-no') }}
+        <div class="border-t border-slate-100 pt-4">
+          <p class="text-sm font-semibold text-slate-700 mb-3">Additional events from this visit</p>
+          <div class="mb-3" id="hv-no-trigger-ae-wrap">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="hv-no-trigger-adverse" onchange="_hvNoToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
+              <span class="text-sm font-medium text-slate-700">Adverse Event</span>
+            </label>
+            <div id="hv-no-adverse-note" class="hidden mt-2 ml-6 px-3 py-2 bg-red-50 rounded-xl border border-red-100 text-xs text-slate-600">
+              An Adverse Event record will be created and appear in the overdue events panel for completion.
+            </div>
+          </div>
+          <div class="mb-3 hidden" id="hv-no-trigger-robot-wrap">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="hv-no-trigger-robot" onchange="_hvNoToggleSubform('robot')" class="w-4 h-4 rounded border-slate-300 text-orange-500 focus:ring-orange-300">
+              <span class="text-sm font-medium text-slate-700">Robot Issue</span>
+            </label>
+            <div id="hv-no-robot-note" class="hidden mt-2 ml-6 px-3 py-2 bg-orange-50 rounded-xl border border-orange-100 text-xs text-slate-600">
+              A Robot Issue record will be created and appear in the overdue events panel for completion.
+            </div>
+          </div>
+          <div class="hidden" id="hv-no-trigger-other-device-wrap">
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" id="hv-no-trigger-other-device" onchange="_hvNoToggleSubform('other-device')" class="w-4 h-4 rounded border-slate-300 text-purple-500 focus:ring-purple-300">
+              <span class="text-sm font-medium text-slate-700">Other Device Issue</span>
+            </label>
+            <div id="hv-no-other-device-note" class="hidden mt-2 ml-6 px-3 py-2 bg-purple-50 rounded-xl border border-purple-100 text-xs text-slate-600">
+              An Other Device Issue record will be created and appear in overdue events for completion.
+            </div>
+          </div>
+        </div>
+        <div class="h-1"></div>
+      </div>
+
     </div>
     <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
       <p id="hv-error" class="text-sm text-red-500 hidden mb-3"></p>
@@ -1222,7 +1366,7 @@
 <div id="adverse-event-followup-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Adverse Event Follow-up</h3>
+      <h3 id="aef-title" class="text-xl font-bold text-slate-800">Adverse Event Follow-up</h3>
       <button onclick="hideModal('adverse-event-followup-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
@@ -1261,7 +1405,7 @@
 <div id="ae-followup-visit-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Adverse Event Follow-up Visit</h3>
+      <h3 id="aefv-title" class="text-xl font-bold text-slate-800">Adverse Event Follow-up Visit</h3>
       <button onclick="hideModal('ae-followup-visit-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
@@ -1301,7 +1445,7 @@
 <div id="ae-clinical-visit-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
     <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
-      <h3 class="text-xl font-bold text-slate-800">Adverse Event Clinical Visit</h3>
+      <h3 id="aecv-title" class="text-xl font-bold text-slate-800">Adverse Event Clinical Visit</h3>
       <button onclick="hideModal('ae-clinical-visit-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">

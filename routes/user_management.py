@@ -153,28 +153,41 @@ def api_patient_events(homer_id):
     overdue  = []
     upcoming = []
 
-    # For broken_protocol patients only show the discontinuation reminder
-    if patient and derive_status(patient) == 'broken_protocol':
-        if not events_data.get('free', {}).get('discontinuation'):
-            broken_date = patient.get('brokenProtocolDate') or today.isoformat()
-            try:
-                broken_sched = datetime.fromisoformat(broken_date).date()
-            except Exception:
-                broken_sched = today
-            overdue.append({
-                'id':                'discontinuation_reminder',
-                'protocol_event_id': 'discontinuation_reminder',
-                'event_name':        'Discontinue Patient',
-                'scheduled_date':    broken_date,
-                'days':              (broken_sched - today).days,
-                'blocked_by':        [],
-            })
-        return jsonify({'overdue': overdue, 'upcoming': [], 'complete': []})
+    is_broken_protocol = bool(patient and derive_status(patient) == 'broken_protocol')
 
     # Build set of completed event IDs for dependency checking
     completed_ids = {e['protocol_event_id'] for e in events_data.get('complete', [])}
     # Build set of all known event IDs (incomplete + complete) — only these can block
     known_ids = completed_ids | {e['protocol_event_id'] for e in events_data.get('incomplete', [])}
+
+    # Backfill missing aliases on free.adverse_event entries (one-time repair for pre-alias data)
+    existing_aes = events_data.get('free', {}).get('adverse_event', [])
+    if existing_aes and any(not e.get('alias') for e in existing_aes):
+        sorted_aes = sorted(existing_aes, key=lambda e: e.get('completion_date') or e.get('filed_at') or '')
+        for i, ae in enumerate(sorted_aes):
+            if not ae.get('alias'):
+                ae['alias'] = f"AE{i + 1:02d}"
+        write_protocol_events(folder, homer_id, events_data)
+
+    # Alias lookup for follow-up event name construction
+    ae_alias_map = {
+        e['id']: e['alias']
+        for e in events_data.get('free', {}).get('adverse_event', [])
+        if e.get('alias')
+    }
+
+    # When training is paused only follow-up events (AE/RI resolution chain) are shown.
+    _PAUSE_VISIBLE = frozenset({
+        'adverse_event', 'adverse_event_followup', 'adverse_event_followup_visit',
+        'adverse_event_clinical_visit', 'resolve_robot_issue_visit',
+        'other_device_issue_call', 'other_device_issue_visit',
+    })
+    # For broken_protocol patients only AE follow-up chain + assessments are interactive.
+    _BROKEN_PROTOCOL_INTERACTIVE = frozenset({
+        'adverse_event', 'adverse_event_followup',
+        'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+    })
+    is_paused = bool(patient and patient.get('trainingPausedDate'))
 
     for entry in events_data.get('incomplete', []):
         sched = entry.get('scheduled_date')
@@ -186,17 +199,32 @@ def api_patient_events(homer_id):
         except Exception:
             continue
 
+        pid = entry.get('protocol_event_id')
+
+        # For broken_protocol patients: only AE follow-up chain + a1/a2 assessments are shown.
+        if is_broken_protocol and pid not in _BROKEN_PROTOCOL_INTERACTIVE and pid not in ('a1_assessment', 'a2_assessment'):
+            continue
+
+        on_hold = is_paused and pid not in _PAUSE_VISIBLE and start_date <= today
+
         # Compute blocked_by: depends_on entries that are applicable and not yet complete
-        dep_ids = event_defs.get(entry['protocol_event_id'], {}).get('depends_on') or []
+        dep_ids = event_defs.get(pid, {}).get('depends_on') or []
         blocked_by = [
             event_defs[d]['name'] for d in dep_ids
             if d in known_ids and d not in completed_ids
         ]
 
+        if pid in _AE_FOLLOWUP_LABELS:
+            ae_ids  = entry.get('adverse_event_ids') or []
+            aliases = [ae_alias_map[aid] for aid in ae_ids if aid in ae_alias_map]
+            event_name = f"{_AE_FOLLOWUP_LABELS[pid]}: {', '.join(aliases)}" if aliases else _AE_FOLLOWUP_LABELS[pid]
+        else:
+            event_name = event_defs.get(pid, {}).get('name', pid)
+
         record = {
             'id':                entry['id'],
-            'protocol_event_id': entry['protocol_event_id'],
-            'event_name':        event_defs.get(entry['protocol_event_id'], {}).get('name', entry['protocol_event_id']),
+            'protocol_event_id': pid,
+            'event_name':        event_name,
             'scheduled_date':    sched,
             'blocked_by':        blocked_by,
         }
@@ -205,9 +233,11 @@ def api_patient_events(homer_id):
         if entry.get('adverse_event_ids') is not None:
             record['adverse_event_ids'] = entry['adverse_event_ids']
 
-        if start_date > today:
+        if on_hold or start_date > today:
             record['days'] = (start_date - today).days
             record['active_window'] = False
+            if on_hold:
+                record['on_hold'] = True
             upcoming.append(record)
         elif end_date >= today:
             record['days'] = (end_date - today).days
@@ -218,9 +248,26 @@ def api_patient_events(homer_id):
             record['active_window'] = False
             overdue.append(record)
 
+    # Inject discontinuation_reminder synthetic event for broken_protocol patients
+    if is_broken_protocol and not events_data.get('free', {}).get('discontinuation'):
+        broken_date = (patient or {}).get('brokenProtocolDate') or today.isoformat()
+        try:
+            broken_sched = datetime.fromisoformat(broken_date).date()
+        except Exception:
+            broken_sched = today
+        overdue.append({
+            'id':                'discontinuation_reminder',
+            'protocol_event_id': 'discontinuation_reminder',
+            'event_name':        'Discontinue Patient',
+            'scheduled_date':    [broken_date, broken_date],
+            'days':              (broken_sched - today).days,
+            'active_window':     False,
+            'blocked_by':        [],
+        })
+
     # Active-window first, then past-due; within each sub-group sort by end date
     # and topo-sort within same-end-date groups so parents appear before dependents.
-    end_date_fn = lambda ev: ev['scheduled_date'][1][:10]
+    end_date_fn = lambda ev: ev['scheduled_date'][1][:10] if isinstance(ev.get('scheduled_date'), list) else ev.get('scheduled_date', '')[:10]
     active_overdue = sorted([e for e in overdue if e.get('active_window')],  key=end_date_fn)
     past_overdue   = sorted([e for e in overdue if not e.get('active_window')], key=end_date_fn)
     overdue  = (_topo_sort(active_overdue, event_defs, end_date_fn) +
@@ -814,6 +861,93 @@ def api_activate_patient(homer_id):
     return jsonify({'status': 'success', 'homerID': homer_id})
 
 
+@bp.route('/api/patients/<homer_id>/log-activation-attempt', methods=['POST'])
+def api_log_activation_attempt(homer_id):
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    data            = request.get_json() or {}
+    visit_date      = (data.get('visitDate') or '').strip()
+    notes           = (data.get('notes') or '').strip()
+    triggered_items = data.get('triggered', [])
+    if not isinstance(triggered_items, list):
+        triggered_items = []
+
+    if not visit_date:
+        return jsonify({'error': 'Visit date is required'}), 400
+    try:
+        if datetime.strptime(visit_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Visit date cannot be in the future'}), 400
+    except ValueError:
+        return jsonify({'error': 'Visit date format must be YYYY-MM-DDTHH:MM'}), 400
+    if not notes:
+        return jsonify({'error': 'Notes are required when training was not completed'}), 400
+
+    folder = get_hospital_folder(flask_session['login_place'])
+    if not folder:
+        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+    if derive_status(patient) != 'inactive':
+        return jsonify({'error': 'Patient must be inactive to log an activation attempt'}), 409
+
+    is_experimental = patient.get('group') == 'experimental'
+    for item in triggered_items:
+        t = item.get('type')
+        if t == 'adverse_event':
+            pass
+        elif t in ('robot_issue_call', 'other_device_issue_call'):
+            if not is_experimental:
+                return jsonify({'error': f'{t} is only valid for experimental patients'}), 400
+        else:
+            return jsonify({'error': f'Unknown triggered type: {t}'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found'}), 404
+
+    filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
+    attempt_id = str(uuid.uuid4())
+
+    triggered_refs = []
+    for item in triggered_items:
+        t      = item.get('type')
+        new_id = str(uuid.uuid4())
+        note   = (item.get('note') or '').strip()
+        events_data.setdefault('incomplete', []).append({
+            'id':                new_id,
+            'protocol_event_id': t,
+            'triggered_by':      {'type': 'activation_attempt', 'id': attempt_id},
+            'scheduled_date':    [now_hhmm, now_hhmm],
+            'filed_at':          filed_at,
+            'note':              note,
+        })
+        triggered_refs.append({'type': t, 'id': new_id})
+
+    attempt_entry = {
+        'id':                attempt_id,
+        'protocol_event_id': 'activation_attempt',
+        'visit_date':        visit_date,
+        'notes':             notes,
+        'filed_at':          filed_at,
+        'triggered':         triggered_refs,
+        'triggered_by':      None,
+    }
+    events_data.setdefault('free', {}).setdefault('activation_attempt', []).append(attempt_entry)
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      'Activation attempt recorded — training not completed')
+    return jsonify({'status': 'success'})
+
+
 _PRINTOUT_PDF_FILES = {
     'prescription_printout_d01': 'attachments/prescription_d01.pdf',
     'prescription_printout_d15': 'attachments/prescription_d15.pdf',
@@ -1075,7 +1209,8 @@ _SIMPLE_EVENT_IDS = {
     'training_completion_d29',
 }
 
-_HOME_VISIT_IDS = {'home_visit_d02', 'home_visit_d03', 'home_visit_d15'}
+_HOME_VISIT_IDS        = {'home_visit_d02', 'home_visit_d03', 'home_visit_d15'}
+_HV_ACTIVATION_OFFSETS = {'home_visit_d02': 1, 'home_visit_d03': 2}
 
 _SIMPLE_EVENT_LOG_MESSAGES = {
     'home_visit_d02':           'Home visit recorded — Day 02',
@@ -1200,7 +1335,7 @@ def api_complete_simple_event(homer_id):
 
 @bp.route('/api/patients/<homer_id>/complete-event/home-visit', methods=['POST'])
 def api_complete_home_visit(homer_id):
-    """Complete a home-visit event with session times, notes, and optional triggered events."""
+    """Complete a home-visit event (YES path) or log a training-not-done attempt (NO path)."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     if flask_session.get('privilege') not in ('admin', 'therapist'):
@@ -1210,7 +1345,6 @@ def api_complete_home_visit(homer_id):
     if not folder:
         return jsonify({'error': 'Patient not found'}), 404
 
-    # Check if patient is discontinued
     patient = read_patient_meta(folder, homer_id)
     if patient and patient.get('discontinuationDate'):
         return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
@@ -1218,33 +1352,16 @@ def api_complete_home_visit(homer_id):
     body              = request.get_json() or {}
     event_id          = body.get('event_id')
     protocol_event_id = (body.get('protocol_event_id') or '').strip()
-    session_start     = (body.get('session_start') or '').strip()
-    session_end       = (body.get('session_end') or '').strip()
-    notes             = (body.get('notes') or '').strip()
-    triggered_items   = body.get('triggered', [])
-    if not isinstance(triggered_items, list):
-        triggered_items = []
+    training_not_done = bool(body.get('training_not_done'))
 
     if protocol_event_id not in _HOME_VISIT_IDS:
         return jsonify({'error': 'Invalid protocol event ID.'}), 400
-    if not session_start or not session_end:
-        return jsonify({'error': 'Session start and end are required.'}), 400
-    try:
-        _ss = datetime.strptime(session_start, '%Y-%m-%dT%H:%M')
-        _se = datetime.strptime(session_end,   '%Y-%m-%dT%H:%M')
-        if _ss.date() != _se.date():
-            return jsonify({'error': 'Session start and end must be on the same date.'}), 400
-        if _ss >= _se:
-            return jsonify({'error': 'Session start must be before session end.'}), 400
-        if _ss > datetime.now():
-            return jsonify({'error': 'Session start cannot be in the future.'}), 400
-    except ValueError:
-        return jsonify({'error': 'Session times must be in YYYY-MM-DDTHH:MM format.'}), 400
-    completion_date = session_start
 
-    # Validate triggered items (stubs only — no detail fields required at trigger time)
-    patient_meta    = read_patient_meta(folder, homer_id)
-    is_experimental = patient_meta and patient_meta.get('group') == 'experimental'
+    is_experimental = patient and patient.get('group') == 'experimental'
+
+    triggered_items = body.get('triggered', [])
+    if not isinstance(triggered_items, list):
+        triggered_items = []
     for item in triggered_items:
         t = item.get('type')
         if t == 'adverse_event':
@@ -1253,7 +1370,8 @@ def api_complete_home_visit(homer_id):
             if not is_experimental:
                 return jsonify({'error': 'Robot issue call is only valid for experimental patients.'}), 400
         elif t == 'watch_record':
-            pass
+            if training_not_done:
+                return jsonify({'error': 'Watch record cannot be triggered when training was not done.'}), 400
         elif t == 'other_device_issue_call':
             if not is_experimental:
                 return jsonify({'error': 'Other device issue call is only valid for experimental patients.'}), 400
@@ -1274,77 +1392,160 @@ def api_complete_home_visit(homer_id):
     if not entry:
         return jsonify({'error': 'Event not found in incomplete list.'}), 404
 
-    entry_id = entry['id']
-    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
-    now_hhmm = datetime.now().strftime('%Y-%m-%dT%H:%M')
-
-    # Process triggered items — create stubs in incomplete
-    triggered_refs = []
-    for item in triggered_items:
-        t = item.get('type')
-        if t == 'adverse_event':
-            new_id = str(uuid.uuid4())
-            events_data.setdefault('incomplete', []).append({
-                'id':               new_id,
-                'protocol_event_id': 'adverse_event',
-                'triggered_by':     {'type': protocol_event_id, 'id': entry_id},
-                'scheduled_date':   [now_hhmm, now_hhmm],
-                'filed_at':         filed_at,
-            })
-            triggered_refs.append({'type': 'adverse_event', 'id': new_id})
-        elif t == 'robot_issue_call':
-            new_id = str(uuid.uuid4())
-            events_data.setdefault('incomplete', []).append({
-                'id':               new_id,
-                'protocol_event_id': 'robot_issue_call',
-                'triggered_by':     {'type': protocol_event_id, 'id': entry_id},
-                'scheduled_date':   [now_hhmm, now_hhmm],
-                'filed_at':         filed_at,
-            })
-            triggered_refs.append({'type': 'robot_issue_call', 'id': new_id})
-        elif t == 'other_device_issue_call':
-            new_id = str(uuid.uuid4())
-            events_data.setdefault('incomplete', []).append({
-                'id':               new_id,
-                'protocol_event_id': 'other_device_issue_call',
-                'triggered_by':     {'type': protocol_event_id, 'id': entry_id},
-                'scheduled_date':   [now_hhmm, now_hhmm],
-                'filed_at':         filed_at,
-            })
-            triggered_refs.append({'type': 'other_device_issue_call', 'id': new_id})
-        elif t == 'watch_record':
-            wr = next(
-                (e for e in events_data.get('incomplete', [])
-                 if e.get('protocol_event_id') == 'watch_record'),
-                None
-            )
-            if wr:
-                wr['triggered_by']   = {'type': protocol_event_id, 'id': entry_id}
-                wr['scheduled_date'] = [now_hhmm, now_hhmm]
-                triggered_refs.append({'type': 'watch_record', 'id': wr['id']})
-
-    complete_entry = {
-        **entry,
-        'completion_date': completion_date,
-        'session_start':   session_start,
-        'session_end':     session_end,
-        'filed_at':        filed_at,
-        'notes':           notes,
-        'triggered':       triggered_refs,
-    }
-
-    events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
-    events_data.setdefault('complete', []).append(complete_entry)
-
-    from utils.protocol_events import write_protocol_events
-    write_protocol_events(folder, homer_id, events_data)
-
+    entry_id   = entry['id']
+    filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
-    write_patient_log(folder, homer_id, loginid, session_id,
-                      _SIMPLE_EVENT_LOG_MESSAGES[protocol_event_id])
 
-    return jsonify({'ok': True})
+    primary_reason = (body.get('primary_reason') or '').strip() or None
+
+    def _build_triggered_refs(source_protocol_id, source_entry_id):
+        refs = []
+        for item in triggered_items:
+            t = item.get('type')
+            if t in ('adverse_event', 'robot_issue_call', 'other_device_issue_call'):
+                new_id = str(uuid.uuid4())
+                stub = {
+                    'id':                new_id,
+                    'protocol_event_id': t,
+                    'triggered_by':      {'type': source_protocol_id, 'id': source_entry_id},
+                    'scheduled_date':    [now_hhmm, now_hhmm],
+                    'filed_at':          filed_at,
+                }
+                if item.get('training_stopped'):
+                    stub['training_stopped'] = True
+                events_data.setdefault('incomplete', []).append(stub)
+                refs.append({'type': t, 'id': new_id})
+            elif t == 'watch_record':
+                wr = next(
+                    (e for e in events_data.get('incomplete', [])
+                     if e.get('protocol_event_id') == 'watch_record'),
+                    None
+                )
+                if wr:
+                    wr['triggered_by']   = {'type': source_protocol_id, 'id': source_entry_id}
+                    wr['scheduled_date'] = [now_hhmm, now_hhmm]
+                    refs.append({'type': 'watch_record', 'id': wr['id']})
+        return refs
+
+    from utils.protocol_events import write_protocol_events
+
+    if training_not_done:
+        # ── NO path ─────────────────────────────────────────────────────────
+        visit_date = (body.get('visit_date') or '').strip()
+        notes      = (body.get('notes') or '').strip()
+
+        if not visit_date:
+            return jsonify({'error': 'Visit date is required.'}), 400
+        try:
+            _vd = datetime.strptime(visit_date, '%Y-%m-%dT%H:%M')
+            if _vd > datetime.now():
+                return jsonify({'error': 'Visit date cannot be in the future.'}), 400
+        except ValueError:
+            return jsonify({'error': 'Visit date must be in YYYY-MM-DDTHH:MM format.'}), 400
+        if not primary_reason:
+            return jsonify({'error': 'A primary reason is required when training was not completed.'}), 400
+        if primary_reason == 'other' and not notes:
+            return jsonify({'error': 'Notes are required when reason is "Other".'}), 400
+
+        triggered_refs = _build_triggered_refs(protocol_event_id, entry_id)
+
+        if protocol_event_id == 'home_visit_d15':
+            # D15 NO: log d15_attempt free event, keep home_visit_d15 incomplete
+            attempt_id = str(uuid.uuid4())
+            events_data.setdefault('free', {}).setdefault('d15_attempt', []).append({
+                'id':                attempt_id,
+                'protocol_event_id': 'd15_attempt',
+                'visit_date':        visit_date,
+                'primary_reason':    primary_reason,
+                'notes':             notes,
+                'filed_at':          filed_at,
+                'triggered':         triggered_refs,
+            })
+            write_protocol_events(folder, homer_id, events_data)
+            write_patient_log(folder, homer_id, loginid, session_id,
+                              'Home visit Day 15 attempt recorded — training not completed')
+            return jsonify({'ok': True, 'attempt_id': attempt_id})
+
+        else:
+            # D02/D03 NO: broken protocol — require double confirmation
+            if not bool(body.get('confirmed_broken_protocol')):
+                return jsonify({'error': 'confirmed_broken_protocol is required for D02/D03 training not done.'}), 400
+
+            complete_entry = {
+                **entry,
+                'completion_date':   visit_date,
+                'training_not_done': True,
+                'primary_reason':    primary_reason,
+                'filed_at':          filed_at,
+                'notes':             notes,
+                'triggered':         triggered_refs,
+            }
+            events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+            events_data.setdefault('complete', []).append(complete_entry)
+
+            if not patient.get('brokenProtocolDate'):
+                patient['brokenProtocolDate'] = visit_date[:10]
+            write_patient_meta(folder, homer_id, patient)
+            write_protocol_events(folder, homer_id, events_data)
+
+            day = '02' if protocol_event_id == 'home_visit_d02' else '03'
+            write_patient_log(folder, homer_id, loginid, session_id,
+                              f'Home visit Day {day} — training not completed (broken protocol)')
+            return jsonify({'ok': True})
+
+    else:
+        # ── YES path ─────────────────────────────────────────────────────────
+        session_start = (body.get('session_start') or '').strip()
+        session_end   = (body.get('session_end') or '').strip()
+        notes         = (body.get('notes') or '').strip()
+
+        if not session_start or not session_end:
+            return jsonify({'error': 'Session start and end are required.'}), 400
+        try:
+            _ss = datetime.strptime(session_start, '%Y-%m-%dT%H:%M')
+            _se = datetime.strptime(session_end,   '%Y-%m-%dT%H:%M')
+            if _ss.date() != _se.date():
+                return jsonify({'error': 'Session start and end must be on the same date.'}), 400
+            if _ss >= _se:
+                return jsonify({'error': 'Session start must be before session end.'}), 400
+            if _ss > datetime.now():
+                return jsonify({'error': 'Session start cannot be in the future.'}), 400
+        except ValueError:
+            return jsonify({'error': 'Session times must be in YYYY-MM-DDTHH:MM format.'}), 400
+
+        # D02/D03: validate session date is locked to activationDate + offset
+        if protocol_event_id in _HV_ACTIVATION_OFFSETS:
+            act_str = patient.get('activationDate', '') if patient else ''
+            if act_str:
+                try:
+                    act_date = datetime.strptime(act_str, '%Y-%m-%dT%H:%M').date()
+                    expected = act_date + timedelta(days=_HV_ACTIVATION_OFFSETS[protocol_event_id])
+                    if _ss.date() != expected:
+                        day_num = _HV_ACTIVATION_OFFSETS[protocol_event_id] + 1
+                        return jsonify({'error': f'Session date must be {expected.isoformat()} (Day {day_num}).'}), 400
+                except ValueError:
+                    pass
+
+        triggered_refs = _build_triggered_refs(protocol_event_id, entry_id)
+
+        complete_entry = {
+            **entry,
+            'completion_date': session_start,
+            'session_start':   session_start,
+            'session_end':     session_end,
+            'filed_at':        filed_at,
+            'notes':           notes,
+            'triggered':       triggered_refs,
+        }
+        events_data['incomplete'] = [e for e in incomplete if e.get('id') != entry['id']]
+        events_data.setdefault('complete', []).append(complete_entry)
+
+        write_protocol_events(folder, homer_id, events_data)
+        write_patient_log(folder, homer_id, loginid, session_id,
+                          _SIMPLE_EVENT_LOG_MESSAGES[protocol_event_id])
+        return jsonify({'ok': True})
 
 
 @bp.route('/api/patients/<homer_id>/complete-event/adverse-event', methods=['POST'])
@@ -1430,7 +1631,9 @@ def api_complete_adverse_event(homer_id):
         'scheduled_clinical_visit': clinical_visit_stub_id,
     }
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
-    events_data.setdefault('free', {}).setdefault('adverse_event', []).append(complete_entry)
+    existing_aes = events_data.setdefault('free', {}).setdefault('adverse_event', [])
+    complete_entry['alias'] = f"AE{len(existing_aes) + 1:02d}"
+    existing_aes.append(complete_entry)
 
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
@@ -1623,8 +1826,8 @@ def api_complete_adverse_event_followup(homer_id):
                         resume_dates.append(date.fromisoformat(r['can_resume_from']))
                     except ValueError:
                         pass
-            if resume_dates:
-                max_resume = max(resume_dates)
+            max_resume = max(resume_dates) if resume_dates else None
+            if max_resume:
                 pause_days = max(0, (max_resume - training_paused).days)
                 patient_meta['cumulativePauseDays'] = (patient_meta.get('cumulativePauseDays') or 0) + pause_days
             else:
@@ -1640,6 +1843,10 @@ def api_complete_adverse_event_followup(homer_id):
             if (patient_meta.get('cumulativePauseDays') or 0) > 10:
                 if not patient_meta.get('brokenProtocolDate'):
                     patient_meta['brokenProtocolDate'] = filed_at[:10]
+            if max_resume and _check_d0203_broken_protocol(events_data, max_resume):
+                if not patient_meta.get('brokenProtocolDate'):
+                    patient_meta['brokenProtocolDate'] = filed_at[:10]
+            _shift_future_incomplete_events(events_data, pause_days)
             write_patient_meta(folder, homer_id, patient_meta)
             write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
 
@@ -1649,6 +1856,50 @@ def api_complete_adverse_event_followup(homer_id):
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event follow-up call recorded.')
 
     return jsonify({'ok': True, 'id': event_id})
+
+
+def _check_d0203_broken_protocol(events_data, can_resume_from):
+    """Return True if D02 or D03 training was missed due to pause (window ended before resume date)."""
+    complete_ids = {e['protocol_event_id'] for e in events_data.get('complete', [])}
+    for visit_id in ('home_visit_d02', 'home_visit_d03'):
+        if visit_id in complete_ids:
+            continue
+        entry = next((e for e in events_data.get('incomplete', [])
+                      if e.get('protocol_event_id') == visit_id), None)
+        if entry is None:
+            continue
+        sd = entry.get('scheduled_date')
+        if not sd or sd[1] is None:
+            continue
+        try:
+            end_date = datetime.fromisoformat(sd[1]).date()
+        except (ValueError, TypeError):
+            continue
+        if end_date < can_resume_from:
+            return True
+    return False
+
+
+def _shift_future_incomplete_events(events_data, pause_days):
+    """Shift all future incomplete scheduled_date windows forward by pause_days calendar days."""
+    if not pause_days or pause_days <= 0:
+        return
+    delta = timedelta(days=pause_days)
+    for entry in events_data.get('incomplete', []):
+        sd = entry.get('scheduled_date')
+        if not sd or not isinstance(sd, list) or len(sd) != 2:
+            continue
+        if sd[0] is None or sd[1] is None:
+            continue
+        try:
+            start = datetime.fromisoformat(sd[0])
+            end   = datetime.fromisoformat(sd[1])
+            entry['scheduled_date'] = [
+                (start + delta).strftime('%Y-%m-%dT%H:%M'),
+                (end   + delta).strftime('%Y-%m-%dT%H:%M'),
+            ]
+        except (ValueError, TypeError):
+            pass
 
 
 def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_aes, filed_at, event_id, folder, homer_id, loginid, session_id):
@@ -1668,7 +1919,8 @@ def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_
                 resume_dates.append(date.fromisoformat(r['can_resume_from']))
             except ValueError:
                 pass
-    pause_days = max(0, (max(resume_dates) - training_paused).days) if resume_dates else 0
+    max_resume = max(resume_dates) if resume_dates else None
+    pause_days = max(0, (max_resume - training_paused).days) if max_resume else 0
     patient_meta['cumulativePauseDays'] = (patient_meta.get('cumulativePauseDays') or 0) + pause_days
     end_dt = filed_at[:16]
     open_epoch = next((e for e in patient_meta.get('pauseHistory', []) if e.get('end') is None), None)
@@ -1680,6 +1932,10 @@ def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_
     if (patient_meta.get('cumulativePauseDays') or 0) > 10:
         if not patient_meta.get('brokenProtocolDate'):
             patient_meta['brokenProtocolDate'] = filed_at[:10]
+    if max_resume and _check_d0203_broken_protocol(events_data, max_resume):
+        if not patient_meta.get('brokenProtocolDate'):
+            patient_meta['brokenProtocolDate'] = filed_at[:10]
+    _shift_future_incomplete_events(events_data, pause_days)
     write_patient_meta(folder, homer_id, patient_meta)
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
 
@@ -3010,6 +3266,10 @@ def api_complete_resolve_robot_issue_visit(homer_id):
         if (patient_meta.get('cumulativePauseDays') or 0) > 10:
             if not patient_meta.get('brokenProtocolDate'):
                 patient_meta['brokenProtocolDate'] = filed_at[:10]
+        if _check_d0203_broken_protocol(events_data, max_resume):
+            if not patient_meta.get('brokenProtocolDate'):
+                patient_meta['brokenProtocolDate'] = filed_at[:10]
+        _shift_future_incomplete_events(events_data, pause_days)
         write_patient_meta(folder, homer_id, patient_meta)
         write_patient_log(folder, homer_id, loginid, session_id,
                           'Robot issue resolved — replacement device assigned.')
@@ -3337,6 +3597,12 @@ def api_complete_watch_record(homer_id):
 
 
 # ── AG Watch Timing endpoints ──────────────────────────────────────────────────
+
+_AE_FOLLOWUP_LABELS = {
+    'adverse_event_followup':        'Follow-up Call',
+    'adverse_event_followup_visit':  'Follow-up Visit',
+    'adverse_event_clinical_visit':  'Clinical Visit',
+}
 
 _AGWATCH_TIMING_CONFIG = {
     'adl_agwatch_timing_d01': {

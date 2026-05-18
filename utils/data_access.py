@@ -63,6 +63,8 @@ def derive_status(patient: dict) -> str:
         return 'pre_discontinued' if discontinue else 'unassigned'
     if discontinue:
         return 'discontinued'
+    if patient.get('brokenProtocolDate'):
+        return 'broken_protocol'
 
     if not activation:
         # Check if activation window has been missed → broken_protocol
