@@ -238,7 +238,10 @@ async function apiPost(url, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return res.json().then(data => ({ ok: res.ok, data }));
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: `Server error (${res.status})` }; }
+  return { ok: res.ok, data };
 }
 
 // ── Render overview ───────────────────────────────────────────────────────────
@@ -533,11 +536,42 @@ function openA2Modal() {
   showModal('a2-modal');
 }
 
-function openDiscontinueModal() {
+let _discEventId = null;
+
+function openDiscontinueModal(ev) {
+  _discEventId = ev ? ev.id : null;
   document.getElementById('discontinue-homer-id').textContent = PATIENT_HOMER_ID;
+  document.getElementById('disc-date').value = '';
   document.getElementById('discontinue-reason').value = '';
+  document.getElementById('discontinue-notes').value = '';
+  _resetAttachment('disc');
   setError('discontinue-error', '');
+  const now = new Date();
+  const maxStr = now.toISOString().slice(0, 16);
+  document.getElementById('disc-date').max = maxStr;
+  _attachDateGuard('disc-date', 'discontinue-error');
   showModal('discontinue-modal');
+}
+
+async function _initiateDiscontinuation() {
+  const confirmed1 = window.confirm(
+    'Discontinuing a patient is a major and irreversible event.\nAre you sure you want to proceed?'
+  );
+  if (!confirmed1) return;
+  const confirmed2 = window.confirm(
+    'This will permanently close the patient record once the discontinuation event is completed.\nConfirm discontinuation?'
+  );
+  if (!confirmed2) return;
+
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/create-discontinuation-stub`, {}
+  );
+  if (!ok) {
+    alert(data.error || 'Failed to create discontinuation stub.');
+    return;
+  }
+  await loadPatientEvents();  // sets _hasDiscontinuationStub = true
+  loadPatient();              // re-evaluates button visibility using updated flag
 }
 
 // ── Modal submitters ──────────────────────────────────────────────────────────
@@ -561,20 +595,55 @@ async function submitA2() {
   loadPatient();
 }
 
-async function submitDiscontinue() {
+async function saveDiscontinuation() {
+  const date   = document.getElementById('disc-date').value;
   const reason = document.getElementById('discontinue-reason').value.trim();
+  const notes  = document.getElementById('discontinue-notes').value.trim();
+  const btn    = document.getElementById('discontinue-submit');
+
+  if (!date)   { setError('discontinue-error', 'Please select a discontinuation date.'); return; }
   if (!reason) { setError('discontinue-error', 'Please enter a reason.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/discontinue`, { reason });
-  if (!ok) { setError('discontinue-error', data.error || 'Failed to discontinue patient.'); return; }
+  if (!_validateAttachment('disc', 'discontinue-error')) return;
+
+  if (!window.confirm('This will permanently close the patient record and all device assignments. Are you sure?')) return;
+
+  btn.disabled = true;
+  setError('discontinue-error', '');
+  const payload = { completion_date: date, reason, notes: notes || null };
+  if (_discEventId && _discEventId !== 'discontinuation_reminder') {
+    payload.event_id = _discEventId;
+  }
+
+  let ok, data;
+  try {
+    ({ ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/discontinue`, payload));
+  } catch (e) {
+    setError('discontinue-error', 'Server error — could not save discontinuation. Check the server logs.');
+    btn.disabled = false;
+    return;
+  }
+  if (!ok) { setError('discontinue-error', data?.error || 'Failed to discontinue patient.'); btn.disabled = false; return; }
+
+  if (data.event_id) {
+    const { file, caption } = _readAttachment('disc');
+    if (file) {
+      const uploaded = await _uploadAttachment(data.event_id, file, caption, 'discontinue-error');
+      if (!uploaded) { btn.disabled = false; return; }
+    }
+  }
+
   hideModal('discontinue-modal');
+  btn.disabled = false;
+  await loadPatientEvents();
   loadPatient();
 }
 
 // ── Patient events ────────────────────────────────────────────────────────────
 
-let _completeEventsCache = null;  // null = not yet loaded
-let _callLogsCache      = null;  // null = not yet loaded
-let _patientDiscontinued = false;  // true if patient has discontinuationDate
+let _completeEventsCache    = null;   // null = not yet loaded
+let _callLogsCache          = null;   // null = not yet loaded
+let _patientDiscontinued    = false;  // true if patient has discontinuationDate
+let _hasDiscontinuationStub = false;  // true if a real discontinuation stub is in incomplete
 
 async function loadPatientEvents() {
   const completedEl = document.getElementById('patient-completed-events');
@@ -591,6 +660,7 @@ async function loadPatientEvents() {
     eventsCache = [...overdue, ...upcoming];
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
+    _hasDiscontinuationStub = overdue.some(e => e.protocol_event_id === 'discontinuation');
 
     // Set discontinued flag and show banner if patient is discontinued
     _patientDiscontinued = !!patientData?.discontinuationDate;
@@ -896,13 +966,20 @@ function _deriveTransitions(patient, events) {
     }
   }
 
-  // Events that cleared a pause — id matches a closed pauseHistory[*].end_event_id
-  const resumingIds = new Set(
-    pauseHistory.filter(e => e.end_event_id).map(e => e.end_event_id)
-  );
+  const brokenDate     = (patient.brokenProtocolDate     || '').slice(0, 10);
+  const discDate       = (patient.discontinuationDate    || '').slice(0, 10);
+  const completionDate = (patient.trainingCompletionDate || '').slice(0, 10);
 
-  const brokenDate = (patient.brokenProtocolDate || '').slice(0, 10);
-  const discDate   = (patient.discontinuationDate || '').slice(0, 10);
+  // Suppress "Training resumed" if the pause cleared on or after any terminal date.
+  const resumingIds = new Set();
+  for (const epoch of pauseHistory) {
+    if (!epoch.end_event_id || !epoch.end) continue;
+    const epochEnd = epoch.end.slice(0, 10);
+    if (completionDate && epochEnd >= completionDate) continue;
+    if (brokenDate     && epochEnd >= brokenDate)     continue;
+    if (discDate       && epochEnd >= discDate)        continue;
+    resumingIds.add(epoch.end_event_id);
+  }
 
   for (const ev of events) {
     if (ev._synthetic || !ev.id) continue;
@@ -963,15 +1040,24 @@ function renderTimelineTab() {
     const dayNum   = _dayNumber(ev.completion_date);
     const dayLabel = dayNum !== null ? `Day ${dayNum}` : null;
     const isSynthetic = !!ev._synthetic;
-    const circleCls   = isSynthetic ? 'bg-blue-500 ring-blue-300' : 'bg-green-500 ring-green-300';
+    const isDisc      = ev.protocol_event_id === 'discontinuation';
+    const circleCls   = isSynthetic ? 'bg-blue-500 ring-blue-300'
+                      : isDisc      ? 'bg-red-500 ring-red-300'
+                      :               'bg-green-500 ring-green-300';
     const badge       = !isSynthetic ? _transitionBadgeHtml(transitions.get(ev.id)) : '';
+    const discBadge   = isDisc
+      ? `<span class="inline-flex items-center gap-1 text-xs font-semibold bg-red-100 text-red-700 border border-red-200 rounded-full px-2 py-0.5 mt-1"><i class="fas fa-ban text-[10px]"></i>Discontinued</span>`
+      : '';
+    const rowHighlight = isDisc ? 'bg-red-50 rounded-lg' : rowBg;
+    const nameCls      = isDisc ? 'text-sm font-bold text-red-700' : 'text-sm font-semibold text-slate-800';
     return `
-      <div class="grid gap-x-4 px-2 -mx-2 ${rowBg}" style="grid-template-columns:1fr 20px 1fr">
+      <div class="grid gap-x-4 px-2 -mx-2 ${rowHighlight}" style="grid-template-columns:1fr 20px 1fr">
         <div class="text-right pb-${isLast ? '2' : '7'} pt-2">
-          <p class="text-sm font-semibold text-slate-800">${ev.event_name}</p>
+          <p class="${nameCls}">${ev.event_name}</p>
           ${!isSynthetic ? `<p class="text-xs text-slate-400 mt-0.5">Scheduled: ${schedStr}</p>` : ''}
           ${dayLabel ? `<p class="text-sm font-semibold text-indigo-500 mt-1">${dayLabel}</p>` : ''}
           ${badge}
+          ${discBadge}
         </div>
         <div class="flex flex-col items-center pt-2">
           <div class="w-3 h-3 rounded-full ${circleCls} border-2 border-white ring-1 z-10 flex-shrink-0"></div>
@@ -1426,6 +1512,7 @@ function _robotIssueCard(ev) {
 const _AE_TRIGGER_NAMES = {
   activation:         'Patient Activation',
   activation_attempt: 'Activation Attempt (training not completed)',
+  primary_reason:     'Primary Reason',
   home_visit_d02:     'Home Visit Day 02',
   home_visit_d03:     'Home Visit Day 03',
   home_visit_d15:     'Home Visit Day 15',
@@ -1445,7 +1532,9 @@ function openAdverseEventModal(ev) {
   document.getElementById('ae-date').value         = '';
   document.getElementById('ae-description').value  = '';
   document.getElementById('ae-action-taken').value = '';
-  document.getElementById('ae-paused').checked     = !!ev.training_stopped;
+  const isActivated = !!patientData?.activationDate;
+  document.getElementById('ae-paused-wrap').classList.toggle('hidden', !isActivated);
+  document.getElementById('ae-paused').checked = isActivated && !!ev.training_stopped;
 
   document.getElementById('ae-schedule-visit').checked    = false;
   document.getElementById('ae-visit-date-wrap').classList.add('hidden');
@@ -1591,15 +1680,18 @@ function _setIssueModalDateBounds(enrollDate, issueOccurDate, issueOccurInputId,
 // ── Robot Issue Call modal ─────────────────────────────────────────────────────
 
 let _ricEventId = null;
+let _ricIsBp    = false;
 
 async function openRobotIssueCallModal(ev) {
   _ricEventId = ev.id;
+  _ricIsBp    = !!patientData?.brokenProtocolDate;
   const triggerType  = ev.triggered_by?.type || '';
   const triggerName  = _AE_TRIGGER_NAMES[triggerType] || triggerType;
   const triggerEvent = (_completeEventsCache || []).find(e => e.id === ev.triggered_by?.id);
   const dateStr = triggerEvent?.completion_date ? ` on ${_fmtDateTime(triggerEvent.completion_date)}` : '';
   document.getElementById('ric-context-banner').textContent =
     `Robot issue reported during ${triggerName}${dateStr}`;
+  document.getElementById('ric-bp-banner').classList.toggle('hidden', !_ricIsBp);
   document.getElementById('ric-date').value             = '';
   document.getElementById('ric-issue-occur-date').value = '';
   document.getElementById('ric-notes').value             = '';
@@ -1614,47 +1706,64 @@ async function openRobotIssueCallModal(ev) {
     const label = device.charAt(0).toUpperCase() + device.slice(1);
     const sec = document.createElement('div');
     sec.className = 'border border-slate-200 rounded-xl p-4';
-    sec.innerHTML = `
-      <label class="flex items-center gap-2 cursor-pointer select-none">
-        <input type="checkbox" id="ric-${device}-on" class="w-4 h-4 rounded border-slate-300 accent-orange-600">
-        <span class="text-sm font-semibold text-slate-800">${label}</span>
-      </label>
-      <div id="ric-${device}-form" class="hidden mt-3 space-y-3 pl-6">
-        <div>
-          <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
-          <div class="space-y-1">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="ric-${device}-outcome" value="resolved" class="w-4 h-4 accent-orange-600">
-              <span class="text-sm text-slate-700">Resolved by call — no visit needed</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="ric-${device}-outcome" value="visit_required" class="w-4 h-4 accent-orange-600">
-              <span class="text-sm text-slate-700">Visit required</span>
-            </label>
-          </div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+    if (_ricIsBp) {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="ric-${device}-on" class="w-4 h-4 rounded border-slate-300 accent-orange-600">
+          <span class="text-sm font-semibold text-slate-800">${label}</span>
+        </label>
+        <div id="ric-${device}-form" class="hidden mt-3 pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
           <textarea id="ric-${device}-notes" rows="2"
             class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
-            placeholder="What was discussed for ${label}…"></textarea>
+            placeholder="Describe the fault on ${label}…"></textarea>
         </div>
-      </div>
-    `;
+      `;
+    } else {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="ric-${device}-on" class="w-4 h-4 rounded border-slate-300 accent-orange-600">
+          <span class="text-sm font-semibold text-slate-800">${label}</span>
+        </label>
+        <div id="ric-${device}-form" class="hidden mt-3 space-y-3 pl-6">
+          <div>
+            <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+            <div class="space-y-1">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="ric-${device}-outcome" value="resolved" class="w-4 h-4 accent-orange-600">
+                <span class="text-sm text-slate-700">Resolved by call — no visit needed</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="ric-${device}-outcome" value="visit_required" class="w-4 h-4 accent-orange-600">
+                <span class="text-sm text-slate-700">Visit required</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+            <textarea id="ric-${device}-notes" rows="2"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+              placeholder="What was discussed for ${label}…"></textarea>
+          </div>
+        </div>
+      `;
+    }
     container.appendChild(sec);
 
     document.getElementById(`ric-${device}-on`).onchange = function () {
       document.getElementById(`ric-${device}-form`).classList.toggle('hidden', !this.checked);
       if (!this.checked) {
-        document.querySelectorAll(`input[name="ric-${device}-outcome"]`).forEach(r => r.checked = false);
+        if (!_ricIsBp) {
+          document.querySelectorAll(`input[name="ric-${device}-outcome"]`).forEach(r => r.checked = false);
+        }
         document.getElementById(`ric-${device}-notes`).value = '';
       }
       _ricUpdateNotesLabel();
     };
   }
 
-  // Pre-check visit_required for all devices when this stub was the primary training-stop reason
-  if (ev.training_stopped) {
+  // In normal mode only: pre-check visit_required when stub was the primary training-stop reason
+  if (!_ricIsBp && ev.training_stopped) {
     for (const device of ['pluto', 'mars']) {
       const onCb = document.getElementById(`ric-${device}-on`);
       if (onCb && !onCb.checked) {
@@ -1698,12 +1807,16 @@ async function saveRobotIssueCall() {
   const devices = [];
   for (const device of ['pluto', 'mars']) {
     if (!document.getElementById(`ric-${device}-on`).checked) continue;
-    const outcome  = document.querySelector(`input[name="ric-${device}-outcome"]:checked`)?.value || '';
     const devNotes = document.getElementById(`ric-${device}-notes`).value.trim();
     const label    = device.charAt(0).toUpperCase() + device.slice(1);
-    if (!outcome)  { setError('ric-error', `Outcome is required for ${label}.`); return; }
-    if (!devNotes) { setError('ric-error', `Notes are required for ${label}.`); return; }
-    devices.push({ device, outcome, notes: devNotes });
+    if (!devNotes) { setError('ric-error', `${_ricIsBp ? 'Fault description' : 'Notes'} required for ${label}.`); return; }
+    if (_ricIsBp) {
+      devices.push({ device, notes: devNotes });
+    } else {
+      const outcome = document.querySelector(`input[name="ric-${device}-outcome"]:checked`)?.value || '';
+      if (!outcome) { setError('ric-error', `Outcome is required for ${label}.`); return; }
+      devices.push({ device, outcome, notes: devNotes });
+    }
   }
 
   if (!devices.length && !notes) {
@@ -1740,7 +1853,8 @@ async function saveRobotIssueCall() {
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue-call`,
-    { event_id: _ricEventId, completion_date: date, issue_occur_date: issueOccurDate, notes: notes || null, devices }
+    { event_id: _ricEventId, completion_date: date, issue_occur_date: issueOccurDate,
+      notes: notes || null, devices, broken_protocol_mode: _ricIsBp }
   );
   if (!ok) { setError('ric-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1759,15 +1873,18 @@ async function saveRobotIssueCall() {
 
 let _rivEventId = null;
 let _rivDevices = []; // [{device_type, old_device_id, available}]
+let _rivIsBp    = false;
 
 async function openRobotIssueVisitModal(ev) {
   _rivEventId = ev.id;
   _rivDevices = [];
+  _rivIsBp    = !!patientData?.brokenProtocolDate;
 
   const callEvent = (_completeEventsCache || []).find(e => e.id === ev.triggered_by?.id);
   const dateStr   = callEvent?.completion_date ? ` on ${_fmtDateTime(callEvent.completion_date)}` : '';
   document.getElementById('riv-context-banner').textContent =
     `Robot issue call${dateStr}`;
+  document.getElementById('riv-bp-banner').classList.toggle('hidden', !_rivIsBp);
   document.getElementById('riv-date').value  = '';
   document.getElementById('riv-notes').value = '';
   document.getElementById('riv-device-rows').innerHTML =
@@ -1800,9 +1917,44 @@ async function openRobotIssueVisitModal(ev) {
   }
 }
 
+function _rivBpFaultChange(deviceType) {
+  const checked = document.getElementById(`riv-bp-${deviceType}-fault`)?.checked;
+  document.getElementById(`riv-bp-${deviceType}-desc-wrap`)?.classList.toggle('hidden', !checked);
+}
+
 function _buildRivDeviceRows() {
   const container = document.getElementById('riv-device-rows');
   container.innerHTML = '';
+
+  if (_rivIsBp) {
+    for (const dev of _rivDevices) {
+      const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+      const oldLabel = dev.old_device_id
+        ? `<span class="font-mono">${dev.old_device_id}</span>`
+        : '<span class="text-slate-400 italic">None assigned</span>';
+      const rowDiv = document.createElement('div');
+      rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+      rowDiv.innerHTML = `
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-semibold text-slate-800">${label}</span>
+          <span class="text-xs text-slate-500">Current: ${oldLabel}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="riv-bp-${dev.device_type}-fault" class="w-4 h-4 accent-amber-600"
+            onchange="_rivBpFaultChange('${dev.device_type}')">
+          <label for="riv-bp-${dev.device_type}-fault" class="text-sm text-slate-700 cursor-pointer">This device has a fault</label>
+        </div>
+        <div id="riv-bp-${dev.device_type}-desc-wrap" class="hidden pl-2 border-l-2 border-amber-200">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+          <textarea id="riv-bp-${dev.device_type}-desc" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
+            placeholder="Describe the fault…"></textarea>
+        </div>
+      `;
+      container.appendChild(rowDiv);
+    }
+    return;
+  }
 
   for (const dev of _rivDevices) {
     const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
@@ -1913,10 +2065,40 @@ async function saveRobotIssueVisit() {
     return;
   }
   const minDate = document.getElementById('riv-date').min;
-  if (minDate && date.split('T')[0] < minDate) {
-    setError('riv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+  if (minDate && date.split('T')[0] < minDate.split('T')[0]) {
+    setError('riv-error', `Visit date must be on or after issue occurred date (${minDate.split('T')[0]}).`);
     return;
   }
+
+  // ── Broken-protocol mode ──────────────────────────────────────────────────
+  if (_rivIsBp) {
+    const deviceFaults = [];
+    for (const dev of _rivDevices) {
+      const hasFault = document.getElementById(`riv-bp-${dev.device_type}-fault`)?.checked;
+      if (hasFault) {
+        const desc = document.getElementById(`riv-bp-${dev.device_type}-desc`)?.value.trim() || '';
+        if (!desc) { setError('riv-error', `Please describe the fault for ${dev.device_type}.`); return; }
+        deviceFaults.push({ device: dev.device_type, notes: desc });
+      }
+    }
+    if (!_validateAttachment('riv', 'riv-error')) return;
+    saveBtn.disabled = true;
+    const { ok, data } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue-visit`,
+      { event_id: _rivEventId, completion_date: date, notes, device_faults: deviceFaults, broken_protocol_mode: true }
+    );
+    if (!ok) { setError('riv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+    const { file, caption } = _readAttachment('riv');
+    if (file) {
+      const uploaded = await _uploadAttachment(_rivEventId, file, caption, 'riv-error');
+      if (!uploaded) { saveBtn.disabled = false; return; }
+    }
+    hideModal('robot-issue-visit-modal');
+    saveBtn.disabled = false;
+    await loadPatientEvents();
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   const deviceOutcomes = [];
   for (const dev of _rivDevices) {
@@ -1971,6 +2153,10 @@ async function saveRobotIssueVisit() {
 let _aefEventId    = null;
 let _aefAeDetails  = [];   // [{id, date, training_blocked}] for each AE in stub
 
+function _trainingPermanentlyEnded() {
+  return !!(patientData?.trainingCompletionDate || patientData?.brokenProtocolDate || patientData?.discontinuationDate);
+}
+
 function openAdverseEventFollowupModal(ev) {
   _aefEventId   = ev.id;
   const aeIds   = ev.adverse_event_ids || [];
@@ -2009,7 +2195,7 @@ function openAdverseEventFollowupModal(ev) {
   const rowsEl = document.getElementById('aef-ae-rows');
   rowsEl.innerHTML = _aefAeDetails.map((ae, i) => {
     const dateStr = ae.date ? _fmtDateTime(ae.date) : 'Unknown date';
-    const resumeField = ae.training_blocked
+    const resumeField = (ae.training_blocked && !_trainingPermanentlyEnded())
       ? `<div id="aef-resume-wrap-${i}" class="hidden mt-2">
            <label class="block text-xs font-medium text-slate-600 mb-1">Can resume from <span class="text-red-400">*</span></label>
            <input type="date" id="aef-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
@@ -2027,6 +2213,7 @@ function openAdverseEventFollowupModal(ev) {
   document.getElementById('aef-date').value     = '';
   document.getElementById('aef-duration').value  = '';
   document.getElementById('aef-notes').value     = '';
+  _setupAeSchedulingToggles('aef');
   _resetAttachment('aef');
   setError('aef-error', '');
   _attachDateGuard('aef-date', 'aef-error');
@@ -2058,7 +2245,7 @@ async function saveAdverseEventFollowup() {
     const ae       = _aefAeDetails[i];
     const resolved = document.getElementById(`aef-resolved-${i}`).checked;
     let can_resume_from = null;
-    if (resolved && ae.training_blocked) {
+    if (resolved && ae.training_blocked && !_trainingPermanentlyEnded()) {
       can_resume_from = document.getElementById(`aef-resume-${i}`)?.value || '';
       if (!can_resume_from) {
         setError('aef-error', 'Can resume from date is required for resolved training-blocked events.');
@@ -2068,12 +2255,15 @@ async function saveAdverseEventFollowup() {
     ae_discussions.push({ adverse_event_id: ae.id, resolved, can_resume_from });
   }
 
+  const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aef');
+  if (schedError) { setError('aef-error', schedError); return; }
   if (!_validateAttachment('aef', 'aef-error')) return;
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event-followup`,
-    { event_id: _aefEventId, completion_date: date, duration_minutes: duration, notes, ae_discussions }
+    { event_id: _aefEventId, completion_date: date, duration_minutes: duration, notes, ae_discussions,
+      scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
   );
   if (!ok) { setError('aef-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -2098,7 +2288,7 @@ function _buildAeVisitRows(prefix, aeDetails) {
     const dateStr = ae.date ? _fmtDateTime(ae.date) : 'Unknown date';
     const pauseTag = ae.training_blocked
       ? ' <span class="text-xs text-red-600 font-medium">(training blocked)</span>' : '';
-    const resumeField = ae.training_blocked
+    const resumeField = (ae.training_blocked && !_trainingPermanentlyEnded())
       ? `<div id="${prefix}-resume-wrap-${i}" class="hidden mt-2">
            <label class="block text-xs font-medium text-slate-600 mb-1">Can resume from <span class="text-red-400">*</span></label>
            <input type="date" id="${prefix}-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
@@ -2134,7 +2324,7 @@ function _collectAeDiscussions(prefix, aeDetails) {
     const notes    = document.getElementById(`${prefix}-disc-${i}`)?.value.trim() || null;
     const resolved = document.getElementById(`${prefix}-resolved-${i}`).checked;
     let can_resume_from = null;
-    if (resolved && ae.training_blocked) {
+    if (resolved && ae.training_blocked && !_trainingPermanentlyEnded()) {
       can_resume_from = document.getElementById(`${prefix}-resume-${i}`)?.value || '';
       if (!can_resume_from)
         return { discussions: null, error: 'Can resume from date is required for resolved training-blocked events.' };
@@ -2149,6 +2339,37 @@ function _loadAeDetails(aeIds) {
     const ae = (_completeEventsCache || []).find(e => e.id === id);
     return { id, alias: ae?.alias || '', date: ae?.completion_date || '', training_blocked: ae?.training_blocked || false };
   });
+}
+
+function _setupAeSchedulingToggles(prefix) {
+  ['visit', 'clinical'].forEach(kind => {
+    const cb        = document.getElementById(`${prefix}-schedule-${kind}`);
+    const dateWrap  = document.getElementById(`${prefix}-${kind}-date-wrap`);
+    const dateInput = document.getElementById(`${prefix}-${kind}-date`);
+    if (!cb) return;
+    cb.checked = false;
+    if (dateWrap)  dateWrap.classList.add('hidden');
+    if (dateInput) dateInput.value = '';
+    cb.onchange = () => {
+      if (dateWrap) dateWrap.classList.toggle('hidden', !cb.checked);
+      if (!cb.checked && dateInput) dateInput.value = '';
+    };
+  });
+}
+
+function _collectAeScheduling(prefix) {
+  // Returns {scheduledFollowupVisit, scheduledClinicalVisit, error}
+  const visitCb      = document.getElementById(`${prefix}-schedule-visit`);
+  const clinicalCb   = document.getElementById(`${prefix}-schedule-clinical`);
+  const visitDate    = document.getElementById(`${prefix}-visit-date`)?.value    || '';
+  const clinicalDate = document.getElementById(`${prefix}-clinical-date`)?.value || '';
+  if (visitCb?.checked    && !visitDate)    return { error: 'Follow-up visit date is required.'  };
+  if (clinicalCb?.checked && !clinicalDate) return { error: 'Clinical visit date is required.'   };
+  return {
+    scheduledFollowupVisit:  visitCb?.checked    ? visitDate    : null,
+    scheduledClinicalVisit:  clinicalCb?.checked ? clinicalDate : null,
+    error: null,
+  };
 }
 
 function _buildAeContextBanner(prefix, aeDetails) {
@@ -2177,6 +2398,7 @@ function openAeFollowupVisitModal(ev) {
   document.getElementById('aefv-start').value = '';
   document.getElementById('aefv-end').value   = '';
   document.getElementById('aefv-notes').value = '';
+  _setupAeSchedulingToggles('aefv');
   _resetAttachment('aefv');
   setError('aefv-error', '');
   _attachSessionEndGuard('aefv-start', 'aefv-end', 'aefv-error');
@@ -2194,15 +2416,19 @@ async function saveAeFollowupVisit() {
   if (!end)   { setError('aefv-error', 'Visit end is required.'); return; }
   if (start.split('T')[0] !== end.split('T')[0]) { setError('aefv-error', 'Start and end must be on the same date.'); return; }
   if (end <= start) { setError('aefv-error', 'Visit end must be after visit start.'); return; }
-  if (!_validateAttachment('aefv', 'aefv-error')) return;
 
   const { discussions, error } = _collectAeDiscussions('aefv', _aefvAeDetails);
   if (error) { setError('aefv-error', error); return; }
 
+  const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aefv');
+  if (schedError) { setError('aefv-error', schedError); return; }
+  if (!_validateAttachment('aefv', 'aefv-error')) return;
+
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-followup-visit`,
-    { event_id: _aefvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions }
+    { event_id: _aefvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions,
+      scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
   );
   if (!ok) { setError('aefv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -2235,6 +2461,7 @@ function openAeClinicalVisitModal(ev) {
   document.getElementById('aecv-start').value = '';
   document.getElementById('aecv-end').value   = '';
   document.getElementById('aecv-notes').value = '';
+  _setupAeSchedulingToggles('aecv');
   _resetAttachment('aecv');
   setError('aecv-error', '');
   _attachSessionEndGuard('aecv-start', 'aecv-end', 'aecv-error');
@@ -2252,15 +2479,19 @@ async function saveAeClinicalVisit() {
   if (!end)   { setError('aecv-error', 'Visit end is required.'); return; }
   if (start.split('T')[0] !== end.split('T')[0]) { setError('aecv-error', 'Start and end must be on the same date.'); return; }
   if (end <= start) { setError('aecv-error', 'Visit end must be after visit start.'); return; }
-  if (!_validateAttachment('aecv', 'aecv-error')) return;
 
   const { discussions, error } = _collectAeDiscussions('aecv', _aecvAeDetails);
   if (error) { setError('aecv-error', error); return; }
 
+  const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aecv');
+  if (schedError) { setError('aecv-error', schedError); return; }
+  if (!_validateAttachment('aecv', 'aecv-error')) return;
+
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-clinical-visit`,
-    { event_id: _aecvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions }
+    { event_id: _aecvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions,
+      scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
   );
   if (!ok) { setError('aecv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -2298,14 +2529,16 @@ async function _cancelAeVisit(prefix) {
 
 // ── Resolve Robot Issue Visit modal ───────────────────────────────────────────
 
-let _rrivEventId     = null;
-let _rrivDevices     = []; // [{device_type, old_device_id, available}] — taken-back devices
+let _rrivEventId      = null;
+let _rrivDevices      = []; // [{device_type, old_device_id, available}] — taken-back devices
 let _rrivOtherDevices = []; // [{device_type, old_device_id, available}] — still-assigned devices
+let _rrivIsBp         = false;
 
 async function openResolveRobotIssueVisitModal(ev) {
   _rrivEventId      = ev.id;
   _rrivDevices      = [];
   _rrivOtherDevices = [];
+  _rrivIsBp         = !!patientData?.brokenProtocolDate;
 
   // Find the triggering robot_issue_visit in the completed events cache
   const triggeredBy = ev.triggered_by;
@@ -2353,6 +2586,11 @@ async function openResolveRobotIssueVisitModal(ev) {
   const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
   _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'rriv-date');
 
+  // Toggle BP mode UI
+  document.getElementById('rriv-bp-banner').classList.toggle('hidden', !_rrivIsBp);
+  document.getElementById('rriv-normal-section').classList.toggle('hidden', _rrivIsBp);
+  document.getElementById('rriv-bp-device-rows').innerHTML = '';
+
   showModal('resolve-robot-issue-visit-modal');
 
   try {
@@ -2385,16 +2623,57 @@ async function openResolveRobotIssueVisitModal(ev) {
       }
     }
 
-    if (_rrivDevices.length === 0) {
-      document.getElementById('rriv-device-rows').innerHTML =
-        '<p class="text-sm text-slate-400 italic">No taken-back devices found.</p>';
+    if (_rrivIsBp) {
+      _buildRrivBpDeviceRows();
     } else {
-      _buildRrivDeviceRows();
+      if (_rrivDevices.length === 0) {
+        document.getElementById('rriv-device-rows').innerHTML =
+          '<p class="text-sm text-slate-400 italic">No taken-back devices found.</p>';
+      } else {
+        _buildRrivDeviceRows();
+      }
+      _buildRrivOtherDeviceSection();
     }
-    _buildRrivOtherDeviceSection();
   } catch (e) {
     document.getElementById('rriv-device-rows').innerHTML =
       '<p class="text-sm text-red-500">Failed to load device info.</p>';
+  }
+}
+
+function _rrivBpFaultChange(deviceType) {
+  const checked = document.getElementById(`rriv-bp-${deviceType}-fault`)?.checked;
+  document.getElementById(`rriv-bp-${deviceType}-desc-wrap`)?.classList.toggle('hidden', !checked);
+}
+
+function _buildRrivBpDeviceRows() {
+  const container = document.getElementById('rriv-bp-device-rows');
+  container.innerHTML = '';
+  for (const dev of _rrivDevices) {
+    const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+    const oldLabel = dev.old_device_id
+      ? `<span class="font-mono">${dev.old_device_id}</span>`
+      : '<span class="text-slate-400 italic">None</span>';
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+    rowDiv.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-semibold text-slate-800">${label}</span>
+        <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-medium">Taken back</span>
+        <span class="text-xs text-slate-500">Device: ${oldLabel}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" id="rriv-bp-${dev.device_type}-fault" class="w-4 h-4 accent-amber-600"
+          onchange="_rrivBpFaultChange('${dev.device_type}')">
+        <label for="rriv-bp-${dev.device_type}-fault" class="text-sm text-slate-700 cursor-pointer">This device has a fault</label>
+      </div>
+      <div id="rriv-bp-${dev.device_type}-desc-wrap" class="hidden pl-2 border-l-2 border-amber-200">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+        <textarea id="rriv-bp-${dev.device_type}-desc" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
+          placeholder="Describe the fault…"></textarea>
+      </div>
+    `;
+    container.appendChild(rowDiv);
   }
 }
 
@@ -2582,8 +2861,7 @@ async function saveResolveRobotIssueVisit() {
   const notes      = document.getElementById('rriv-notes').value.trim();
   const saveBtn    = document.getElementById('rriv-save');
 
-  if (!date)       { setError('rriv-error', 'Visit date is required.'); return; }
-  if (!resumeDate) { setError('rriv-error', 'Can resume from date is required.'); return; }
+  if (!date) { setError('rriv-error', 'Visit date is required.'); return; }
 
   // Validate visit date
   const today = new Date().toISOString().split('T')[0];
@@ -2592,10 +2870,42 @@ async function saveResolveRobotIssueVisit() {
     return;
   }
   const minDate = document.getElementById('rriv-date').min;
-  if (minDate && date.split('T')[0] < minDate) {
-    setError('rriv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+  if (minDate && date.split('T')[0] < minDate.split('T')[0]) {
+    setError('rriv-error', `Visit date must be on or after issue occurred date (${minDate.split('T')[0]}).`);
     return;
   }
+
+  // ── Broken-protocol mode ──────────────────────────────────────────────────
+  if (_rrivIsBp) {
+    const deviceFaults = [];
+    for (const dev of _rrivDevices) {
+      const hasFault = document.getElementById(`rriv-bp-${dev.device_type}-fault`)?.checked;
+      if (hasFault) {
+        const desc = document.getElementById(`rriv-bp-${dev.device_type}-desc`)?.value.trim() || '';
+        if (!desc) { setError('rriv-error', `Please describe the fault for ${dev.device_type}.`); return; }
+        deviceFaults.push({ device: dev.device_type, device_id: dev.old_device_id, notes: desc });
+      }
+    }
+    if (!_validateAttachment('rriv', 'rriv-error')) return;
+    saveBtn.disabled = true;
+    const { ok, data } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/resolve-robot-issue-visit`,
+      { event_id: _rrivEventId, completion_date: date, notes, device_faults: deviceFaults, broken_protocol_mode: true }
+    );
+    if (!ok) { setError('rriv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+    const { file, caption } = _readAttachment('rriv');
+    if (file) {
+      const uploaded = await _uploadAttachment(_rrivEventId, file, caption, 'rriv-error');
+      if (!uploaded) { saveBtn.disabled = false; return; }
+    }
+    hideModal('resolve-robot-issue-visit-modal');
+    saveBtn.disabled = false;
+    await loadPatientEvents();
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  if (!resumeDate) { setError('rriv-error', 'Can resume from date is required.'); return; }
   if (resumeDate > today) {
     setError('rriv-error', 'Can resume from date cannot be in the future.');
     return;
@@ -2683,12 +2993,19 @@ function completedTimeline(events) {
     const d   = raw ? new Date(raw) : null;
     const dateStr = d ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—';
     const isLast  = i === events.length - 1;
+    const isDisc  = ev.protocol_event_id === 'discontinuation';
+    const circleCls = isDisc ? 'bg-red-500 ring-red-300' : 'bg-green-500 ring-green-300';
+    const nameCls   = isDisc ? 'text-sm font-bold text-red-700 leading-tight' : 'text-sm font-medium text-slate-800 leading-tight';
+    const badge     = isDisc
+      ? `<span class="inline-flex items-center gap-1 text-xs font-semibold bg-red-100 text-red-700 border border-red-200 rounded-full px-2 py-0.5 mt-1"><i class="fas fa-ban text-[10px]"></i>Discontinued</span>`
+      : '';
     return `
       <div class="relative pl-7 ${isLast ? '' : 'pb-4'}">
-        <div class="absolute left-[3px] top-1.5 w-3 h-3 rounded-full bg-green-500 border-2 border-white ring-1 ring-green-300 z-10"></div>
+        <div class="absolute left-[3px] top-1.5 w-3 h-3 rounded-full ${circleCls} border-2 border-white ring-1 z-10"></div>
         ${isLast ? '' : '<div class="absolute left-[8px] top-4 bottom-0 w-0.5 bg-green-100"></div>'}
-        <p class="text-sm font-medium text-slate-800 leading-tight">${ev.event_name}</p>
+        <p class="${nameCls}">${ev.event_name}</p>
         <p class="text-xs text-slate-400 mt-0.5">${dateStr}</p>
+        ${badge}
       </div>`;
   }).join('');
   return `<div class="relative">${items}</div>`;
@@ -2698,7 +3015,8 @@ function completedTimeline(events) {
 const EVENT_OPENERS = {
   exp_device_install:        (ev) => openDeviceSetupModal(ev.id),
   activation:                (ev) => openActivationModal(ev.id),
-  discontinuation_reminder:  (_ev) => openDiscontinueModal(),
+  discontinuation_reminder:  (ev) => openDiscontinueModal(ev),
+  discontinuation:           (ev) => openDiscontinueModal(ev),
   adl_prescription_d01:      (ev) => openAdlPrescriptionModal(ev),
   adl_prescription_d15:      (ev) => openAdlPrescriptionModal(ev),
   vcg_prescription_d01:      (ev) => openVcgPrescriptionModal(ev),
@@ -2763,7 +3081,13 @@ function patientEventRow(ev) {
 
   const blocked   = !onHold && ev.blocked_by && ev.blocked_by.length > 0;
   const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
-  const clickable = hasOpener && !blocked && !isUpcoming && !onHold && !_patientDiscontinued;
+  const _DISCONTINUED_VISIBLE = new Set([
+    'adverse_event', 'adverse_event_followup',
+    'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+    'a1_assessment', 'a2_assessment',
+  ]);
+  const discontinuedBlocks = _patientDiscontinued && !_DISCONTINUED_VISIBLE.has(ev.protocol_event_id);
+  const clickable = hasOpener && !blocked && !isUpcoming && !onHold && !discontinuedBlocks;
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
@@ -2929,6 +3253,7 @@ async function submitDeviceSetup() {
 let _activationEventId = null;
 
 let _activationTrainingCompleted = null; // null = not chosen, true = yes, false = no
+let _actNoPrimaryReason          = null;
 
 function _actToggleSubform(type) {
   const noteId = {
@@ -2946,6 +3271,54 @@ function _actNoToggleSubform(type) {
   }[type];
   const checked = document.getElementById(`act-no-trigger-${type}`).checked;
   if (noteId) document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+function _setActNoPrimaryReason(reason) {
+  _actNoPrimaryReason = reason;
+  const pills = {
+    adverse_event:           'act-no-reason-ae',
+    robot_issue_call:        'act-no-reason-robot',
+    other_device_issue_call: 'act-no-reason-odi',
+    other:                   'act-no-reason-other',
+  };
+  const active   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactive = ['border-slate-200', 'text-slate-600'];
+  Object.entries(pills).forEach(([r, id]) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const on = r === reason;
+    active.forEach(c => btn.classList.toggle(c, on));
+    inactive.forEach(c => btn.classList.toggle(c, !on));
+  });
+
+  const isExp = patientData?.group === 'experimental';
+  const wrapVisibility = {
+    'act-no-trigger-ae-wrap':           true,
+    'act-no-trigger-robot-wrap':        isExp,
+    'act-no-trigger-other-device-wrap': isExp,
+  };
+  const reasonToWrap = {
+    adverse_event:           'act-no-trigger-ae-wrap',
+    robot_issue_call:        'act-no-trigger-robot-wrap',
+    other_device_issue_call: 'act-no-trigger-other-device-wrap',
+  };
+  Object.entries(wrapVisibility).forEach(([wrapId, groupVisible]) => {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    const isPrimary = reasonToWrap[reason] === wrapId;
+    wrap.classList.toggle('hidden', !groupVisible || isPrimary);
+    if (isPrimary || !groupVisible) {
+      const cbId = wrapId === 'act-no-trigger-ae-wrap'    ? 'act-no-trigger-adverse'
+                 : wrapId === 'act-no-trigger-robot-wrap' ? 'act-no-trigger-robot'
+                 :                                          'act-no-trigger-other-device';
+      const cb = document.getElementById(cbId);
+      if (cb && cb.checked) { cb.checked = false; _actNoToggleSubform(cbId.replace('act-no-trigger-', '')); }
+    }
+  });
+
+  const notesLabel = document.getElementById('act-no-notes-star');
+  if (notesLabel) notesLabel.textContent = reason === 'other' ? '* — explain why training was not completed' : '';
+  setError('activation-error', '');
 }
 
 function _setActivationTrainingToggle(val) {
@@ -3008,13 +3381,31 @@ async function openActivationModal(evId) {
   document.getElementById('act-trigger-other-device-wrap').classList.toggle('hidden', !isExperimental);
 
   // Reset NO section fields
+  _actNoPrimaryReason = null;
   document.getElementById('act-no-visit-date').value = '';
   document.getElementById('act-no-notes').value      = '';
   _attachDateGuard('act-no-visit-date', 'activation-error');
+
+  // Reset primary reason pills
+  const pillActive   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const pillInactive = ['border-slate-200', 'text-slate-600'];
+  ['act-no-reason-ae', 'act-no-reason-robot', 'act-no-reason-odi', 'act-no-reason-other'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.classList.remove(...pillActive);
+    btn.classList.add(...pillInactive);
+  });
+  document.getElementById('act-no-reason-robot').classList.toggle('hidden', !isExperimental);
+  document.getElementById('act-no-reason-odi').classList.toggle('hidden', !isExperimental);
+  const actNoNotesLabel = document.getElementById('act-no-notes-star');
+  if (actNoNotesLabel) actNoNotesLabel.textContent = '';
+
+  // Reset secondary triggers
   ['adverse', 'robot', 'other-device'].forEach(type => {
     const cb = document.getElementById(`act-no-trigger-${type}`);
     if (cb) { cb.checked = false; _actNoToggleSubform(type); }
   });
+  document.getElementById('act-no-trigger-ae-wrap').classList.remove('hidden');
   document.getElementById('act-no-trigger-robot-wrap').classList.toggle('hidden', !isExperimental);
   document.getElementById('act-no-trigger-other-device-wrap').classList.toggle('hidden', !isExperimental);
 
@@ -3101,23 +3492,32 @@ async function _submitActivationAttempt() {
   const visitDate = document.getElementById('act-no-visit-date').value;
   const notes     = document.getElementById('act-no-notes').value.trim();
 
+  if (!_actNoPrimaryReason) { setError('activation-error', 'Please select a reason why training was not completed.'); return; }
   if (!visitDate) { setError('activation-error', 'Visit date is required.'); return; }
-  if (!notes)     { setError('activation-error', 'Notes are required — explain why training was not completed.'); return; }
+  if (_actNoPrimaryReason === 'other' && !notes) { setError('activation-error', 'Notes are required when reason is "Other".'); return; }
 
+  // Primary reason (non-"other") auto-creates its stub with training_stopped: true
   const triggered = [];
-  if (document.getElementById('act-no-trigger-adverse').checked)
+  if (_actNoPrimaryReason !== 'other') {
+    triggered.push({ type: _actNoPrimaryReason, training_stopped: true });
+  }
+  // Secondary triggers (matching trigger wrap is already hidden, so no duplicates)
+  if (_actNoPrimaryReason !== 'adverse_event' &&
+      document.getElementById('act-no-trigger-adverse').checked)
     triggered.push({ type: 'adverse_event' });
-  if (!document.getElementById('act-no-trigger-robot-wrap').classList.contains('hidden') &&
+  if (_actNoPrimaryReason !== 'robot_issue_call' &&
+      !document.getElementById('act-no-trigger-robot-wrap').classList.contains('hidden') &&
       document.getElementById('act-no-trigger-robot').checked)
     triggered.push({ type: 'robot_issue_call' });
-  if (!document.getElementById('act-no-trigger-other-device-wrap').classList.contains('hidden') &&
+  if (_actNoPrimaryReason !== 'other_device_issue_call' &&
+      !document.getElementById('act-no-trigger-other-device-wrap').classList.contains('hidden') &&
       document.getElementById('act-no-trigger-other-device').checked)
     triggered.push({ type: 'other_device_issue_call' });
 
   setLoading('activation-submit', true);
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/log-activation-attempt`,
-    { visitDate, notes, triggered }
+    { visitDate, notes, primaryReason: _actNoPrimaryReason, triggered }
   );
   if (!ok) { setLoading('activation-submit', false); setError('activation-error', data.error || 'Failed to log activation attempt.'); return; }
 
@@ -5590,9 +5990,14 @@ async function loadPatient() {
 
     // Show "Discontinue" button for admin when patient is not yet discontinued/completed
     const discBtn = document.getElementById('discontinue-btn');
-    if (discBtn && isAdmin && !patientData.discontinuationDate && !patientData.a2CompletionDate) {
+    const isBrokenProtocol = !!patientData.brokenProtocolDate;
+    if (discBtn && isAdmin && !patientData.discontinuationDate && !patientData.a2CompletionDate
+        && !isBrokenProtocol && !_hasDiscontinuationStub) {
       discBtn.classList.remove('hidden');
       discBtn.classList.add('flex');
+    } else if (discBtn) {
+      discBtn.classList.add('hidden');
+      discBtn.classList.remove('flex');
     }
   } catch (e) {
     console.error('Error loading patient:', e);
@@ -5654,11 +6059,13 @@ function _esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&q
 let _odiEventId         = null;
 let _odiAssigned        = []; // [{dtype, device_id, label}] assigned to patient
 let _odiTrainingStopped = false;
+let _odiIsBp            = false;
 
 async function openOtherDeviceIssueModal(ev) {
   _odiEventId         = ev.id;
   _odiAssigned        = [];
   _odiTrainingStopped = !!ev.training_stopped;
+  _odiIsBp            = !!patientData?.brokenProtocolDate;
   setError('odi-error', '');
 
   const now = new Date();
@@ -5683,6 +6090,7 @@ async function openOtherDeviceIssueModal(ev) {
   } else {
     ctx.classList.add('hidden');
   }
+  document.getElementById('odi-bp-banner').classList.toggle('hidden', !_odiIsBp);
 
   // Fetch and set date validation bounds BEFORE showing modal
   const dates = await _fetchIssueValidationDates();
@@ -5729,45 +6137,62 @@ function _odiBuildSections() {
   _odiAssigned.forEach((dev, i) => {
     const sec = document.createElement('div');
     sec.className = 'border border-slate-200 rounded-xl p-4';
-    sec.innerHTML = `
-      <label class="flex items-center gap-2 cursor-pointer select-none">
-        <input type="checkbox" id="odi-on-${i}" class="w-4 h-4 rounded border-slate-300 accent-purple-600">
-        <span class="text-sm font-semibold text-slate-800">${_esc(dev.label)}</span>
-      </label>
-      <div id="odi-form-${i}" class="hidden mt-3 space-y-3 pl-6">
-        <div>
-          <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
-          <div class="space-y-1">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="odi-outcome-${i}" value="visit_required" class="w-4 h-4 accent-purple-600">
-              <span class="text-sm text-slate-700">Visit required — engineer needs to come</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="odi-outcome-${i}" value="resolved_over_call" class="w-4 h-4 accent-purple-600">
-              <span class="text-sm text-slate-700">Resolved over call — no visit needed</span>
-            </label>
-          </div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+    if (_odiIsBp) {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="odi-on-${i}" class="w-4 h-4 rounded border-slate-300 accent-purple-600">
+          <span class="text-sm font-semibold text-slate-800">${_esc(dev.label)}</span>
+        </label>
+        <div id="odi-form-${i}" class="hidden mt-3 pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
           <textarea id="odi-notes-${i}" rows="2"
             class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none"
-            placeholder="Device-specific notes…"></textarea>
+            placeholder="Describe the fault…"></textarea>
         </div>
-      </div>
-    `;
+      `;
+    } else {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="odi-on-${i}" class="w-4 h-4 rounded border-slate-300 accent-purple-600">
+          <span class="text-sm font-semibold text-slate-800">${_esc(dev.label)}</span>
+        </label>
+        <div id="odi-form-${i}" class="hidden mt-3 space-y-3 pl-6">
+          <div>
+            <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+            <div class="space-y-1">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="odi-outcome-${i}" value="visit_required" class="w-4 h-4 accent-purple-600">
+                <span class="text-sm text-slate-700">Visit required — engineer needs to come</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="odi-outcome-${i}" value="resolved_over_call" class="w-4 h-4 accent-purple-600">
+                <span class="text-sm text-slate-700">Resolved over call — no visit needed</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+            <textarea id="odi-notes-${i}" rows="2"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none"
+              placeholder="Device-specific notes…"></textarea>
+          </div>
+        </div>
+      `;
+    }
     container.appendChild(sec);
 
     document.getElementById(`odi-on-${i}`).onchange = function () {
       document.getElementById(`odi-form-${i}`).classList.toggle('hidden', !this.checked);
       if (!this.checked) {
-        document.querySelectorAll(`input[name="odi-outcome-${i}"]`).forEach(r => r.checked = false);
+        if (!_odiIsBp) {
+          document.querySelectorAll(`input[name="odi-outcome-${i}"]`).forEach(r => r.checked = false);
+        }
         document.getElementById(`odi-notes-${i}`).value = '';
       }
     };
 
-    // Pre-check visit_required when this stub was the primary training-stop reason
-    if (_odiTrainingStopped) {
+    // In normal mode only: pre-check visit_required when stub was the primary training-stop reason
+    if (!_odiIsBp && _odiTrainingStopped) {
       document.getElementById(`odi-on-${i}`).checked = true;
       document.getElementById(`odi-form-${i}`).classList.remove('hidden');
       const visitRadio = document.querySelector(`input[name="odi-outcome-${i}"][value="visit_required"]`);
@@ -5815,11 +6240,16 @@ async function saveOtherDeviceIssueCall() {
   const devices = [];
   for (let i = 0; i < _odiAssigned.length; i++) {
     if (!document.getElementById(`odi-on-${i}`)?.checked) continue;
-    const outcome  = document.querySelector(`input[name="odi-outcome-${i}"]:checked`)?.value || '';
     const devNotes = document.getElementById(`odi-notes-${i}`)?.value.trim();
     const dev      = _odiAssigned[i];
-    if (!outcome) { setError('odi-error', `Select an outcome for ${dev.label}.`); return; }
-    devices.push({ device_type: dev.dtype, device_id: dev.device_id, outcome, notes: devNotes || null });
+    if (!devNotes) { setError('odi-error', `Fault description required for ${dev.label}.`); return; }
+    if (_odiIsBp) {
+      devices.push({ device_type: dev.dtype, device_id: dev.device_id, notes: devNotes });
+    } else {
+      const outcome = document.querySelector(`input[name="odi-outcome-${i}"]:checked`)?.value || '';
+      if (!outcome) { setError('odi-error', `Select an outcome for ${dev.label}.`); return; }
+      devices.push({ device_type: dev.dtype, device_id: dev.device_id, outcome, notes: devNotes || null });
+    }
   }
 
   if (!devices.length) { setError('odi-error', 'Select at least one device with an issue.'); return; }
@@ -5828,7 +6258,8 @@ async function saveOtherDeviceIssueCall() {
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue-call`,
     { event_id: _odiEventId, completion_date: completionDate,
-      issue_occur_date: issueOccurDate, notes: notes || null, devices }
+      issue_occur_date: issueOccurDate, notes: notes || null, devices,
+      broken_protocol_mode: _odiIsBp }
   );
   setLoading('odi-save', false);
   if (!ok) { setError('odi-error', data.error || 'Failed to save.'); return; }
@@ -5842,9 +6273,11 @@ async function saveOtherDeviceIssueCall() {
 let _odivEventId   = null;
 let _odivDevices   = []; // devices that need visit (from linked call event)
 let _odivInventory = {}; // available replacement devices by type
+let _odivIsBp      = false;
 
 async function openOtherDeviceIssueVisitModal(ev) {
   _odivEventId = ev.id;
+  _odivIsBp    = !!patientData?.brokenProtocolDate;
   setError('odiv-error', '');
 
   const now = new Date();
@@ -5882,6 +6315,11 @@ async function openOtherDeviceIssueVisitModal(ev) {
   const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
   _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'odiv-completion-date');
 
+  // Toggle BP mode UI
+  document.getElementById('odiv-bp-banner').classList.toggle('hidden', !_odivIsBp);
+  document.getElementById('odiv-normal-section').classList.toggle('hidden', _odivIsBp);
+  document.getElementById('odiv-bp-device-rows').innerHTML = '';
+
   showModal('other-device-issue-visit-modal');
 
   try {
@@ -5897,6 +6335,11 @@ async function openOtherDeviceIssueVisitModal(ev) {
     const visitDevices = (callEvent?.devices || []).filter(d => d.outcome === 'visit_required');
     _odivDevices = visitDevices;
 
+    if (_odivIsBp) {
+      _buildOdivBpDeviceRows(visitDevices);
+      return;
+    }
+
     const container = document.getElementById('odiv-device-rows');
     container.innerHTML = '';
     if (!visitDevices.length) {
@@ -5908,6 +6351,45 @@ async function openOtherDeviceIssueVisitModal(ev) {
     setError('odiv-error', 'Failed to load device inventory.');
     document.getElementById('odiv-device-rows').innerHTML = '';
   }
+}
+
+function _odivBpFaultChange(idx) {
+  const checked = document.getElementById(`odiv-bp-fault-${idx}`)?.checked;
+  document.getElementById(`odiv-bp-desc-wrap-${idx}`)?.classList.toggle('hidden', !checked);
+}
+
+function _buildOdivBpDeviceRows(devices) {
+  const container = document.getElementById('odiv-bp-device-rows');
+  container.innerHTML = '';
+  if (!devices.length) {
+    container.innerHTML = '<p class="text-sm text-slate-400 italic">No devices flagged for visit.</p>';
+    return;
+  }
+  devices.forEach((d, idx) => {
+    const dtype   = d.device_type || d.dtype;
+    const deviceId = d.device_id;
+    const label   = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+    const rowDiv  = document.createElement('div');
+    rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+    rowDiv.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-semibold text-slate-800">${_esc(label)}</span>
+        <span class="text-xs text-slate-500">Device: <span class="font-mono">${_esc(deviceId)}</span></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" id="odiv-bp-fault-${idx}" class="w-4 h-4 accent-amber-600"
+          onchange="_odivBpFaultChange(${idx})">
+        <label for="odiv-bp-fault-${idx}" class="text-sm text-slate-700 cursor-pointer">This device has a fault</label>
+      </div>
+      <div id="odiv-bp-desc-wrap-${idx}" class="hidden pl-2 border-l-2 border-amber-200">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+        <textarea id="odiv-bp-desc-${idx}" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
+          placeholder="Describe the fault…"></textarea>
+      </div>
+    `;
+    container.appendChild(rowDiv);
+  });
 }
 
 function _odivBuildRow(container, d, idx) {
@@ -5985,10 +6467,38 @@ async function saveOtherDeviceIssueVisit() {
     return;
   }
   const minDate = document.getElementById('odiv-completion-date').min;
-  if (minDate && completionDate.split('T')[0] < minDate) {
-    setError('odiv-error', `Visit date must be on or after issue occurred date (${minDate}).`);
+  if (minDate && completionDate.split('T')[0] < minDate.split('T')[0]) {
+    setError('odiv-error', `Visit date must be on or after issue occurred date (${minDate.split('T')[0]}).`);
     return;
   }
+
+  // ── Broken-protocol mode ──────────────────────────────────────────────────
+  if (_odivIsBp) {
+    const deviceFaults = [];
+    for (let i = 0; i < _odivDevices.length; i++) {
+      const d       = _odivDevices[i];
+      const dtype   = d.device_type || d.dtype;
+      const hasFault = document.getElementById(`odiv-bp-fault-${i}`)?.checked;
+      if (hasFault) {
+        const desc = document.getElementById(`odiv-bp-desc-${i}`)?.value.trim() || '';
+        const label = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+        if (!desc) { setError('odiv-error', `Please describe the fault for ${label} ${d.device_id}.`); return; }
+        deviceFaults.push({ device_type: dtype, device_id: d.device_id, notes: desc });
+      }
+    }
+    setLoading('odiv-save', true);
+    const { ok, data } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue-visit`,
+      { event_id: _odivEventId, completion_date: completionDate, notes: notes || null,
+        device_faults: deviceFaults, broken_protocol_mode: true }
+    );
+    setLoading('odiv-save', false);
+    if (!ok) { setError('odiv-error', data.error || 'Failed to save.'); return; }
+    hideModal('other-device-issue-visit-modal');
+    loadPatientEvents();
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   const outcomes = [];
   for (let i = 0; i < _odivDevices.length; i++) {

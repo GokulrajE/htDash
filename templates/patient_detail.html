@@ -65,7 +65,7 @@
         <i class="fas fa-phone-alt text-[11px]"></i> Patient Call
       </button>
 
-      <button id="discontinue-btn" onclick="openDiscontinueModal()"
+      <button id="discontinue-btn" onclick="_initiateDiscontinuation()"
         class="hidden items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700">
         <i class="fas fa-ban text-[11px]"></i> Discontinue Patient
       </button>
@@ -532,21 +532,38 @@
     </div>
 
     <!-- ── NO: training not completed ───────────────────────────────── -->
-    <div id="act-training-no-section" class="hidden">
-      <div class="mb-4">
+    <div id="act-training-no-section" class="hidden space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-2">Why was training not completed? <span class="text-red-500">*</span></label>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" id="act-no-reason-ae"
+            onclick="_setActNoPrimaryReason('adverse_event')"
+            class="px-3 py-1.5 rounded-lg border text-sm font-medium border-slate-200 text-slate-600 hover:bg-slate-50">Adverse Event</button>
+          <button type="button" id="act-no-reason-robot"
+            onclick="_setActNoPrimaryReason('robot_issue_call')"
+            class="px-3 py-1.5 rounded-lg border text-sm font-medium border-slate-200 text-slate-600 hover:bg-slate-50">Robot Issue</button>
+          <button type="button" id="act-no-reason-odi"
+            onclick="_setActNoPrimaryReason('other_device_issue_call')"
+            class="px-3 py-1.5 rounded-lg border text-sm font-medium border-slate-200 text-slate-600 hover:bg-slate-50">Other Device Issue</button>
+          <button type="button" id="act-no-reason-other"
+            onclick="_setActNoPrimaryReason('other')"
+            class="px-3 py-1.5 rounded-lg border text-sm font-medium border-slate-200 text-slate-600 hover:bg-slate-50">Other</button>
+        </div>
+      </div>
+      <div>
         <label class="block text-sm font-medium text-slate-700 mb-2">Visit Date <span class="text-red-500">*</span></label>
         <input type="datetime-local" id="act-no-visit-date"
                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
       </div>
-      <div class="mb-4">
-        <label class="block text-sm font-medium text-slate-700 mb-2">Notes <span class="text-red-500">*</span> <span class="text-slate-400 font-normal text-xs">— explain why training was not completed</span></label>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-2">Notes <span id="act-no-notes-star" class="text-slate-400 font-normal text-xs"></span></label>
         <textarea id="act-no-notes" rows="3"
                   class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                  placeholder="Required — explain why training was not completed…"></textarea>
+                  placeholder="Add any notes…"></textarea>
       </div>
-      <div class="mb-4 border-t border-slate-100 pt-4">
-        <p class="text-sm font-semibold text-slate-700 mb-3">What came out of this visit?</p>
-        <div class="mb-3">
+      <div class="border-t border-slate-100 pt-4">
+        <p class="text-sm font-semibold text-slate-700 mb-3">What else came out of this visit?</p>
+        <div class="mb-3" id="act-no-trigger-ae-wrap">
           <label class="flex items-center gap-2 cursor-pointer select-none">
             <input type="checkbox" id="act-no-trigger-adverse" onchange="_actNoToggleSubform('adverse')" class="w-4 h-4 rounded border-slate-300 text-red-500 focus:ring-red-300">
             <span class="text-sm font-medium text-slate-700">Adverse Event</span>
@@ -586,26 +603,41 @@
 
 <!-- Discontinue -->
 <div id="discontinue-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
-  <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
-    <div class="flex items-center justify-between mb-4">
+  <div class="bg-white rounded-2xl shadow-xl max-w-md w-full flex flex-col" style="max-height:90vh">
+    <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
       <h3 class="text-xl font-bold text-slate-800">Discontinue Patient</h3>
       <button onclick="hideModal('discontinue-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
-    <div class="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
-      <p class="text-xs text-red-500 font-medium mb-0.5">Patient</p>
-      <p id="discontinue-homer-id" class="text-base font-semibold text-slate-800"></p>
+    <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
+      <div class="px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
+        <p class="text-xs text-red-500 font-medium mb-0.5">Patient</p>
+        <p id="discontinue-homer-id" class="text-base font-semibold text-slate-800"></p>
+      </div>
+      <p class="text-sm text-slate-600">Once completed, this patient record becomes read-only. All device assignments will be closed automatically.</p>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Discontinuation Date/Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="disc-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-300">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Reason <span class="text-red-500">*</span></label>
+        <textarea id="discontinue-reason" rows="4" required
+                  class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+                  placeholder="Enter reason for discontinuation…"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <textarea id="discontinue-notes" rows="2"
+                  class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
+                  placeholder="Additional notes…"></textarea>
+      </div>
+      {{ attachment_section('disc') }}
     </div>
-    <p class="text-sm text-slate-600 mb-4">This will permanently discontinue the patient from the study. This action cannot be undone.</p>
-    <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">Reason / Comments <span class="text-red-500">*</span></label>
-      <textarea id="discontinue-reason" rows="6" required
-                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-400 resize-none"
-                placeholder="Enter reason for discontinuation…"></textarea>
-    </div>
-    <p id="discontinue-error" class="text-sm text-red-500 hidden mb-3"></p>
-    <div class="flex gap-3">
-      <button type="button" onclick="hideModal('discontinue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
-      <button type="button" id="discontinue-submit" onclick="submitDiscontinue()" class="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600">Discontinue</button>
+    <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
+      <p id="discontinue-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <div class="flex gap-3">
+        <button type="button" onclick="hideModal('discontinue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button type="button" id="discontinue-submit" onclick="saveDiscontinuation()" class="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600">Discontinue</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1255,10 +1287,12 @@
         <label class="block text-sm font-medium text-slate-700 mb-1">Action taken <span class="text-red-500">*</span></label>
         <textarea id="ae-action-taken" rows="3" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="What action was taken?"></textarea>
       </div>
-      <label class="flex items-center gap-2 cursor-pointer select-none">
-        <input type="checkbox" id="ae-paused" class="w-4 h-4 rounded border-slate-300">
-        <span class="text-sm text-slate-700">Training paused as a result</span>
-      </label>
+      <div id="ae-paused-wrap">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="ae-paused" class="w-4 h-4 rounded border-slate-300">
+          <span class="text-sm text-slate-700">Training paused as a result</span>
+        </label>
+      </div>
       <!-- Follow-up visit scheduling -->
       <div class="border border-slate-200 rounded-xl p-4 space-y-3">
         <label class="flex items-center gap-2 cursor-pointer select-none">
@@ -1302,6 +1336,9 @@
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
       <div id="ric-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
+      <div id="ric-bp-banner" class="hidden px-4 py-2 rounded-xl text-sm font-medium bg-amber-50 text-amber-700 border border-amber-200">
+        <i class="fas fa-exclamation-triangle mr-1"></i>Training is broken protocol — document faulty devices only. No outcome decision needed.
+      </div>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Call Date/Time <span class="text-red-500">*</span></label>
         <input type="datetime-local" id="ric-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
@@ -1340,6 +1377,7 @@
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
       <div id="riv-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
+      <div id="riv-bp-banner" class="hidden px-4 py-2 rounded-xl text-sm font-medium bg-amber-50 text-amber-800 border border-amber-200">Broken Protocol — Fault Documentation Only. Record which devices are faulty; no device swaps will occur.</div>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Visit Date/Time <span class="text-red-500">*</span></label>
         <input type="datetime-local" id="riv-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
@@ -1389,6 +1427,28 @@
         <p class="text-sm font-medium text-slate-700 mb-2">Adverse event resolutions <span class="text-red-500">*</span></p>
         <div id="aef-ae-rows" class="space-y-3"></div>
       </div>
+      <!-- Follow-up visit scheduling -->
+      <div id="aef-schedule-visit-wrap" class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="aef-schedule-visit" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a follow-up visit</span>
+        </label>
+        <div id="aef-visit-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="aef-visit-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+      </div>
+      <!-- Clinical visit scheduling -->
+      <div id="aef-schedule-clinical-wrap" class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="aef-schedule-clinical" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a clinical visit</span>
+        </label>
+        <div id="aef-clinical-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="aef-clinical-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+      </div>
       {{ attachment_section('aef') }}
     </div>
     <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
@@ -1427,6 +1487,28 @@
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Visit notes</label>
         <textarea id="aefv-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Optional visit-level notes…"></textarea>
+      </div>
+      <!-- Follow-up visit scheduling -->
+      <div id="aefv-schedule-visit-wrap" class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="aefv-schedule-visit" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a follow-up visit</span>
+        </label>
+        <div id="aefv-visit-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="aefv-visit-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+      </div>
+      <!-- Clinical visit scheduling -->
+      <div id="aefv-schedule-clinical-wrap" class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="aefv-schedule-clinical" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a clinical visit</span>
+        </label>
+        <div id="aefv-clinical-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="aefv-clinical-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
       </div>
       {{ attachment_section('aefv') }}
     </div>
@@ -1468,6 +1550,28 @@
         <label class="block text-sm font-medium text-slate-700 mb-1">Visit notes</label>
         <textarea id="aecv-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Optional visit-level notes…"></textarea>
       </div>
+      <!-- Follow-up visit scheduling -->
+      <div id="aecv-schedule-visit-wrap" class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="aecv-schedule-visit" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a follow-up visit</span>
+        </label>
+        <div id="aecv-visit-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="aecv-visit-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+      </div>
+      <!-- Clinical visit scheduling -->
+      <div id="aecv-schedule-clinical-wrap" class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="aecv-schedule-clinical" class="w-4 h-4 rounded border-slate-300 accent-blue-600">
+          <span class="text-sm font-medium text-slate-700">Schedule a clinical visit</span>
+        </label>
+        <div id="aecv-clinical-date-wrap" class="hidden pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Target date/time <span class="text-red-500">*</span></label>
+          <input type="datetime-local" id="aecv-clinical-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+      </div>
       {{ attachment_section('aecv') }}
     </div>
     <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
@@ -1490,19 +1594,24 @@
     </div>
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
       <div id="rriv-context-banner" class="px-4 py-2 rounded-xl text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200"></div>
+      <div id="rriv-bp-banner" class="hidden px-4 py-2 rounded-xl text-sm font-medium bg-amber-50 text-amber-800 border border-amber-200">Broken Protocol — Fault Documentation Only. Record which devices are faulty; no replacements will be assigned.</div>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Visit Date/Time <span class="text-red-500">*</span></label>
         <input type="datetime-local" id="rriv-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" required>
       </div>
-      <!-- Per taken-back device rows (built by JS) -->
-      <div id="rriv-device-rows" class="space-y-3"></div>
-      <!-- Optional other device section (built by JS) -->
-      <div id="rriv-other-device-section" class="hidden"></div>
-      <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">Can resume from <span class="text-red-500">*</span></label>
-        <p class="text-xs text-slate-500 mb-1">Earliest date training can resume.</p>
-        <input type="date" id="rriv-resume-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+      <div id="rriv-normal-section">
+        <!-- Per taken-back device rows (built by JS) -->
+        <div id="rriv-device-rows" class="space-y-3"></div>
+        <!-- Optional other device section (built by JS) -->
+        <div id="rriv-other-device-section" class="hidden"></div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Can resume from <span class="text-red-500">*</span></label>
+          <p class="text-xs text-slate-500 mb-1">Earliest date training can resume.</p>
+          <input type="date" id="rriv-resume-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
       </div>
+      <!-- BP fault-documentation rows (built by JS in BP mode) -->
+      <div id="rriv-bp-device-rows" class="space-y-3"></div>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
         <textarea id="rriv-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Notes about the replacement visit…"></textarea>
@@ -1530,6 +1639,9 @@
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
       <!-- Context banner -->
       <div id="odi-context" class="hidden px-4 py-3 bg-purple-50 rounded-xl border border-purple-100 text-sm text-slate-600"></div>
+      <div id="odi-bp-banner" class="hidden px-4 py-2 rounded-xl text-sm font-medium bg-amber-50 text-amber-700 border border-amber-200">
+        <i class="fas fa-exclamation-triangle mr-1"></i>Training is broken protocol — document faulty devices only. No outcome decision needed.
+      </div>
       <!-- Call date -->
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Call Date <span class="text-red-400">*</span></label>
@@ -1569,6 +1681,7 @@
     <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
       <!-- Context banner -->
       <div id="odiv-context" class="hidden px-4 py-3 bg-purple-50 rounded-xl border border-purple-100 text-sm text-slate-600"></div>
+      <div id="odiv-bp-banner" class="hidden px-4 py-2 rounded-xl text-sm font-medium bg-amber-50 text-amber-800 border border-amber-200">Broken Protocol — Fault Documentation Only. Record which devices are faulty; no device swaps will occur.</div>
       <!-- Issue occur date (read-only from call) -->
       <div id="odiv-issue-occur-row" class="hidden">
         <label class="block text-sm font-medium text-slate-700 mb-1">Issue First Occurred</label>
@@ -1579,8 +1692,12 @@
         <label class="block text-sm font-medium text-slate-700 mb-1">Visit Date <span class="text-red-400">*</span></label>
         <input type="datetime-local" id="odiv-completion-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-300" required>
       </div>
-      <!-- Per-device outcome rows -->
-      <div id="odiv-device-rows" class="space-y-3"></div>
+      <!-- Per-device outcome rows (normal mode) -->
+      <div id="odiv-normal-section">
+        <div id="odiv-device-rows" class="space-y-3"></div>
+      </div>
+      <!-- BP fault-documentation rows (built by JS in BP mode) -->
+      <div id="odiv-bp-device-rows" class="space-y-3"></div>
       <!-- Notes -->
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>

@@ -178,7 +178,7 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 
   `_deriveTransitions(patient, events)` returns a `Map<event_id, badge>` built once when the timeline renders. Synthetic events (Enrolled, A0) never carry badges.
 
-  Data from the `complete` array in `GET /api/patients/<homer_id>/events` (all fields except `id` are returned).
+  Data from the `complete` array in `GET /api/patients/<homer_id>/events` (all fields except `id` are returned). This includes both protocol events from `protocol_events.json`'s `complete[]` array and completed free events. The `free.discontinuation` singleton is also included (as `protocol_event_id: "discontinuation"`, `event_name: "Patient Discontinued"`) so the discontinuation entry appears in the timeline.
 
 - **ADL tab** — shows the ADL prescription history for the patient. Each prescription is a card with a coloured header (day 01 = blue-400, day 15 = blue-600). Each exercise row shows: numbered circle badge · exercise name · blocks × reps (right-aligned). If the corresponding AG watch timing event is complete, the recorded `HH:MM:SS → HH:MM:SS` window appears below blocks × reps in the same row. Data is fetched in parallel via:
   - `GET /api/patients/<homer_id>/prescription/adl_prescription_d01` (or `d15`)
@@ -355,9 +355,10 @@ Each action is defined once here. Pages above reference which actions apply to t
     - Notes (textarea, optional)
     - **Triggered events section** — user can optionally flag an adverse event, robot issue (exp only) as a consequence of this visit. Each toggle shows an info note only — no sub-form fields. Watch Record toggle always shown (first watch record is seeded on activation).
   - **If NO (training not completed):**
+    - **Primary reason** (pill buttons, required): `Adverse Event` / `Robot Issue` (exp only) / `Other Device Issue` (exp only) / `Other`. Same behavior as home visit D02/D03 "No" path — selecting a non-"Other" reason auto-triggers that event type with `training_stopped: true`; its secondary toggle is hidden to prevent duplicate stubs.
     - Visit Date (datetime, required; cannot be in the future)
-    - Notes (textarea, **mandatory** — therapist must explain why training was not completed)
-    - **Triggered events section** — adverse event and robot issue (exp only) toggles only. No watch record toggle (patient not yet activated, no watches assigned).
+    - Notes (textarea; **mandatory only when primary reason = Other**, optional otherwise)
+    - **Triggered events section** — secondary adverse event and robot issue (exp only) toggles. The toggle matching the primary reason is hidden. No watch record toggle (patient not yet activated, no watches assigned).
 - Server actions — **training completed path:**
   - Verify `depends_on` prerequisites are met
   - Update `<homer_id>.json` with `activationDate` and `vcgGroup` (control patients only)
@@ -368,10 +369,11 @@ Each action is defined once here. Pages above reference which actions apply to t
   - For triggered `watch_record`: stamp `triggered_by` and update `scheduled_date = [now, now]` on the open chain entry
   - Log message: `Patient activated`
 - Server actions — **training not completed path:**
-  - Append `activation_attempt` entry to `free.activation_attempt[]` in `protocol_events.json` with `visit_date`, `notes`, `triggered: [...]`
+  - Append `activation_attempt` entry to `free.activation_attempt[]` in `protocol_events.json` with `visit_date`, `completion_date` (= visit_date), `primary_reason`, `notes`, `filed_at`, `triggered: [...]`
   - `activation` protocol event remains in `incomplete` — nothing changes on patient JSON
-  - For triggered `adverse_event`: append stub to `incomplete` with `triggered_by: {type: "activation_attempt", id: <attempt_entry_id>}`
-  - For triggered robot issue: append `robot_issue_call` stub to `incomplete` with `triggered_by: {type: "activation_attempt", id: <attempt_entry_id>}`
+  - If `primary_reason` is not `"other"`: auto-append that event type stub to `incomplete` with `triggered_by: {type: "activation_attempt", id: <attempt_entry_id>}` and `training_stopped: true`. This stub is the primary reason event and is not duplicated by the secondary trigger section.
+  - For any secondary triggered events (those whose toggle was not hidden by the primary reason): append stubs to `incomplete` with `triggered_by: {type: "activation_attempt", id: <attempt_entry_id>}`.
+  - `activation_attempt` entries are included in `_FREE_EVENT_NAMES` and appear in the timeline and completed-events count.
   - Log message: `Activation attempt recorded — training not completed`
 - UI behaviour: if prerequisites are unmet, the event row is rendered as a non-clickable `<div>` with a muted lock icon and amber "Needs: \<blocking event name\>" badge
 - **Event row deadline label:** the activation event row uses "Expires today" / "Expires in X days" instead of the standard "Due today" / "Xd left" label. Activation is the only event with this label — it is a true hard cutoff (after Day 5, activation is permanently impossible). All other windowed events use the standard overdue/upcoming labels.
@@ -404,14 +406,43 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ### Discontinue
 
-- Trigger: "Discontinue" button on patient detail
+Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is created via a double-confirmed button click, then (2) the stub is completed via the discontinuation modal. Broken-protocol patients skip step 1 — they use a synthetic `discontinuation_reminder` event instead.
+
+#### "Discontinue Patient" button
+
+- Trigger: "Discontinue Patient" button in the patient detail header
 - Allowed users: `admin`
-- Applicable states: `inactive`, `broken_protocol`, `active`, `paused`, `training_completed`, `a1_completed`
-- Modal fields:
-  - Reason / Comments (textarea, required)
+- **Visible when:** patient status is NOT `broken_protocol` AND no real `discontinuation` stub exists in `incomplete`
+- **Hidden when:** a real `discontinuation` stub already exists in `incomplete` (avoid duplicate stubs), OR patient is `broken_protocol` (use `discontinuation_reminder` instead), OR patient is already `discontinued` or `all_completed` or `pre_discontinued`
+- Applicable states where button is visible: `inactive`, `active`, `paused`, `training_completed`, `a1_completed`
+- On click — double confirmation popup:
+  1. "Discontinuing a patient is a major and irreversible event. Are you sure you want to proceed?"
+  2. "This will permanently close the patient record once the discontinuation event is completed. Confirm?"
+- On double confirm: server creates a `discontinuation` stub in `incomplete` with `scheduled_date: [now, now]`; button disappears; stub appears in the overdue panel as a clickable event row
+
+#### `discontinuation_reminder` (synthetic event — broken_protocol only)
+
+- Injected by both event APIs (`/api/patients/<homer_id>/events` and `/api/dashboard/events`) when:
+  1. Patient status is `broken_protocol`
+  2. No real `discontinuation` stub or entry exists in `free.discontinuation`
+- Opens the discontinuation modal directly — no extra confirmation step (broken protocol is already a confirmed state requiring no additional double-check)
+- The `discontinuation_reminder` is a synthetic event only; it is never written to disk
+
+#### Discontinuation modal
+
+- Trigger: clicking the real `discontinuation` stub in the overdue panel, **or** clicking the `discontinuation_reminder` synthetic event row (broken_protocol path)
+- Allowed users: `admin`
+- Modal: `discontinuation-modal`
+  - Context banner (read-only): "Once saved, this patient record becomes read-only. All device assignments will be closed automatically."
+  - Discontinuation Date (datetime, required; cannot be in the future)
+  - Reason (textarea, required)
+  - Notes (textarea, optional)
+  - Attachment (optional PDF)
 - Server actions:
-  - Update `<homer_id>.json` with `discontinuationDate`
-  - Append `discontinuation` record to `protocol_events.json` free section
+  - If triggered from real stub: remove the stub from `incomplete`
+  - Set `discontinuationDate` on `<homer_id>.json`
+  - Close all device assignments for this patient: for every device type, write `end_date: now` to every open assignment entry in the site-level inventory; clear `has_issue: false` on all devices that were assigned to this patient (devices retain their `has_issue` history in device events but the flag is cleared so they become available again)
+  - Append completed entry to `free.discontinuation` with `completion_date`, `filed_at`, `reason`, `notes`, `attachment`
 - Log message: `Patient discontinued`
 
 ---
@@ -625,12 +656,14 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Allowed users: `admin`, `therapist`
 - Purpose: records a therapist visit where activation was attempted but training could not be completed. A ghost/free event — not planned in advance, can happen multiple times. `activation` protocol event remains `incomplete`.
 - Modal fields (rendered inline within the Activate modal when training not completed):
+  - **Primary reason** (pill buttons, required): `Adverse Event` / `Robot Issue` (exp only) / `Other Device Issue` (exp only) / `Other`
   - Visit Date (datetime, required; cannot be in the future)
-  - Notes (textarea, **mandatory** — must explain why training was not completed)
-  - **Triggered events section** — adverse event and robot issue (exp only) toggles. No watch record (patient not yet activated).
+  - Notes (textarea; **mandatory only when primary reason = Other**, optional otherwise)
+  - **Triggered events section** — secondary adverse event, robot issue (exp only) toggles. The toggle matching the primary reason is hidden. No watch record (patient not yet activated).
 - Storage: appended to `free.activation_attempt[]` in `protocol_events.json`
-- Entry fields: `id`, `visit_date`, `notes`, `filed_at`, `triggered: [...]`, `triggered_by: null`
-- Consequence: none immediate — `activation` stays in `incomplete` and follows its normal window expiry logic. If an AE is triggered with `training_blocked: true`, `activation` goes On Hold during the pause and becomes active or broken-protocol when the pause clears, depending on whether the window is still open.
+- Entry fields: `id`, `visit_date`, `completion_date` (= visit_date), `primary_reason`, `notes`, `filed_at`, `triggered: [...]`, `triggered_by: null`
+- Consequence: none immediate — `activation` stays in `incomplete` and follows its normal window expiry logic. If an AE is triggered with `training_stopped: true`, `activation` goes On Hold during the pause and becomes active or broken-protocol when the pause clears, depending on whether the window is still open.
+- Appears in timeline and completed-events count.
 - Log message: `Activation attempt recorded — training not completed`
 
 ---
@@ -730,7 +763,7 @@ Each action is defined once here. Pages above reference which actions apply to t
   - Event Date (datetime, required; cannot be in the future)
   - Description (textarea, required)
   - Action taken (textarea, required)
-  - Training blocked as a result (checkbox) — when checked, `trainingPausedDate` is set and the patient transitions to `paused`
+  - Training blocked as a result (checkbox) — **only shown when `activationDate` is set** (i.e. patient has been successfully activated at least once). Hidden for pre-activation AEs (triggered from activation attempts) because there is no active training to pause. When shown and checked, `trainingPausedDate` is set and the patient transitions to `paused`. When the stub carries `training_stopped: true`, this checkbox is pre-checked (only applicable post-activation).
   - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past)
   - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past)
   - Attachment (optional PDF)
@@ -773,6 +806,9 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: `robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue call outcome is "visit required")
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
+
+#### Normal mode (patient is NOT `broken_protocol`)
+
 - Modal: `robot-issue-visit-modal`
   - **Context banner** (read-only): "Robot issue call on \<date\>"
   - Visit Date/Time (datetime, required; cannot be in the future)
@@ -800,6 +836,104 @@ Each action is defined once here. Pages above reference which actions apply to t
     - If **Neither**: no device change, no pause, no fault report
   - Append completed entry to `free.robot_issue_visit` with `completion_date`, `filed_at`, `device_outcomes` (per device: `device`, `outcome`, `swap_type`, `old_device_id`, `new_device_id`, `notes`), `notes`, `triggered_by`, `attachment`
 - Log message: `Robot issue visit recorded`; if any device taken back with no replacement: also `Training paused — robot issue`
+
+#### Broken-protocol mode (patient is `broken_protocol`)
+
+The goal is to document which devices are faulty. No device swaps or assignment changes occur — assignments remain open until the patient is discontinued.
+
+- Modal: same `robot-issue-visit-modal` but with a "Broken Protocol — Fault Documentation Only" banner
+- Visit Date/Time (datetime, required; cannot be in the future)
+- **Per device** (Pluto and Mars):
+  - Device name and current device ID (read-only labels)
+  - **Has fault** (checkbox)
+  - If checked: Fault description (textarea, required)
+- Additional notes (textarea, optional)
+- Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - For each device where **Has fault** is checked: set `has_issue: true` in inventory; append a `faulty` device event
+  - Device assignments are NOT closed (they stay open until discontinuation)
+  - No pause mechanics (patient is already broken_protocol; `trainingPausedDate` is not modified)
+  - Append completed entry to `free.robot_issue_visit` with `completion_date`, `filed_at`, `broken_protocol_mode: true`, `device_faults` (per faulted device: `device`, `notes`), `notes`, `triggered_by`, `attachment`
+- Log message: `Robot issue visit recorded (broken protocol — fault documentation only)`
+
+---
+
+### Other Device Issue — Engineer Call (`other_device_issue_call`)
+
+- Trigger: trigger toggle in primary training modals (activation, home_visit_d02/d03/d15, followup_call_d07/d21, patient_call). Toggle pre-checked and secondary outcome fields pre-set to "Visit Required" when created from the training-not-done "Other Device Issue" primary reason path.
+- Allowed users: `admin`, `engineer`
+- Experimental patients only
+- Modal: `other-device-issue-call-modal`
+  - **Context banner** (read-only): if triggered from a primary event, shows "Triggered by: \<event name\>"
+  - **Issue First Occurred** (datetime, required; min = patient's `activationDate`; max = today) — when the issue was first noticed, distinct from the call date
+  - Call Date/Time (datetime, required; min = issue_occur_date; max = today)
+  - **Per device** (Modem, Laptop — each with a checkbox):
+    - If checked, reveals inline sub-form:
+      - **Outcome** (radio, required): Resolved over call / Visit required
+      - **Notes** (textarea, required)
+  - **Overall notes** (textarea, optional)
+  - Attachment (optional PDF)
+- **Visit required** is derived: if any checked device has outcome = `visit_required`, an `other_device_issue_visit` stub is created.
+- Server actions:
+  - Remove the stub from `incomplete`
+  - For each checked device: set `has_issue: true` in inventory; append a `faulty` device event with `issue_occur_date`
+  - For devices resolved over call: clear `has_issue: false` immediately
+  - Append completed entry to `free.other_device_issue_call` with `completion_date`, `filed_at`, `issue_occur_date`, `notes`, `devices` (per device: `device`, `outcome`, `notes`), `visit_required` (derived), `triggered_by`, `attachment`
+  - If `visit_required`: create one `other_device_issue_visit` stub in `incomplete` with `triggered_by: {type: "other_device_issue_call", id: <event_id>}`, `scheduled_date: [now, now]`
+- Log message: `Other device issue call recorded`; if visit required: also `Other device issue visit required`
+
+---
+
+### Other Device Issue — Engineer Visit (`other_device_issue_visit`)
+
+- Trigger: `other_device_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when an other device issue call outcome is "visit required")
+- Allowed users: `admin`, `engineer`
+- Experimental patients only
+
+#### Normal mode (patient is NOT `broken_protocol`)
+
+- Modal: `other-device-issue-visit-modal`
+  - **Context banner** (read-only): "Other device issue call on \<date\>"
+  - Visit Date/Time (datetime, required; min = issue_occur_date from triggering call; max = today)
+  - **Per device** (Modem, Laptop — both always shown; engineer records an outcome for every device):
+    - Device name and current device ID (read-only labels)
+    - **Outcome** (radio, required):
+      - **Repaired** — device fixed; stays assigned; `has_issue` cleared; no inventory change
+        - Notes (textarea, required)
+      - **Replaced** — device swapped:
+        - New device (dropdown): available devices of same type + null ("No device available")
+        - Notes (textarea, required)
+      - **Neither** — no action taken for this device:
+        - Notes (textarea, required)
+  - Additional notes (textarea, optional)
+  - Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - For each device:
+    - If **Repaired**: clear `has_issue: false` in inventory; append a `repaired` device event
+    - If **Replaced + new device selected**: close current assignment; clear `has_issue` on old device; open new assignment for new device; append `faulty` and `assign` device events
+    - If **Replaced + null**: close current assignment; clear `has_issue` on old device; no new assignment
+    - If **Neither**: no device change
+  - Append completed entry to `free.other_device_issue_visit` with `completion_date`, `filed_at`, `device_outcomes` (per device: `device`, `outcome`, `old_device_id`, `new_device_id`, `notes`), `notes`, `triggered_by`, `attachment`
+  - Does NOT set `trainingPausedDate` (other device issues do not pause training)
+- Log message: `Other device issue visit recorded`
+
+#### Broken-protocol mode (patient is `broken_protocol`)
+
+- Modal: same `other-device-issue-visit-modal` with "Broken Protocol — Fault Documentation Only" banner
+- Visit Date/Time (datetime, required; max = today)
+- **Per device** (Modem, Laptop):
+  - **Has fault** (checkbox)
+  - If checked: Fault description (textarea, required)
+- Additional notes (textarea, optional)
+- Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - For each faulted device: set `has_issue: true` in inventory; append a `faulty` device event
+  - Device assignments are NOT closed (stay open until discontinuation)
+  - Append completed entry to `free.other_device_issue_visit` with `completion_date`, `filed_at`, `broken_protocol_mode: true`, `device_faults`, `notes`, `triggered_by`, `attachment`
+- Log message: `Other device issue visit recorded (broken protocol — fault documentation only)`
 
 ---
 
@@ -839,6 +973,9 @@ Each action is defined once here. Pages above reference which actions apply to t
 - Trigger: `resolve_robot_issue_visit` event row on patient detail — only appears when a stub exists in `incomplete` (created when a robot issue visit swaps a device with no replacement available)
 - Allowed users: `admin`, `engineer`
 - Experimental patients only
+
+#### Normal mode (patient is NOT `broken_protocol`)
+
 - Modal: `resolve-robot-issue-visit-modal`
   - **Context banner** (read-only): "Robot issue visit on \<date\> — device(s) taken back without replacement"
   - Visit Date/Time (datetime, required; cannot be in the future)
@@ -868,6 +1005,24 @@ Each action is defined once here. Pages above reference which actions apply to t
   - If no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain: compute `cumulativePauseDays`; clear `trainingPausedDate`; if total > 10, patient transitions to `broken_protocol`
   - If `adverse_event_followup` stubs remain: no change to pause fields
 - Log message: `Robot issue resolved — replacement device assigned`
+
+#### Broken-protocol mode (patient is `broken_protocol`)
+
+Same fault-documentation approach as `robot_issue_visit` broken-protocol mode. No replacement device assignment occurs.
+
+- Modal: same `resolve-robot-issue-visit-modal` with "Broken Protocol — Fault Documentation Only" banner
+- Visit Date/Time (datetime, required; cannot be in the future)
+- **Per taken-back device**: Device name + fault description (textarea, required)
+- **Other device** (optional): Checkbox "Also attended to \<device\>" — if checked, fault description only (no outcome options)
+- Additional notes (textarea, optional)
+- Attachment (optional PDF)
+- Server actions:
+  - Remove the stub from `incomplete`
+  - For each taken-back device and any attended other device: set `has_issue: true` in inventory; append a `faulty` device event
+  - Device assignments are NOT opened or closed (assignments remain as-is until discontinuation)
+  - `can_resume_from` not collected; pause fields not modified (patient is already broken_protocol)
+  - Append completed entry to `free.resolve_robot_issue_visit` with `completion_date`, `filed_at`, `broken_protocol_mode: true`, `device_faults`, `notes`, `attachment`
+- Log message: `Robot issue visit recorded (broken protocol — fault documentation only)`
 
 ---
 

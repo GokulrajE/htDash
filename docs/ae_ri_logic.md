@@ -139,6 +139,7 @@ The therapist opens the `adverse_event` stub row, fills in description, action t
   }
   ```
 - `alias` is assigned by the server at this point: `len(free.adverse_event)` before appending gives the 0-based index; alias = `f"AE{index + 1:02d}"`.
+- The `training_blocked` checkbox is **only shown in the AE modal when the patient has a valid `activationDate`**. For pre-activation AEs (triggered from an activation attempt), the checkbox is hidden and `training_blocked` is always stored as `false`.
 - If `training_blocked`: set `trainingPausedDate` on patient JSON; append a new open entry to `pauseHistory`.
 - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete`.
 - If clinical visit scheduled: create `adverse_event_clinical_visit` stub in `incomplete`.
@@ -349,7 +350,7 @@ The therapist must select one primary reason before saving:
 
 | Reason | Stub created | `training_stopped` flag |
 |---|---|---|
-| `Adverse Event` | `adverse_event` stub in `incomplete` | `training_stopped: true` on stub → AE modal pre-checks `training_blocked` |
+| `Adverse Event` | `adverse_event` stub in `incomplete` | `training_stopped: true` on stub → AE modal pre-checks `training_blocked` **only if `activationDate` is set**; otherwise `training_blocked` checkbox is hidden |
 | `Robot Issue` *(experimental)* | `robot_issue_call` stub | `training_stopped: true` → RI call modal pre-checks `visit_required` for all devices |
 | `Other Device Issue` *(experimental)* | `other_device_issue_call` stub | `training_stopped: true` → ODI call modal pre-checks `visit_required` for all devices |
 | `Other` | No stub | Notes mandatory |
@@ -563,6 +564,11 @@ Only these event types appear in the overdue section and can be opened:
 | `adverse_event_followup` | Active follow-up call stubs |
 | `adverse_event_followup_visit` | Active follow-up visit stubs |
 | `adverse_event_clinical_visit` | Active clinical visit stubs |
+| `robot_issue_call` | Outstanding RI call stubs — must still be filed |
+| `robot_issue_visit` | Outstanding RI visit stubs — runs in broken-protocol mode (fault doc only) |
+| `resolve_robot_issue_visit` | Outstanding resolve stubs — runs in broken-protocol mode |
+| `other_device_issue_call` | Outstanding ODI call stubs — must still be filed |
+| `other_device_issue_visit` | Outstanding ODI visit stubs — runs in broken-protocol mode (fault doc only) |
 | `discontinuation_reminder` (synthetic) | Injected when no `discontinuation` event is on file |
 | `a1_assessment` | Overdue if window has opened; upcoming if not yet reached |
 | `a2_assessment` | Overdue if window has opened; upcoming if not yet reached |
@@ -570,6 +576,19 @@ Only these event types appear in the overdue section and can be opened:
 ### Non-interactive events
 
 All other incomplete events (home visits, prescription events, watch record chain, follow-up calls, training completion, etc.) are **not shown** in the overdue list. They are not action items — they are moot once the protocol is broken. The complete event history remains intact and visible in the Timeline tab.
+
+### RI / ODI visit modals in broken-protocol mode
+
+When the patient is `broken_protocol`, the `robot_issue_visit`, `resolve_robot_issue_visit`, and `other_device_issue_visit` modals switch to a simplified **fault-documentation-only** mode:
+
+- Outcome options (Repaired / Swapped / Neither) are removed.
+- The engineer records: which devices are faulty + a fault description per device.
+- Server actions: set `has_issue: true` on each faulted device; append a `faulty` device event.
+- Device assignments are **NOT closed** — they remain open until the discontinuation modal is completed.
+- No pause mechanics apply (`trainingPausedDate` is not modified; patient is already broken_protocol).
+- The completed entry includes `broken_protocol_mode: true` to distinguish it from a normal visit entry.
+
+The rationale: in broken protocol the patient will be discontinued, so device swap logistics and training-resume decisions are moot. The only meaningful action is to document what is faulty so the Devices page reflects accurate `has_issue` state and the eventual discontinuation modal can cleanly close all assignments.
 
 ### `api_patient_events` behavior for broken_protocol
 
@@ -583,6 +602,8 @@ The function must **not** return empty `complete` or `upcoming` lists. Full beha
 _BROKEN_PROTOCOL_INTERACTIVE = frozenset({
     'adverse_event', 'adverse_event_followup',
     'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+    'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
+    'other_device_issue_call', 'other_device_issue_visit',
 })
 ```
 
@@ -591,6 +612,46 @@ _BROKEN_PROTOCOL_INTERACTIVE = frozenset({
 ### `discontinuationDate` guard exemption for broken_protocol
 
 Routes that complete AE follow-up events (`adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit`) must **not** reject requests solely because `discontinuationDate` is set. A patient may have been discontinued but still have open AEs that must be resolved. All other complete-event routes are still blocked after discontinuation.
+
+### `api_patient_events` behavior for discontinued patients
+
+When `discontinuationDate` is set, only a narrow set of events is shown — training is over and devices are returned, so the only remaining work is resolving open AEs and completing any pending assessments.
+
+- `complete` list — all completed and free events, identical to any other status.
+- `overdue` and `upcoming` lists — filtered to `_DISCONTINUED_VISIBLE` entries only:
+
+```python
+_DISCONTINUED_VISIBLE = frozenset({
+    'adverse_event', 'adverse_event_followup',
+    'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+    'a1_assessment', 'a2_assessment',
+})
+```
+
+RI/ODI chains are excluded — devices are returned at discontinuation so robot and other-device issues are moot. All regular protocol events (home visits, calls, prescriptions, agwatch timing, etc.) are also hidden.
+
+This filter applies in both `api_patient_events` (patient detail page) and the dashboard events API. It is checked before the broken_protocol filter: `is_discontinued` takes priority.
+
+### Discontinuation flow
+
+Discontinuation is a two-step process to prevent accidental triggering:
+
+**Step 1 — Stub creation (non-broken-protocol patients):**
+- The "Discontinue Patient" button in the header triggers a double confirmation popup.
+- On confirm: server creates a `discontinuation` stub in `incomplete` with `scheduled_date: [now, now]`.
+- Button becomes hidden once stub exists.
+
+**Step 2 — Modal completion:**
+- Therapist clicks the `discontinuation` stub in the overdue panel.
+- Modal collects: Discontinuation Date, Reason, Notes, optional attachment.
+- Server: removes stub from `incomplete`; sets `discontinuationDate`; closes **all** device assignments (writes `end_date` to every open assignment entry); clears `has_issue: false` on all assigned devices; appends entry to `free.discontinuation`.
+
+**Broken-protocol path:**
+- Button is hidden (replaced by `discontinuation_reminder` synthetic event).
+- `discontinuation_reminder` opens the discontinuation modal directly, skipping the double confirmation (broken protocol is already a confirmed state).
+- Same modal fields and server actions apply.
+
+**Device assignment removal rule:** Assignments are closed **only** at discontinuation modal completion. No other event or route closes assignments. RI/ODI visits in broken-protocol mode document faults but leave assignments open.
 
 ---
 

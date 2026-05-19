@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from utils.data_access import read_patient_meta, write_patient_meta
 from utils.protocol_events import read_protocol_events, write_protocol_events
 
+FMT_DATE = '%Y-%m-%d'
 FMT      = '%Y-%m-%dT%H:%M'
 FMT_SECS = '%Y-%m-%dT%H:%M:%S'
 
@@ -36,6 +37,8 @@ DATETIME_FIELDS = ('completion_date', 'session_start', 'session_end',
 
 
 def parse_dt(value: str) -> datetime:
+    if len(value) == 10:
+        return datetime.strptime(value, FMT_DATE)
     fmt = FMT_SECS if len(value) > 16 else FMT
     return datetime.strptime(value, fmt)
 
@@ -45,6 +48,8 @@ def fmt_dt(dt: datetime, has_secs: bool) -> str:
 
 
 def shift_dt(value: str, delta: timedelta) -> str:
+    if len(value) == 10:
+        return (datetime.strptime(value, FMT_DATE) + delta).strftime(FMT_DATE)
     has_secs = len(value) > 16
     return fmt_dt(parse_dt(value) + delta, has_secs)
 
@@ -153,12 +158,13 @@ def shift_activation(homer_id: str, days: int, hospital: str) -> None:
     patient['a0CompletionDate']  = new_a0.strftime(FMT)
     patient['activationDate']    = new_activation.strftime(FMT)
 
-    # Shift all other date fields in patient meta that are set
+    # Shift all other date fields in patient meta that are set.
+    # shift_dt preserves the original format (date-only or datetime).
     for field in ('trainingCompletionDate', 'trainingPausedDate', 'brokenProtocolDate',
                   'a1CompletionDate', 'a2CompletionDate',
                   'discontinuationDate', 'preDiscontinuationDate'):
         if patient.get(field):
-            patient[field] = (parse_dt(patient[field]) + n_delta).strftime(FMT)
+            patient[field] = shift_dt(patient[field], n_delta)
 
     # Shift pauseHistory epoch start/end datetimes
     for epoch in patient.get('pauseHistory', []):

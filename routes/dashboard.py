@@ -223,10 +223,17 @@ def events():
 
         _PAUSE_VISIBLE = frozenset({
             'adverse_event', 'adverse_event_followup', 'adverse_event_followup_visit',
-            'adverse_event_clinical_visit', 'resolve_robot_issue_visit',
+            'adverse_event_clinical_visit',
+            'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
             'other_device_issue_call', 'other_device_issue_visit',
         })
-        is_paused = bool(patient.get('trainingPausedDate'))
+        _DISCONTINUED_VISIBLE = frozenset({
+            'adverse_event', 'adverse_event_followup',
+            'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+            'a1_assessment', 'a2_assessment',
+        })
+        is_paused       = bool(patient.get('trainingPausedDate'))
+        is_discontinued = bool(patient.get('discontinuationDate'))
 
         for entry in events_data.get('incomplete', []):
             sched = entry.get('scheduled_date')
@@ -239,6 +246,10 @@ def events():
                 continue
 
             pid     = entry.get('protocol_event_id')
+
+            if is_discontinued and pid not in _DISCONTINUED_VISIBLE:
+                continue
+
             on_hold = is_paused and pid not in _PAUSE_VISIBLE and start_date <= today
 
             dep_ids    = patient_defs.get(pid, {}).get('depends_on') or []
@@ -259,6 +270,8 @@ def events():
                 'scheduled_date':    sched,
                 'blocked_by':        blocked_by,
             }
+            if entry.get('training_stopped'):
+                record['training_stopped'] = True
 
             if on_hold:
                 # On-hold events never appear in the dashboard upcoming list
