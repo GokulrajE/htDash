@@ -65,7 +65,14 @@ The original `main` branch is a single-page app (`dashboard.html`, 39KB). Being 
 11. ✅ Agwatch timing modal
 12. ✅ Watch record modal — chain + triggered modes, lost watch handling
 13. ✅ Patient call modal
-14. ⬜ Fix `create_protocol_events()` — update `free` section keys + add top-level `cancelled: []`
+14. ✅ Fix `create_protocol_events()` — add missing `free` keys: `watch_record`, `activation_attempt`, `d15_attempt` (both groups); `other_device_issue_call`, `other_device_issue_visit` (experimental only). `cancelled: []` already present.
+14b. ⬜ Post-Day 28 rules (see `docs/ae_ri_logic.md` Sections 12, 14, 15):
+    - Day 28 pause auto-termination: `_auto_terminate_pause_if_expired()` in `api_patient_events` — closes open pause epoch at Day 28 end, updates `cumulativePauseDays`, clears `trainingPausedDate`
+    - `post_training` derived status in `derive_status()`: `today > activationDate + 28` AND no `trainingCompletionDate`/`brokenProtocolDate`/`discontinuationDate`
+    - Dashboard stat bubble + patient list filter tab + status badge for `post_training`
+    - Add `training_completion_d29` to `_PAUSE_VISIBLE` in both `routes/user_management.py` and `routes/dashboard.py`
+    - Client-side `_trainingPermanentlyEnded(patient)` — includes Day 28 expiry check
+    - Amber informational banner when Day 28 passed and D29 not yet filed
 15. ⬜ Update File Adverse Event modal — add scheduling toggles for follow-up visit / clinical visit
 16. ⬜ Update Adverse Event Follow-up Call modal — `patient_initiated`, `ae_discussions`, scheduling toggles
 17. ⬜ Adverse Event Follow-up Visit modal (new)
@@ -1174,3 +1181,5 @@ User types invalid date → Gets error message → Clicks Save → Form BLOCKED 
 **Files Modified:**
 - `static/js/app/patient_detail.js` — replaced `renderAdverseEventsTab()` and `_adverseEventCard()`; added `_toggleAeCard()`, `_AEF_TYPE_LABELS`, `_AE_FOLLOWUP_TYPES` constants
 - `docs/pages.md` — updated Adverse Events tab spec
+
+logconvo-project: htDash

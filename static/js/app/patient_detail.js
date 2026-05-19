@@ -1030,9 +1030,21 @@ function renderTimelineTab() {
 
   const transitions = _deriveTransitions(patientData || {}, all);
 
+  // Build a lookup for incomplete event scheduled_dates (for fallback on attempt entries)
+  const _incompleteSchedMap = {};
+  for (const e of (eventsCache || [])) {
+    if (e.protocol_event_id && e.scheduled_date)
+      _incompleteSchedMap[e.protocol_event_id] = e.scheduled_date;
+  }
+  const _ATTEMPT_PARENT = { d15_attempt: 'home_visit_d15', activation_attempt: 'activation' };
+
   const items = all.map((ev, i) => {
     const isLast   = i === all.length - 1;
-    const schedStr = _fmtDate(ev.scheduled_date);
+    const schedDate = ev.scheduled_date
+      || (_ATTEMPT_PARENT[ev.protocol_event_id]
+          ? _incompleteSchedMap[_ATTEMPT_PARENT[ev.protocol_event_id]]
+          : null);
+    const schedStr = _fmtDate(schedDate);
     const compStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
     const filedStr = ev.filed_at ? _fmtDateTime(ev.filed_at) : '';
     const extra    = _timelineExtraFields(ev);
@@ -1054,7 +1066,7 @@ function renderTimelineTab() {
       <div class="grid gap-x-4 px-2 -mx-2 ${rowHighlight}" style="grid-template-columns:1fr 20px 1fr">
         <div class="text-right pb-${isLast ? '2' : '7'} pt-2">
           <p class="${nameCls}">${ev.event_name}</p>
-          ${!isSynthetic ? `<p class="text-xs text-slate-400 mt-0.5">Scheduled: ${schedStr}</p>` : ''}
+          ${!isSynthetic && schedDate ? `<p class="text-xs text-slate-400 mt-0.5">Scheduled: ${schedStr}</p>` : ''}
           ${dayLabel ? `<p class="text-sm font-semibold text-indigo-500 mt-1">${dayLabel}</p>` : ''}
           ${badge}
           ${discBadge}
@@ -5169,7 +5181,9 @@ function openHomeVisitModal(ev) {
     const cb = document.getElementById(`hv-trigger-${type}`);
     if (cb) { cb.checked = false; _hvToggleSubform(type); }
   });
-  document.getElementById('hv-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
+  const isExpHv = patientData?.group === 'experimental';
+  document.getElementById('hv-trigger-robot-wrap').classList.toggle('hidden', !isExpHv);
+  document.getElementById('hv-trigger-other-device-wrap').classList.toggle('hidden', !isExpHv);
   document.getElementById('hv-trigger-watch-wrap').classList.toggle('hidden',
     !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
 
@@ -5247,7 +5261,8 @@ async function _saveHomeVisitYes() {
   if (!document.getElementById('hv-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('hv-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
-  if (document.getElementById('hv-trigger-other-device').checked)
+  if (!document.getElementById('hv-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-trigger-other-device').checked)
     triggered.push({ type: 'other_device_issue_call' });
 
   saveBtn.disabled = true;
@@ -5380,9 +5395,11 @@ function openFollowupCallModal(ev) {
     const cb = document.getElementById(`fc-trigger-${type}`);
     if (cb) { cb.checked = false; _fcToggleSubform(type); }
   });
-  // Robot Issue only shown for experimental patients
+  // Robot Issue and ODI only shown for experimental patients
+  const isExpFc = patientData?.group === 'experimental';
   const robotWrap = document.getElementById('fc-trigger-robot-wrap');
-  if (robotWrap) robotWrap.classList.toggle('hidden', patientData?.group !== 'experimental');
+  if (robotWrap) robotWrap.classList.toggle('hidden', !isExpFc);
+  document.getElementById('fc-trigger-other-device-wrap').classList.toggle('hidden', !isExpFc);
   // Watch Record only shown when at least one watch is currently assigned
   const watchWrap = document.getElementById('fc-trigger-watch-wrap');
   if (watchWrap) watchWrap.classList.toggle('hidden', !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
@@ -5422,7 +5439,8 @@ async function saveFollowupCall() {
   if (!document.getElementById('fc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('fc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
-  if (document.getElementById('fc-trigger-other-device').checked)
+  if (!document.getElementById('fc-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('fc-trigger-other-device').checked)
     triggered.push({ type: 'other_device_issue_call' });
 
   const body = {
@@ -5481,7 +5499,9 @@ function openPatientCallModal() {
     const cb = document.getElementById(`pc-trigger-${type}`);
     if (cb) { cb.checked = false; _pcToggleSubform(type); }
   });
-  document.getElementById('pc-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
+  const isExpPc = patientData?.group === 'experimental';
+  document.getElementById('pc-trigger-robot-wrap').classList.toggle('hidden', !isExpPc);
+  document.getElementById('pc-trigger-other-device-wrap').classList.toggle('hidden', !isExpPc);
   document.getElementById('pc-trigger-watch-wrap').classList.toggle('hidden',
     !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
 
@@ -5511,7 +5531,8 @@ async function savePatientCall() {
   if (!document.getElementById('pc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('pc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
-  if (document.getElementById('pc-trigger-other-device').checked)
+  if (!document.getElementById('pc-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('pc-trigger-other-device').checked)
     triggered.push({ type: 'other_device_issue_call' });
 
   const therapistInitiated = document.getElementById('pc-therapist-initiated').checked;
@@ -5806,7 +5827,8 @@ async function openAgwatchTimingModal(ev) {
   errEl.textContent = '';
   errEl.classList.add('hidden');
 
-  // Pre-fill session date from scheduled_date[0], fallback to today
+  // Pre-fill session date from scheduled_date[0], fallback to today.
+  // Will be overridden below once _agwatchSessionStart is resolved from the home visit entry.
   const schedDate = Array.isArray(ev.scheduled_date) ? ev.scheduled_date[0] : ev.scheduled_date;
   const dateOnly  = schedDate ? schedDate.split('T')[0] : new Date().toISOString().split('T')[0];
   document.getElementById('agwatch-session-date').value = dateOnly;
@@ -5826,6 +5848,11 @@ async function openAgwatchTimingModal(ev) {
   const hvEntry = hvId ? (_completeEventsCache || []).find(e => e.protocol_event_id === hvId) : null;
   _agwatchSessionStart = hvEntry?.session_start || null;
   _agwatchSessionEnd   = hvEntry?.session_end   || null;
+  // Override session date with the actual home visit date so exercise timestamps
+  // and session bounds share the same date in string comparisons.
+  if (_agwatchSessionStart) {
+    document.getElementById('agwatch-session-date').value = _agwatchSessionStart.split('T')[0];
+  }
   const windowWrap = document.getElementById('agwatch-session-window-wrap');
   const windowEl   = document.getElementById('agwatch-session-window');
   if (_agwatchSessionStart && _agwatchSessionEnd) {

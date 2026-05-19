@@ -301,6 +301,7 @@ def api_patient_events(homer_id):
     # timeline and completed-events count.
     _FREE_EVENT_NAMES = {
         'activation_attempt':            'Activation Attempt',
+        'd15_attempt':                   'Day 15 Visit Attempt',
         'patient_call':                  'Patient Call',
         'adverse_event':                 'File Adverse Event',
         'adverse_event_followup':        'Adverse Event Follow-up Call',
@@ -1070,11 +1071,14 @@ def api_log_activation_attempt(homer_id):
         events_data.setdefault('incomplete', []).append(stub)
         triggered_refs.append({'type': t, 'id': new_id})
 
+    act_entry = next((e for e in events_data.get('incomplete', [])
+                      if e.get('protocol_event_id') == 'activation'), None)
     attempt_entry = {
         'id':                attempt_id,
         'protocol_event_id': 'activation_attempt',
         'completion_date':   visit_date,
         'visit_date':        visit_date,
+        'scheduled_date':    act_entry.get('scheduled_date') if act_entry else None,
         'primary_reason':    primary_reason,
         'notes':             notes,
         'filed_at':          filed_at,
@@ -1600,7 +1604,9 @@ def api_complete_home_visit(homer_id):
             events_data.setdefault('free', {}).setdefault('d15_attempt', []).append({
                 'id':                attempt_id,
                 'protocol_event_id': 'd15_attempt',
+                'scheduled_date':    entry.get('scheduled_date'),
                 'visit_date':        visit_date,
+                'completion_date':   visit_date,
                 'primary_reason':    primary_reason,
                 'notes':             notes,
                 'filed_at':          filed_at,

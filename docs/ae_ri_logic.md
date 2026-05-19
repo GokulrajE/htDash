@@ -532,6 +532,7 @@ _PAUSE_VISIBLE = frozenset({
     'adverse_event', 'adverse_event_followup', 'adverse_event_followup_visit',
     'adverse_event_clinical_visit', 'resolve_robot_issue_visit',
     'other_device_issue_call', 'other_device_issue_visit',
+    'training_completion_d29',
 })
 ```
 
@@ -542,7 +543,9 @@ _PAUSE_VISIBLE = frozenset({
 
 ### Events excluded from On Hold
 
-`training_completion_d29`, `a1_assessment`, and `a2_assessment` are **never** marked "On Hold". Their fixed positions on the absolute protocol clock mean they are always upcoming or overdue — not held by the pause. These events are handled separately; see Section 16.
+`a1_assessment` and `a2_assessment` are **never** marked "On Hold". Their fixed positions on the absolute protocol clock mean they are always upcoming or overdue — not held by the pause.
+
+`training_completion_d29` is included in `_PAUSE_VISIBLE` so it surfaces as overdue after Day 29 even while paused. Training completion can be filed independently of the AE chain — a paused patient can still log D29 if Day 29 has arrived. See Section 16.
 
 ### Dashboard
 
@@ -675,7 +678,13 @@ In the following modals, the AE, robot issue, and watch record trigger toggles a
 - `patient_call`
 - `followup_call_d07`, `followup_call_d21`
 
-**Client-side check:** `_trainingPermanentlyEnded(patient)` returns `true` when any of `trainingCompletionDate`, `brokenProtocolDate`, or `discontinuationDate` is non-null on the patient object.
+**Client-side check:** `_trainingPermanentlyEnded(patient)` returns `true` when any of the following is true:
+- `trainingCompletionDate` is non-null
+- `brokenProtocolDate` is non-null
+- `discontinuationDate` is non-null
+- `today > activationDate + 28 days` (training window has expired — hides trigger toggles even if D29 not yet filed)
+
+The Day 28 expiry condition suppresses AE/RI trigger toggles in primary training modals after the intervention window closes, without requiring D29 to be filed first. Note: `can_resume_from` in AE follow-up modals is handled naturally — after Day 28 pause auto-termination (Section 15), `trainingPausedDate` is null so the pause-clearing formula never runs and the field is not required.
 
 ### AE follow-up modals — AE trigger always visible while chain is active
 
@@ -703,25 +712,68 @@ Day 28 is the last day of the intervention. The following rules apply once Day 2
 
 ### Pause termination at Day 28
 
-If a pause is still active when Day 28 ends, the pause state is **automatically terminated**:
-- The open `pauseHistory` epoch is closed with `end = Day 28 end-of-day`, `days` computed, `end_event_id = null` (system-terminated, not closed by a follow-up event).
-- `trainingPausedDate` is set to `null`.
-- Selective rescheduling (Section 10) is NOT run — there are no future protocol events to reschedule at this point.
-- Broken protocol detection is also not re-run — it would already have fired if D02/D03 were missed.
+`trainingPausedDate` tracks the start of the current open pause epoch. It exists only while training is actively paused. Once Day 28 ends, the concept of "paused from training" no longer applies — there is no training to pause from.
+
+If `trainingPausedDate` is still set when `today > activationDate + 28 days`:
+
+1. Close the open `pauseHistory` epoch: `end = activationDate + 28 days (end-of-day)`, `days = (Day 28 − trainingPausedDate).days`, `end_event_id = null` (system-terminated, not closed by a follow-up event).
+2. Add `days` to `cumulativePauseDays`.
+3. Set `trainingPausedDate = null`.
+4. If `cumulativePauseDays > 10` after the update: set `brokenProtocolDate`. (D02/D03 path 3 broken protocol check is NOT re-run — that only fires at follow-up filing.)
+5. D21 cancellation check is NOT run — Day 28 has already passed.
+
+**Effect on AE follow-up modals:** `can_resume_from` is required in AE follow-up routes only to compute pause duration when clearing `trainingPausedDate`. After Day 28 auto-termination, `trainingPausedDate = null`, so the pause-clearing formula never runs. `can_resume_from` is therefore naturally not required — no extra bypass check needed.
+
+**The AE chain continues.** Auto-termination does not resolve any AEs. Outstanding `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit` stubs remain active and must be completed by the therapist.
+
+**Implementation:** a lazy `_auto_terminate_pause_if_expired(patient, patient_meta)` helper runs at the start of `api_patient_events`. If `today > activationDate + 28` and `trainingPausedDate` is set, it applies the above writes and persists them before the event list is computed.
+
+### `post_training` state
+
+`post_training` is a **derived patient status** (never stored — computed by `derive_status()` on every request). It represents the period between Day 28 ending and D29 being formally filed.
+
+**Derivation condition** (checked in `derive_status()` after `broken_protocol` and before `paused`/`active`):
+```
+activationDate is set
+AND today > activationDate + 28 days
+AND trainingCompletionDate is null
+AND brokenProtocolDate is null
+AND discontinuationDate is null
+```
+
+Because Day 28 auto-termination clears `trainingPausedDate` before `derive_status()` is called, a patient that was `paused` on Day 28 will show as `post_training` (not `paused`) on Day 29+.
+
+**Dashboard:** a dedicated stat bubble — "Post Training" — shows the count of `post_training` patients. This is the primary reason for this state.
+
+**Patient list:** "Post Training" filter tab, between "Paused" and "Training Complete".
+
+**Patient detail:** amber status badge labelled "Post Training".
+
+**Event visibility:** same as `active` — overdue and upcoming panels function normally. `training_completion_d29` surfaces as overdue once Day 29 has passed (it is in `_PAUSE_VISIBLE` and therefore not on-hold; see Section 12).
+
+### Training period expiry banner
+
+Once `today > activationDate + 28 days` and `trainingCompletionDate` is null, an **amber informational banner** is displayed above the events panels on the patient overview tab:
+
+> Training period has ended (Day 28 passed). Training completion (D29) can be filed when ready.
+
+This is purely informational. The banner disappears once `trainingCompletionDate` is set.
+
+### Training completion (D29) independent of AE chain
+
+`training_completion_d29` can be filed at any time after Day 29, regardless of whether open AEs remain unresolved. The AE follow-up chain continues independently after D29 is filed.
 
 ### AE filing cutoff
 
-See Section 14 for the complete AE trigger cutoff rules. In short: all AE trigger toggles in primary training modals are hidden once training permanently ends. AE follow-up modals continue to allow AE triggering while unresolved AEs remain.
+All AE trigger toggles in primary training modals are hidden once `_trainingPermanentlyEnded(patient)` returns true (see Section 14). AE follow-up modals continue to allow AE triggering while unresolved AEs remain.
 
 ### Existing open AEs after Day 28
 
-AEs filed during the intervention (Days 1–28) continue through their full follow-up chain until resolved:
-- `adverse_event_followup`, `adverse_event_followup_visit`, `adverse_event_clinical_visit` stubs remain active and actionable.
-- The therapist must close all open AE events.
+AEs continue through their full follow-up chain. `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit` stubs remain active until all AEs are resolved.
 
 ### Patient calls after Day 28
 
-`patient_call` events can still be logged after Day 28 for ongoing contact. However, the patient call modal after Day 28 is free-text only — all trigger toggles (AE, robot issue, watch record) are hidden. All information is captured in the call notes field.
+`patient_call` events can still be logged. The modal after Day 28 is free-text only — all trigger toggles (AE, robot issue, watch record) are hidden.
 
 ---
 
@@ -784,9 +836,10 @@ A1/A2 do **not** receive an "On Hold" badge during a pause. They are always disp
 | D02/D03 broken protocol — Path 3 (AE follow-up) | `routes/user_management.py` | `_check_d0203_broken_protocol` — called from all three pause-clearing sites after epoch closes |
 | Double confirmation guard — client | `static/js/app/patient_detail.js` | `saveHomeVisit()` (Path 1) and `saveAdverseEventFollowup()` / `saveAeFollowupVisit()` / `saveAeClinicalVisit()` / `saveResolveRobotIssueVisit()` (Path 3) |
 | D21 cancellation on resume | `routes/user_management.py` | `_cancel_d21_if_needed` (replaces `_shift_future_incomplete_events`, which must be deleted) |
-| Pause termination at Day 28 | `routes/user_management.py` | ⬜ not yet implemented |
-| AE trigger cutoff — client-side visibility | `static/js/app/patient_detail.js` | `_trainingPermanentlyEnded(patient)` helper ⬜ not yet implemented |
-| AE trigger cutoff — server-side guard | `routes/user_management.py` | ⬜ not yet implemented |
+| Day 28 pause auto-termination | `routes/user_management.py` | `_auto_terminate_pause_if_expired(patient, patient_meta)` — ⬜ not yet implemented; called at start of `api_patient_events` |
+| `post_training` status derivation | `utils/data_access.py` | `derive_status()` — ⬜ not yet implemented; check `today > activationDate + 28` after `broken_protocol`, before `paused`/`active` |
+| Training period expiry banner | `static/js/app/patient_detail.js` | `_checkTrainingPeriodExpired(patient)` — ⬜ not yet implemented; called on every `loadPatientEvents()` refresh |
+| AE trigger cutoff — client-side visibility | `static/js/app/patient_detail.js` | `_trainingPermanentlyEnded(patient)` — ⬜ not yet implemented; includes Day 28 expiry: `today > activationDate + 28 days` |
 | Broken protocol event list (patient events) | `routes/user_management.py` | `api_patient_events` — replaces early return with full complete list + filtered overdue |
 | Broken protocol event list (dashboard events) | `routes/dashboard.py` | `api_dashboard_events` — same filtering |
 | Dashboard live D02/D03 check | `routes/dashboard.py` | `api_dashboard_events` loop |

@@ -98,6 +98,9 @@ Patient list for the user's visible site(s).
 | broken_protocol    | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
 | active             | Complete `training_completion_d29` event                                                              | `trainingCompletionDate`                                        | training_completed |
 | active             | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
+| active             | _(today > activationDate + 28 days)_                                                                  | _(none — derived; `post_training` if no `trainingCompletionDate`)_ | post_training   |
+| post_training      | Complete `training_completion_d29` event                                                              | `trainingCompletionDate`                                        | training_completed |
+| post_training      | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
 | active             | Robot issue visit — device swapped with no replacement available                                      | `trainingPausedDate` set                                        | paused             |
 | active             | Adverse event — `training_blocked` checked                                                            | `trainingPausedDate` set                                        | paused             |
 | paused             | All pause causes resolved (`can_resume_from` set on all; no `resolve_robot_issue_visit` stubs remain) | `trainingPausedDate` cleared; `cumulativePauseDays` incremented | active             |
@@ -136,7 +139,9 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
   | Robot Issues   | Experimental only |
   | Timeline       | All               |
 
-- **Overview tab** (default): 0. **Pause alert banner** — shown only when `status === 'paused'`. Full-width amber strip (red when ≥ 8 days total) injected above the Patient Info / Key Dates grid. Contains:
+- **Overview tab** (default):
+  0a. **Training period expiry banner** — shown when `today > activationDate + 28 days` AND `trainingCompletionDate` is null. Amber informational strip above the events panels: "Training period has ended (Day 28 passed). Training completion (D29) can be filed when ready." Disappears once D29 is filed. See `docs/ae_ri_logic.md` Section 15.
+  0b. **Pause alert banner** — shown only when `status === 'paused'`. Full-width amber strip (red when ≥ 8 days total) injected above the Patient Info / Key Dates grid. Contains:
   - "Training Paused" heading with pause icon
   - "Paused since: \<date\>" and "Days paused so far: X / 10"
   - A **segmented progress bar** over 10 days: one colour slice per closed past epoch (from `pauseHistory` closed entries) plus a distinct colour for the current open epoch. Each slice width = its `days` / 10. Turns red at ≥ 8 days total.

@@ -518,16 +518,28 @@ Extra fields on `complete`:
   "adverse_event_followup":         [],
   "adverse_event_followup_visit":   [],
   "adverse_event_clinical_visit":   [],
-  "robot_issue_call":               [],
-  "robot_issue_visit":              [],
-  "resolve_robot_issue_visit":      [],
   "patient_call":                   [],
+  "watch_record":                   [],
+  "activation_attempt":             [],
+  "d15_attempt":                    [],
   "pre_discontinuation":            null,
   "discontinuation":                null
 }
 ```
 
-`robot_issue_call`, `robot_issue_visit`, `resolve_robot_issue_visit` are only present for experimental patients. All AE-related arrays are present for all patients.
+Experimental patients also have these additional keys:
+
+```json
+{
+  "robot_issue_call":               [],
+  "robot_issue_visit":              [],
+  "resolve_robot_issue_visit":      [],
+  "other_device_issue_call":        [],
+  "other_device_issue_visit":       []
+}
+```
+
+All keys are initialised by `create_protocol_events()`. Routes that append to these use `setdefault` so new keys are created on demand for older records that predate the key being added.
 
 **Cancellable events:** `adverse_event_followup_visit` and `adverse_event_clinical_visit` stubs carry `cancellable: true` in `study_protocol.json`. A cancelled stub is removed from `incomplete` and appended to a top-level `cancelled` array in `protocol_events.json` with a `cancellation_reason` and `cancelled_at` timestamp. Cancelled events appear in the timeline for traceability but do not count as completions.
 
