@@ -3065,7 +3065,7 @@ const EVENT_OPENERS = {
   home_visit_d15:            (ev) => openHomeVisitModal(ev),
   followup_call_d07:         (ev) => openFollowupCallModal(ev),
   followup_call_d21:         (ev) => openFollowupCallModal(ev),
-  training_completion_d29:   (ev) => openSimpleEventModal(ev),
+  training_completion_d29:   (ev) => openD29Modal(ev),
   adl_agwatch_timing_d01:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
@@ -4936,6 +4936,117 @@ async function printPrescriptionPamphlet() {
     printWindow.print();
   }, 100);
  
+}
+
+// ── Training Completion D29 modal ─────────────────────────────────────────────
+
+let _d29EventId = null;
+
+function openD29Modal(ev) {
+  _d29EventId = ev.id;
+  const nowStr = new Date().toISOString().slice(0, 16);
+  const dateEl = document.getElementById('d29-date');
+  dateEl.max   = nowStr;
+  dateEl.value = '';
+  document.getElementById('d29-notes').value          = '';
+  document.getElementById('d29-feedback-file').value  = '';
+  document.getElementById('d29-feedback-notes').value = '';
+  document.getElementById('d29-audio-file').value     = '';
+  document.getElementById('d29-scan-file').value      = '';
+  document.getElementById('d29-qual-recruited').value = '';
+  document.getElementById('d29-qual-uploads').classList.add('hidden');
+  _d29UpdateFeedbackLabel();
+  _d29StyleQualBtn(null);
+  _resetAttachment('d29');
+  const errEl = document.getElementById('d29-error');
+  errEl.classList.add('hidden');
+  errEl.textContent = '';
+
+  document.getElementById('d29-feedback-file').onchange = _d29UpdateFeedbackLabel;
+  _attachDateGuard('d29-date', 'd29-error');
+  showModal('d29-modal');
+}
+
+function _d29UpdateFeedbackLabel() {
+  const hasFile = document.getElementById('d29-feedback-file').files.length > 0;
+  const lbl     = document.getElementById('d29-feedback-notes-label');
+  lbl.innerHTML = hasFile
+    ? 'Notes <span class="text-slate-400 font-normal">(optional)</span>'
+    : 'Notes <span class="text-red-500">*</span><span class="text-slate-400 font-normal"> (required — no PDF uploaded)</span>';
+}
+
+function _d29SelectQual(recruited) {
+  document.getElementById('d29-qual-recruited').value = recruited ? 'true' : 'false';
+  document.getElementById('d29-qual-uploads').classList.toggle('hidden', !recruited);
+  if (!recruited) {
+    document.getElementById('d29-audio-file').value = '';
+    document.getElementById('d29-scan-file').value  = '';
+  }
+  _d29StyleQualBtn(recruited);
+}
+
+function _d29StyleQualBtn(recruited) {
+  const yes = document.getElementById('d29-qual-yes-btn');
+  const no  = document.getElementById('d29-qual-no-btn');
+  const base     = 'flex-1 px-3 py-2 border rounded-xl text-sm font-medium transition-colors';
+  const active   = 'bg-blue-600 border-blue-600 text-white';
+  const inactive = 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100';
+  yes.className = `${base} ${recruited === true  ? active : inactive}`;
+  no.className  = `${base} ${recruited === false ? active : inactive}`;
+}
+
+async function saveD29() {
+  const err = document.getElementById('d29-error');
+  const setErr = (msg) => { err.textContent = msg; err.classList.remove('hidden'); };
+  err.classList.add('hidden');
+
+  const completionDate = document.getElementById('d29-date').value;
+  if (!completionDate) return setErr('Visit date is required.');
+
+  const feedbackFile  = document.getElementById('d29-feedback-file').files[0] || null;
+  const feedbackNotes = document.getElementById('d29-feedback-notes').value.trim();
+  if (!feedbackFile && !feedbackNotes) return setErr('Feedback form: upload the PDF or provide notes.');
+
+  const qualStr = document.getElementById('d29-qual-recruited').value;
+  if (!qualStr) return setErr('Please indicate whether the patient was recruited for qualitative analysis.');
+  const qualRecruited = qualStr === 'true';
+
+  let audioFile = null;
+  let scanFile  = null;
+  if (qualRecruited) {
+    audioFile = document.getElementById('d29-audio-file').files[0] || null;
+    if (!audioFile) return setErr('Audio recording is required for qualitative analysis.');
+    scanFile = document.getElementById('d29-scan-file').files[0] || null;
+  }
+
+  const { file: genericFile, caption: genericCaption } = _readAttachment('d29');
+  if (genericFile && !genericCaption) return setErr('Please describe the attachment before saving.');
+
+  const form = new FormData();
+  form.append('event_id',              _d29EventId || '');
+  form.append('completion_date',       completionDate);
+  form.append('notes',                 document.getElementById('d29-notes').value.trim());
+  form.append('feedback_form_notes',   feedbackNotes);
+  form.append('qualitative_recruited', qualStr);
+  if (feedbackFile) form.append('feedback_form_file', feedbackFile);
+  if (audioFile)    form.append('qualitative_audio_file', audioFile);
+  if (scanFile)     form.append('qualitative_scan_file', scanFile);
+  if (genericFile)  { form.append('attachment_file', genericFile); form.append('attachment_caption', genericCaption); }
+
+  const btn = document.querySelector('#d29-modal button[onclick="saveD29()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  try {
+    const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/training-completion`, { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) return setErr(data.error || 'Save failed.');
+    hideModal('d29-modal');
+    await loadPatientEvents();
+  } catch (e) {
+    setErr('Network error. Please try again.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  }
 }
 
 // ── Simple event modal (home visits, follow-up calls, training completion) ────

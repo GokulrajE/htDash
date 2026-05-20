@@ -724,16 +724,26 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
 
 ### Training Completion Visit (`training_completion_d29`)
 
-- Trigger: `training_completion_d29` event row on patient detail (`active` or `paused` patients, day 29)
+- Trigger: `training_completion_d29` event row on patient detail (`active`, `paused`, or `post_training` patients, day 29+)
 - Allowed users: `admin`, `therapist`
-- Modal: `simple-event-modal` (shared)
+- Modal: `#d29-modal` (dedicated)
   - Title: "Training Completion Day 29"
   - Event Date (datetime, required; cannot be in the future)
   - Notes (textarea, optional)
+  - **Feedback Form** section:
+    - PDF upload (optional upload, but if absent then notes required)
+    - Notes textarea (optional unless no file uploaded)
+  - **Qualitative Analysis** section:
+    - "Was this patient recruited for qualitative analysis?" Yes/No toggle
+    - If Yes: Audio recording upload (MP3/M4A/WAV, required)
+    - If Yes: Scanned document upload (PDF, optional)
+  - Generic attachment section (PDF, optional)
+- File naming: `<event_id>_feedback.pdf`, `<event_id>_audio.<ext>`, `<event_id>_scan.pdf`, `<event_id>.pdf`
 - Server actions:
-  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`
+  - POST to `/api/patients/<homer_id>/complete-event/training-completion` (multipart form)
+  - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`, `feedback_form_attachment`, `feedback_form_notes`, `qualitative_recruited`, `qualitative_audio_attachment`, `qualitative_scan_attachment`, `attachment`, `attachment_caption`
   - Update `<homer_id>.json` with `trainingCompletionDate = completion_date`
-  - If patient was `paused`, also clear `trainingPausedDate` and increment `cumulativePauseDays`
+  - If patient was `paused`, also clear `trainingPausedDate` and discard `resolve_robot_issue_visit` stubs
 - Log message: `Training completion visit recorded`
 
 ---

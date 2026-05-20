@@ -1398,17 +1398,15 @@ _SIMPLE_EVENT_IDS = {
     'home_visit_d02',
     'home_visit_d03',
     'home_visit_d15',
-    'training_completion_d29',
 }
 
 _HOME_VISIT_IDS        = {'home_visit_d02', 'home_visit_d03', 'home_visit_d15'}
 _HV_ACTIVATION_OFFSETS = {'home_visit_d02': 1, 'home_visit_d03': 2}
 
 _SIMPLE_EVENT_LOG_MESSAGES = {
-    'home_visit_d02':           'Home visit recorded — Day 02',
-    'home_visit_d03':           'Home visit recorded — Day 03',
-    'home_visit_d15':           'Home visit recorded — Day 15',
-    'training_completion_d29':  'Training completion visit recorded',
+    'home_visit_d02': 'Home visit recorded — Day 02',
+    'home_visit_d03': 'Home visit recorded — Day 03',
+    'home_visit_d15': 'Home visit recorded — Day 15',
 }
 
 _FOLLOWUP_CALL_IDS = {
@@ -1499,29 +1497,175 @@ def api_complete_simple_event(homer_id):
     loginid    = flask_session.get('loginid', 'unknown')
     session_id = flask_session.get('session_id', -1)
 
-    # training_completion_d29: set trainingCompletionDate; handle paused state
-    if protocol_event_id == 'training_completion_d29':
-        patient = read_patient_meta(folder, homer_id)
-        if patient:
-            patient['trainingCompletionDate'] = completion_date
-            # If patient was paused, clear the pause and discard resolve_robot_issue_visit stubs
-            # (robot is returned on d29; adverse event resolve stubs persist)
-            if patient.get('trainingPausedDate'):
-                patient['trainingPausedDate'] = None
-                ev_data = read_protocol_events(folder, homer_id)
-                if ev_data:
-                    ev_data['incomplete'] = [
-                        e for e in ev_data.get('incomplete', [])
-                        if e.get('protocol_event_id') != 'resolve_robot_issue_visit'
-                    ]
-                    write_protocol_events(folder, homer_id, ev_data)
-                write_patient_log(folder, homer_id, loginid, session_id,
-                                  'Training pause cleared — training completed')
-            write_patient_meta(folder, homer_id, patient)
-
     write_patient_log(folder, homer_id, loginid, session_id,
                       _SIMPLE_EVENT_LOG_MESSAGES[protocol_event_id])
 
+    return jsonify({'ok': True})
+
+
+_AUDIO_CONTENT_TYPES = {'mp3': 'audio/mpeg', 'm4a': 'audio/mp4', 'wav': 'audio/wav'}
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/training-completion', methods=['POST'])
+def api_complete_training_completion(homer_id):
+    """Complete training_completion_d29 with feedback form, qualitative analysis uploads."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    patient = read_patient_meta(folder, homer_id)
+    if patient and patient.get('discontinuationDate'):
+        return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
+
+    event_id        = (request.form.get('event_id') or '').strip()
+    completion_date = (request.form.get('completion_date') or '').strip()
+    notes           = (request.form.get('notes') or '').strip()
+    feedback_notes  = (request.form.get('feedback_form_notes') or '').strip()
+    qual_str        = (request.form.get('qualitative_recruited') or 'false').strip().lower()
+    qualitative_recruited = qual_str in ('true', '1', 'yes')
+    attachment_caption = (request.form.get('attachment_caption') or '').strip()
+
+    if not completion_date:
+        return jsonify({'error': 'Event date is required.'}), 400
+    try:
+        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Event date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+
+    feedback_file    = request.files.get('feedback_form_file')
+    audio_file       = request.files.get('qualitative_audio_file')
+    scan_file        = request.files.get('qualitative_scan_file')
+    attachment_file  = request.files.get('attachment_file')
+
+    has_feedback_file  = bool(feedback_file and feedback_file.filename)
+    has_audio_file     = bool(audio_file and audio_file.filename)
+    has_scan_file      = bool(scan_file and scan_file.filename)
+    has_generic_file   = bool(attachment_file and attachment_file.filename)
+
+    if not has_feedback_file and not feedback_notes:
+        return jsonify({'error': 'Feedback form: upload the PDF or provide notes.'}), 400
+    if has_feedback_file and not feedback_file.filename.lower().endswith('.pdf'):
+        return jsonify({'error': 'Feedback form must be a PDF file.'}), 400
+
+    if qualitative_recruited:
+        if not has_audio_file:
+            return jsonify({'error': 'Audio recording is required for qualitative analysis.'}), 400
+        audio_ext = audio_file.filename.rsplit('.', 1)[-1].lower() if '.' in audio_file.filename else ''
+        if audio_ext not in _AUDIO_CONTENT_TYPES:
+            return jsonify({'error': 'Audio must be MP3, M4A, or WAV.'}), 400
+        if has_scan_file and not scan_file.filename.lower().endswith('.pdf'):
+            return jsonify({'error': 'Qualitative scan must be a PDF file.'}), 400
+
+    if has_generic_file:
+        if not attachment_file.filename.lower().endswith('.pdf'):
+            return jsonify({'error': 'Attachment must be a PDF file.'}), 400
+        if not attachment_caption:
+            return jsonify({'error': 'Attachment description is required when a file is selected.'}), 400
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    incomplete = events_data.get('incomplete', [])
+    entry = next(
+        (e for e in incomplete
+         if e.get('protocol_event_id') == 'training_completion_d29'
+         and (not event_id or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Event not found in incomplete list.'}), 404
+
+    eid = entry['id']
+
+    def _save_file(file_obj, rel_path, content_type):
+        if Config.USE_S3:
+            from utils.s3_store import s3_upload_file
+            import tempfile, os as _os
+            suffix = '.' + rel_path.rsplit('.', 1)[-1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                file_obj.save(tmp.name)
+                tmp_path = tmp.name
+            try:
+                s3_upload_file(tmp_path, f"{folder}/patients/{homer_id}/{rel_path}",
+                               content_type=content_type)
+            finally:
+                _os.unlink(tmp_path)
+        else:
+            dest = get_patients_path(folder) / homer_id / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            file_obj.save(str(dest))
+
+    feedback_rel = None
+    if has_feedback_file:
+        feedback_rel = f'attachments/{eid}_feedback.pdf'
+        _save_file(feedback_file, feedback_rel, 'application/pdf')
+
+    audio_rel = None
+    scan_rel  = None
+    if qualitative_recruited:
+        audio_ext = audio_file.filename.rsplit('.', 1)[-1].lower()
+        audio_rel = f'attachments/{eid}_audio.{audio_ext}'
+        _save_file(audio_file, audio_rel, _AUDIO_CONTENT_TYPES[audio_ext])
+        if has_scan_file:
+            scan_rel = f'attachments/{eid}_scan.pdf'
+            _save_file(scan_file, scan_rel, 'application/pdf')
+
+    generic_rel = None
+    if has_generic_file:
+        generic_rel = f'attachments/{eid}.pdf'
+        _save_file(attachment_file, generic_rel, 'application/pdf')
+
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    complete_entry = {
+        **entry,
+        'completion_date':          completion_date,
+        'filed_at':                 filed_at,
+        'notes':                    notes,
+        'feedback_form_attachment': feedback_rel,
+        'feedback_form_notes':      feedback_notes,
+        'qualitative_recruited':    qualitative_recruited,
+    }
+    if qualitative_recruited:
+        complete_entry['qualitative_audio_attachment'] = audio_rel
+        complete_entry['qualitative_scan_attachment']  = scan_rel
+    if generic_rel:
+        complete_entry['attachment']         = generic_rel
+        complete_entry['attachment_caption'] = attachment_caption
+
+    events_data['incomplete'] = [e for e in incomplete if e.get('id') != eid]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    patient = read_patient_meta(folder, homer_id)
+    if patient:
+        patient['trainingCompletionDate'] = completion_date
+        if patient.get('trainingPausedDate'):
+            patient['trainingPausedDate'] = None
+            ev_data = read_protocol_events(folder, homer_id)
+            if ev_data:
+                ev_data['incomplete'] = [
+                    e for e in ev_data.get('incomplete', [])
+                    if e.get('protocol_event_id') != 'resolve_robot_issue_visit'
+                ]
+                write_protocol_events(folder, homer_id, ev_data)
+            write_patient_log(folder, homer_id, loginid, session_id,
+                              'Training pause cleared — training completed')
+        write_patient_meta(folder, homer_id, patient)
+
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      'Training completion visit recorded')
     return jsonify({'ok': True})
 
 

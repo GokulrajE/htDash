@@ -389,12 +389,26 @@ Modals that include the attachment widget (see CLAUDE.md → Attachment Module) 
   - `completion_date` is set to `session_start` — no separate event date is recorded.
 - `notes`: optional free text.
 
-**Simple visit events** (`training_completion_d29`)
+**Training completion visit** (`training_completion_d29`)
 ```json
-{ "notes": "" }
+{
+  "notes": "",
+  "feedback_form_attachment": "attachments/<event_id>_feedback.pdf",
+  "feedback_form_notes": "",
+  "qualitative_recruited": false,
+  "qualitative_audio_attachment": null,
+  "qualitative_scan_attachment": null,
+  "attachment": "attachments/<event_id>.pdf",
+  "attachment_caption": ""
+}
 ```
 
-No extra fields beyond the base schema — `notes` may be empty.
+- `feedback_form_attachment`: path to the uploaded feedback form PDF, or `null` if not uploaded.
+- `feedback_form_notes`: therapist notes for the feedback form. Required if `feedback_form_attachment` is null; otherwise optional.
+- `qualitative_recruited`: `true` if the patient was recruited for qualitative analysis.
+- `qualitative_audio_attachment`: path to audio recording (MP3/M4A/WAV). Present only when `qualitative_recruited = true`; required in that case.
+- `qualitative_scan_attachment`: path to optional scanned document PDF. Present only when `qualitative_recruited = true`; may be `null`.
+- `attachment` / `attachment_caption`: generic optional attachment (PDF), same as other events.
 
 **Follow-up call events** (`followup_call_d07`, `followup_call_d21`)
 ```json
