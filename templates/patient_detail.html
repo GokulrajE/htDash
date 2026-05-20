@@ -130,11 +130,11 @@
         <span class="text-sm font-semibold text-red-700">Patient is discontinued — record is read-only. No further changes are allowed.</span>
       </div>
 
-      <!-- Patient info + Key dates + Days counter (locked) -->
-      <div class="grid grid-cols-5 gap-4 flex-shrink-0">
+      <!-- Patient info · Devices · Key dates · Days counter (flex so hidden items collapse) -->
+      <div class="flex gap-4 flex-shrink-0">
 
         <!-- Patient Info -->
-        <div class="col-span-2 bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+        <div class="flex-[2] bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
           <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Patient Info</h3>
           <div class="grid grid-cols-3 gap-4">
             <div>
@@ -164,8 +164,14 @@
           </div>
         </div>
 
+        <!-- Assigned Devices (hidden when no open assignments) -->
+        <div id="overview-devices-section" class="hidden flex-[1.5] bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Assigned Devices</h3>
+          <div id="overview-devices-content"></div>
+        </div>
+
         <!-- Key Dates -->
-        <div class="col-span-2 bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+        <div class="flex-[2] bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
           <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Key Dates</h3>
           <div class="grid grid-cols-3 gap-4">
             <div>
@@ -196,19 +202,19 @@
         </div>
 
         <!-- Days counter -->
-        <div id="days-card" class="col-span-1 bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col hidden">
+        <div id="days-card" class="hidden flex-[1] bg-white rounded-2xl p-5 shadow-sm border border-slate-100 flex flex-col">
           <h3 id="days-elapsed-label" class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Days Since Recruitment</h3>
           <div class="flex-1 flex items-center justify-center">
             <p id="days-elapsed-number" class="text-8xl font-black text-slate-800 leading-none"></p>
           </div>
         </div>
 
-        <!-- Pause history (shown only when pauseHistory is non-empty) -->
-        <div id="pause-history-section" class="hidden col-span-5 bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Pause History</h3>
-          <div id="pause-history-content"></div>
-        </div>
+      </div>
 
+      <!-- Pause history (shown only when pauseHistory is non-empty) -->
+      <div id="pause-history-section" class="hidden flex-shrink-0 bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+        <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Pause History</h3>
+        <div id="pause-history-content"></div>
       </div>
 
       <!-- Completed / Overdue / Upcoming events (scrollable) -->
@@ -220,7 +226,7 @@
             <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100">
               <div class="flex items-center gap-2">
                 <i class="fas fa-check-circle text-green-500 text-sm"></i>
-                <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Completed</h3>
+                <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Completed / Passed</h3>
               </div>
               <span id="patient-completed-count" class="text-xs font-bold bg-green-100 text-green-600 px-2 py-0.5 rounded-full">0</span>
             </div>
@@ -319,50 +325,154 @@
 <!-- ── Modals ──────────────────────────────────────────────────────────────── -->
 
 
-<!-- Record A1 -->
+<!-- A1 Assessment -->
 <div id="a1-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-xl font-bold text-slate-800">Record A1 Assessment</h3>
       <button onclick="hideModal('a1-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
-    <div class="mb-4 px-4 py-3 bg-slate-50 rounded-xl">
-      <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
-      <p id="a1-homer-id" class="text-base font-semibold text-slate-800"></p>
+    <!-- Cancellation section — shown only when a scheduled appointment exists -->
+    <div id="a1-cancel-section" class="hidden mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
+      <p class="text-xs font-semibold text-red-700 mb-1">Scheduled appointment: <span id="a1-scheduled-date-display" class="font-normal"></span></p>
+      <label class="block text-xs font-medium text-red-700 mb-1 mt-2">Reason for cancellation <span class="text-red-500">*</span></label>
+      <input type="text" id="a1-cancel-reason" placeholder="e.g. Patient unavailable"
+             class="w-full px-3 py-2 bg-white border border-red-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-300 mb-2">
+      <button type="button" onclick="cancelAssessmentAppointment('a1')"
+              class="w-full px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
+        Cancel Scheduled Assessment
+      </button>
     </div>
     <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">A1 Assessment Date <span class="text-red-500">*</span></label>
+      <label class="block text-sm font-medium text-slate-700 mb-2">Assessment Date <span class="text-red-500">*</span></label>
       <input type="datetime-local" id="a1-date" required
              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500">
     </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+      <textarea id="a1-notes" rows="2"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
+                placeholder="Add any notes…"></textarea>
+    </div>
     <p id="a1-error" class="text-sm text-red-500 hidden mb-3"></p>
     <div class="flex gap-3">
-      <button type="button" onclick="hideModal('a1-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
-      <button type="button" id="a1-submit" onclick="submitA1()" class="flex-1 px-4 py-3 bg-violet-600 text-white rounded-xl font-medium hover:bg-violet-700">Record</button>
+      <button type="button" onclick="hideModal('a1-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Close</button>
+      <button type="button" id="a1-submit" onclick="saveA1Assessment()" class="flex-1 px-4 py-3 bg-violet-600 text-white rounded-xl font-medium hover:bg-violet-700">Record</button>
     </div>
   </div>
 </div>
 
-<!-- Record A2 -->
+<!-- A2 Assessment -->
 <div id="a2-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
   <div class="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-xl font-bold text-slate-800">Record A2 Assessment</h3>
       <button onclick="hideModal('a2-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
     </div>
-    <div class="mb-4 px-4 py-3 bg-slate-50 rounded-xl">
-      <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
-      <p id="a2-homer-id" class="text-base font-semibold text-slate-800"></p>
+    <!-- Cancellation section — shown only when a scheduled appointment exists -->
+    <div id="a2-cancel-section" class="hidden mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-xl">
+      <p class="text-xs font-semibold text-red-700 mb-1">Scheduled appointment: <span id="a2-scheduled-date-display" class="font-normal"></span></p>
+      <label class="block text-xs font-medium text-red-700 mb-1 mt-2">Reason for cancellation <span class="text-red-500">*</span></label>
+      <input type="text" id="a2-cancel-reason" placeholder="e.g. Patient unavailable"
+             class="w-full px-3 py-2 bg-white border border-red-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-300 mb-2">
+      <button type="button" onclick="cancelAssessmentAppointment('a2')"
+              class="w-full px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
+        Cancel Scheduled Assessment
+      </button>
     </div>
     <div class="mb-4">
-      <label class="block text-sm font-medium text-slate-700 mb-2">A2 Assessment Date <span class="text-red-500">*</span></label>
+      <label class="block text-sm font-medium text-slate-700 mb-2">Assessment Date <span class="text-red-500">*</span></label>
       <input type="datetime-local" id="a2-date" required
              class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
     </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+      <textarea id="a2-notes" rows="2"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+                placeholder="Add any notes…"></textarea>
+    </div>
     <p id="a2-error" class="text-sm text-red-500 hidden mb-3"></p>
     <div class="flex gap-3">
-      <button type="button" onclick="hideModal('a2-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
-      <button type="button" id="a2-submit" onclick="submitA2()" class="flex-1 px-4 py-3 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700">Record</button>
+      <button type="button" onclick="hideModal('a2-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Close</button>
+      <button type="button" id="a2-submit" onclick="saveA2Assessment()" class="flex-1 px-4 py-3 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700">Record</button>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule A1 Call -->
+<div id="schedule-a1-call-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-bold text-slate-800">Schedule A1 Assessment</h3>
+      <button onclick="hideModal('schedule-a1-call-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+      <p class="text-xs text-amber-700">This records a call made to schedule or reschedule the A1 assessment appointment.</p>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Call Date/Time <span class="text-red-500">*</span></label>
+      <input type="datetime-local" id="sa1-date" required
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500">
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Duration (minutes) <span class="text-red-500">*</span></label>
+      <input type="number" id="sa1-duration" min="1" placeholder="e.g. 10"
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500">
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Notes <span class="text-red-500">*</span></label>
+      <textarea id="sa1-notes" rows="2"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
+                placeholder="What was discussed; any prior scheduling context…"></textarea>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">New Appointment Date <span class="text-red-500">*</span></label>
+      <input type="date" id="sa1-appointment" required
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500">
+    </div>
+    <p id="sa1-error" class="text-sm text-red-500 hidden mb-3"></p>
+    <div class="flex gap-3">
+      <button type="button" onclick="hideModal('schedule-a1-call-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+      <button type="button" onclick="saveScheduleAssessmentCall('a1')" class="flex-1 px-4 py-3 bg-violet-600 text-white rounded-xl font-medium hover:bg-violet-700">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule A2 Call -->
+<div id="schedule-a2-call-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-bold text-slate-800">Schedule A2 Assessment</h3>
+      <button onclick="hideModal('schedule-a2-call-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+      <p class="text-xs text-amber-700">This records a call made to schedule or reschedule the A2 assessment appointment.</p>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Call Date/Time <span class="text-red-500">*</span></label>
+      <input type="datetime-local" id="sa2-date" required
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Duration (minutes) <span class="text-red-500">*</span></label>
+      <input type="number" id="sa2-duration" min="1" placeholder="e.g. 10"
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">Notes <span class="text-red-500">*</span></label>
+      <textarea id="sa2-notes" rows="2"
+                class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+                placeholder="What was discussed; any prior scheduling context…"></textarea>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-slate-700 mb-2">New Appointment Date <span class="text-red-500">*</span></label>
+      <input type="date" id="sa2-appointment" required
+             class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+    </div>
+    <p id="sa2-error" class="text-sm text-red-500 hidden mb-3"></p>
+    <div class="flex gap-3">
+      <button type="button" onclick="hideModal('schedule-a2-call-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+      <button type="button" onclick="saveScheduleAssessmentCall('a2')" class="flex-1 px-4 py-3 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700">Save</button>
     </div>
   </div>
 </div>
@@ -621,7 +731,7 @@
         <p class="text-xs text-red-500 font-medium mb-0.5">Patient</p>
         <p id="discontinue-homer-id" class="text-base font-semibold text-slate-800"></p>
       </div>
-      <p class="text-sm text-slate-600">Once completed, this patient record becomes read-only. All device assignments will be closed automatically.</p>
+      <p class="text-sm text-slate-600">Once completed, this patient record becomes read-only. Use the Device Return event to close device assignments and log device condition.</p>
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Discontinuation Date/Time <span class="text-red-500">*</span></label>
         <input type="datetime-local" id="disc-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-300">
@@ -645,6 +755,44 @@
       <div class="flex gap-3">
         <button type="button" onclick="hideModal('discontinue-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
         <button type="button" id="discontinue-submit" onclick="saveDiscontinuation()" class="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600">Discontinue</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Device Return -->
+<div id="device-return-modal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" style="display:none">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col" style="max-height:90vh">
+    <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+      <h3 class="text-xl font-bold text-slate-800">Device Return</h3>
+      <button onclick="hideModal('device-return-modal')" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times text-lg"></i></button>
+    </div>
+    <div class="overflow-y-auto flex-1 px-6 space-y-4 pb-2">
+      <div class="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+        <p class="text-xs text-slate-500 font-medium mb-0.5">Patient</p>
+        <p id="dr-homer-id" class="text-base font-semibold text-slate-800"></p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Return Date/Time <span class="text-red-500">*</span></label>
+        <input type="datetime-local" id="dr-date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <p id="dr-date-error" class="text-xs text-red-500 mt-1 hidden"></p>
+      </div>
+      <div id="dr-devices-container" class="space-y-3">
+        <!-- Per-device cards injected by JS -->
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">General Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+        <textarea id="dr-notes" rows="2"
+                  class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
+                  placeholder="Any additional notes…"></textarea>
+      </div>
+      {{ attachment_section('dr') }}
+    </div>
+    <div class="px-6 pt-3 pb-6 shrink-0 border-t border-slate-100">
+      <p id="dr-error" class="text-sm text-red-500 hidden mb-3"></p>
+      <div class="flex gap-3">
+        <button type="button" onclick="hideModal('device-return-modal')" class="flex-1 px-4 py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50">Cancel</button>
+        <button type="button" id="dr-save" onclick="saveDeviceReturn()" class="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">Save</button>
       </div>
     </div>
   </div>
@@ -838,6 +986,11 @@
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
         <textarea id="d29-notes" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="Add any notes…"></textarea>
+      </div>
+      <!-- A1 appointment date -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">A1 Appointment Date <span class="text-slate-400 font-normal">(optional — sets the A1 assessment date)</span></label>
+        <input id="d29-a1-appointment" type="date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
       </div>
       <!-- Feedback form section -->
       <div class="border border-slate-200 rounded-xl p-4 space-y-3">

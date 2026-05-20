@@ -86,7 +86,12 @@ def api_patient_detail(homer_id):
 
 def _topo_sort(events, event_defs, date_fn):
     """Group events by date_fn, topo-sort within each group (parents before dependents),
-    return in ascending date order."""
+    return in ascending date order.
+
+    Ordering edges come from both `depends_on` (hard blocking) and `comes_after`
+    (soft display hint) in event_defs. Only `depends_on` drives the blocked_by badge;
+    both fields drive this sort.
+    """
     events_by_date = {}
     for ev in events:
         events_by_date.setdefault(date_fn(ev), []).append(ev)
@@ -103,7 +108,8 @@ def _topo_sort(events, event_defs, date_fn):
         dependents   = {ev['protocol_event_id']: [] for ev in group}
         for ev in group:
             pid  = ev['protocol_event_id']
-            deps = event_defs.get(pid, {}).get('depends_on') or []
+            def_entry = event_defs.get(pid, {})
+            deps = list(def_entry.get('depends_on') or []) + list(def_entry.get('comes_after') or [])
             for d in deps:
                 if d in ids_in_group:
                     in_degree[pid] += 1
@@ -120,6 +126,20 @@ def _topo_sort(events, event_defs, date_fn):
         placed = {ev['protocol_event_id'] for ev in sorted_group}
         sorted_group.extend(ev for ev in group if ev['protocol_event_id'] not in placed)
         result.extend(sorted_group)
+    return result
+
+
+def _apply_ordering_rules(events):
+    """Post-sort pass: schedule_a1_call and schedule_a2_call always appear
+    immediately before their assessment counterpart when both are in the same list."""
+    result = list(events)
+    for call_pid, assess_pid in (('schedule_a1_call', 'a1_assessment'),
+                                  ('schedule_a2_call', 'a2_assessment')):
+        call_idx   = next((i for i, e in enumerate(result) if e['protocol_event_id'] == call_pid), None)
+        assess_idx = next((i for i, e in enumerate(result) if e['protocol_event_id'] == assess_pid), None)
+        if call_idx is not None and assess_idx is not None and call_idx > assess_idx:
+            ev = result.pop(call_idx)
+            result.insert(assess_idx, ev)
     return result
 
 
@@ -151,7 +171,7 @@ def _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data):
     except Exception:
         return
     day28_end = activation_date + timedelta(days=28)
-    if date.today() <= day28_end:
+    if date.today() < day28_end:
         return
 
     paused_since_str = patient['trainingPausedDate']
@@ -216,6 +236,115 @@ def api_patient_events(homer_id):
                 )
                 write_protocol_events(folder, homer_id, events_data)
 
+    # Auto-seeding for assessment scheduling stubs.
+    if patient and events_data and patient.get('activationDate'):
+        _now_str  = datetime.now().strftime('%Y-%m-%dT%H:%M')
+        _filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        _dirty    = False
+
+        # A1: seed schedule_a1_call when a1_assessment.scheduled_date is null and no stub exists.
+        # Also clean up any orphaned schedule_a1_call stubs if a1 is already complete.
+        _a1_complete = any(
+            e.get('protocol_event_id') == 'a1_assessment'
+            for e in events_data.get('complete', [])
+        )
+        _a1_stub_exists = any(
+            e.get('protocol_event_id') == 'schedule_a1_call'
+            for e in events_data.get('incomplete', [])
+        )
+        if _a1_complete and _a1_stub_exists:
+            events_data['incomplete'] = [
+                e for e in events_data['incomplete']
+                if e.get('protocol_event_id') != 'schedule_a1_call'
+            ]
+            _a1_stub_exists = False
+            _dirty = True
+        if not _a1_complete and not _a1_stub_exists:
+            _a1_inc = next((
+                e for e in events_data.get('incomplete', [])
+                if e.get('protocol_event_id') == 'a1_assessment'
+            ), None)
+            if _a1_inc and _a1_inc.get('scheduled_date') is None:
+                events_data.setdefault('incomplete', []).insert(0, {
+                    'id':                str(uuid.uuid4()),
+                    'protocol_event_id': 'schedule_a1_call',
+                    'scheduled_date':    [_now_str, _now_str],
+                    'filed_at':          _filed_at,
+                })
+                _dirty = True
+
+        # A2: seed schedule_a2_call when a2_assessment.scheduled_date is null OR 7 days before window.
+        _a2_def = None
+        for _e in protocol.get('shared', []):
+            if _e['id'] == 'a2_assessment':
+                _a2_def = _e
+                break
+        if _a2_def and _a2_def.get('window'):
+            try:
+                _act_date = datetime.fromisoformat(patient['activationDate']).date()
+                _a2_start = _act_date + timedelta(days=_a2_def['window']['start_day'] - 1)
+                _today    = date.today()
+                _a2_complete = any(
+                    e.get('protocol_event_id') == 'a2_assessment'
+                    for e in events_data.get('complete', [])
+                )
+                _a2_stub_exists = any(
+                    e.get('protocol_event_id') == 'schedule_a2_call'
+                    for e in events_data.get('incomplete', [])
+                )
+                _a2_inc = next((
+                    e for e in events_data.get('incomplete', [])
+                    if e.get('protocol_event_id') == 'a2_assessment'
+                ), None)
+                _a2_null_date   = _a2_inc and _a2_inc.get('scheduled_date') is None
+                _a2_near_window = _today >= (_a2_start - timedelta(days=7))
+
+                # Clean up orphaned stub when A2 is already complete or already scheduled.
+                if _a2_stub_exists and (_a2_complete or not _a2_null_date):
+                    events_data['incomplete'] = [
+                        e for e in events_data['incomplete']
+                        if e.get('protocol_event_id') != 'schedule_a2_call'
+                    ]
+                    _a2_stub_exists = False
+                    _dirty = True
+                if not _a2_complete and not _a2_stub_exists and _a2_null_date and _a2_near_window:
+                        events_data.setdefault('incomplete', []).insert(0, {
+                            'id':                str(uuid.uuid4()),
+                            'protocol_event_id': 'schedule_a2_call',
+                            'scheduled_date':    [_now_str, _now_str],
+                            'filed_at':          _filed_at,
+                        })
+                        _dirty = True
+            except Exception:
+                pass
+
+        if _dirty:
+            write_protocol_events(folder, homer_id, events_data)
+
+    # Lazy seeding for device_return when training ends (any path).
+    if patient and events_data:
+        _training_ended = bool(
+            patient.get('trainingCompletionDate') or
+            patient.get('brokenProtocolDate') or
+            patient.get('discontinuationDate')
+        )
+        if _training_ended:
+            _dr_in_incomplete = any(
+                e.get('protocol_event_id') == 'device_return'
+                for e in events_data.get('incomplete', [])
+            )
+            _dr_complete = bool(events_data.get('free', {}).get('device_return'))
+            if not _dr_in_incomplete and not _dr_complete:
+                _dr_now      = datetime.now().strftime('%Y-%m-%dT%H:%M')
+                _dr_filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+                events_data.setdefault('incomplete', []).append({
+                    'id':                str(uuid.uuid4()),
+                    'protocol_event_id': 'device_return',
+                    'scheduled_date':    [_dr_now, _dr_now],
+                    'filed_at':          _dr_filed_at,
+                })
+                write_protocol_events(folder, homer_id, events_data)
+
     # Build event_defs from shared + patient's group only so group-specific
     # depends_on (e.g. activation→exp_device_install for experimental) are not
     # overwritten by the other group's definition.
@@ -225,6 +354,25 @@ def api_patient_events(homer_id):
     for e in protocol.get((patient or {}).get('group', ''), []):
         event_defs[e['id']] = e
     event_defs['training_pause_followup'] = {'name': 'Training Pause Follow-up', 'depends_on': []}
+    event_defs['schedule_a1_call']        = {'name': 'Schedule A1 Assessment',   'depends_on': []}
+    event_defs['schedule_a2_call']        = {'name': 'Schedule A2 Assessment',   'depends_on': []}
+    event_defs['device_return']           = {'name': 'Device Return',            'depends_on': []}
+
+    # Precompute A1/A2 window dates from activationDate for row display
+    _assessment_windows = {}
+    if patient and patient.get('activationDate'):
+        try:
+            _act_dt = datetime.fromisoformat(patient['activationDate']).date()
+            for _pid in ('a1_assessment', 'a2_assessment'):
+                _def = event_defs.get(_pid, {})
+                _win = _def.get('window')
+                if _win:
+                    _ws = _act_dt + timedelta(days=_win['start_day'] - 1)
+                    _we = _act_dt + timedelta(days=_win['end_day'] - 1)
+                    _assessment_windows[_pid] = (_ws.isoformat(), _we.isoformat())
+        except Exception:
+            pass
+
     if not events_data:
         return jsonify({'overdue': [], 'upcoming': []})
 
@@ -263,6 +411,7 @@ def api_patient_events(homer_id):
         'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
         'other_device_issue_call', 'other_device_issue_visit',
         'training_completion_d29',
+        'device_return',
     })
     # For broken_protocol patients only AE/RI/ODI chains + assessments are interactive.
     _BROKEN_PROTOCOL_INTERACTIVE = frozenset({
@@ -270,34 +419,77 @@ def api_patient_events(homer_id):
         'adverse_event_followup_visit', 'adverse_event_clinical_visit',
         'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
         'other_device_issue_call', 'other_device_issue_visit',
+        'discontinuation_reminder',
+        'a1_assessment', 'a2_assessment',
+        'schedule_a1_call', 'schedule_a2_call',
+        'device_return',
     })
     # For discontinued patients only open AE chains + assessments remain relevant.
     _DISCONTINUED_VISIBLE = frozenset({
         'adverse_event', 'adverse_event_followup',
         'adverse_event_followup_visit', 'adverse_event_clinical_visit',
         'a1_assessment', 'a2_assessment',
+        'schedule_a1_call', 'schedule_a2_call',
+        'device_return',
+    })
+    # For post_training patients (Day 28 passed, D29 not yet filed): only D29,
+    # AE chains, assessments, and device_return are shown.
+    _POST_TRAINING_VISIBLE = frozenset({
+        'training_completion_d29',
+        'adverse_event', 'adverse_event_followup',
+        'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+        'a1_assessment', 'a2_assessment',
+        'schedule_a1_call', 'schedule_a2_call',
+        'device_return',
     })
     is_paused        = bool(patient and patient.get('trainingPausedDate'))
     is_discontinued  = bool(patient and patient.get('discontinuationDate'))
+    is_post_training = bool(patient and derive_status(patient) == 'post_training')
+
+    _ASSESSMENT_PIDS = frozenset({'a1_assessment', 'a2_assessment'})
 
     for entry in events_data.get('incomplete', []):
+        pid   = entry.get('protocol_event_id')
         sched = entry.get('scheduled_date')
-        if not sched or not isinstance(sched, list) or len(sched) < 2:
-            continue
-        try:
-            start_date = datetime.fromisoformat(sched[0]).date()
-            end_date   = datetime.fromisoformat(sched[1]).date()
-        except Exception:
-            continue
 
-        pid = entry.get('protocol_event_id')
+        if not sched or not isinstance(sched, list) or len(sched) < 2:
+            # Assessment events are shown even without a scheduled appointment date.
+            # Use window dates for categorisation; sched stays null for the client.
+            if pid not in _ASSESSMENT_PIDS or pid not in _assessment_windows:
+                continue
+            _ws_str, _we_str = _assessment_windows[pid]
+            try:
+                start_date = datetime.fromisoformat(_ws_str).date()
+                end_date   = datetime.fromisoformat(_we_str).date()
+            except Exception:
+                continue
+            sched = None
+        else:
+            try:
+                start_date = datetime.fromisoformat(sched[0]).date()
+                end_date   = datetime.fromisoformat(sched[1]).date()
+            except Exception:
+                continue
+            # Assessment events: override categorisation bounds with window dates so
+            # days = window_end − today (not appointment_date − today).
+            if pid in _ASSESSMENT_PIDS and pid in _assessment_windows:
+                try:
+                    _ws_str, _we_str = _assessment_windows[pid]
+                    start_date = datetime.fromisoformat(_ws_str).date()
+                    end_date   = datetime.fromisoformat(_we_str).date()
+                except Exception:
+                    pass
 
         # Discontinued patients: only AE follow-up chain + assessments shown.
         if is_discontinued and pid not in _DISCONTINUED_VISIBLE:
             continue
 
-        # For broken_protocol patients: only AE follow-up chain + a1/a2 assessments are shown.
-        if is_broken_protocol and pid not in _BROKEN_PROTOCOL_INTERACTIVE and pid not in ('a1_assessment', 'a2_assessment'):
+        # For broken_protocol patients: only AE/RI/ODI chains + assessments are shown.
+        if is_broken_protocol and pid not in _BROKEN_PROTOCOL_INTERACTIVE:
+            continue
+
+        # For post_training patients: only D29, AE chains, assessments, device_return shown.
+        if is_post_training and pid not in _POST_TRAINING_VISIBLE:
             continue
 
         on_hold = is_paused and pid not in _PAUSE_VISIBLE and start_date <= today
@@ -323,6 +515,10 @@ def api_patient_events(homer_id):
             'scheduled_date':    sched,
             'blocked_by':        blocked_by,
         }
+        if pid in _ASSESSMENT_PIDS and pid in _assessment_windows:
+            _ws_str, _we_str = _assessment_windows[pid]
+            record['window_start'] = _ws_str
+            record['window_end']   = _we_str
         if entry.get('triggered_by'):
             record['triggered_by'] = entry['triggered_by']
         if entry.get('adverse_event_ids') is not None:
@@ -364,12 +560,16 @@ def api_patient_events(homer_id):
 
     # Active-window first, then past-due; within each sub-group sort by end date
     # and topo-sort within same-end-date groups so parents appear before dependents.
-    end_date_fn = lambda ev: ev['scheduled_date'][1][:10] if isinstance(ev.get('scheduled_date'), list) else ev.get('scheduled_date', '')[:10]
+    end_date_fn = lambda ev: (ev['scheduled_date'] or ['', ''])[1][:10]
     active_overdue = sorted([e for e in overdue if e.get('active_window')],  key=end_date_fn)
     past_overdue   = sorted([e for e in overdue if not e.get('active_window')], key=end_date_fn)
-    overdue  = (_topo_sort(active_overdue, event_defs, end_date_fn) +
-                _topo_sort(past_overdue,   event_defs, end_date_fn))
-    upcoming = _topo_sort(upcoming, event_defs, lambda ev: ev['scheduled_date'][0][:10])
+    overdue  = _apply_ordering_rules(
+        _topo_sort(active_overdue, event_defs, end_date_fn) +
+        _topo_sort(past_overdue,   event_defs, end_date_fn)
+    )
+    upcoming = _apply_ordering_rules(
+        _topo_sort(upcoming, event_defs, lambda ev: (ev['scheduled_date'] or ['', ''])[0][:10])
+    )
 
     complete_list = []
     for entry in events_data.get('complete', []):
@@ -859,9 +1059,6 @@ def api_discontinue_patient(homer_id):
     # Cancel training-ended stubs
     _cancel_training_ended_stubs(events_data, ['watch_record', 'resolve_robot_issue_visit'], filed_at)
 
-    # Close all device assignments and clear has_issue flags
-    _close_patient_device_assignments(folder, homer_id, now_hhmm)
-
     # Set discontinuationDate
     patient['discontinuationDate'] = completion_date
     write_patient_meta(folder, homer_id, patient)
@@ -880,6 +1077,256 @@ def api_discontinue_patient(homer_id):
 
     try:
         write_patient_log(folder, homer_id, loginid, session_id, 'Patient discontinued.')
+    except Exception as e:
+        print(f'Warning: could not write patient log: {e}')
+
+    return jsonify({'ok': True, 'event_id': record_id})
+
+
+@bp.route('/api/patients/<homer_id>/current-devices', methods=['GET'])
+def api_current_devices(homer_id):
+    """Return open device assignments for the overview panel (all authenticated roles)."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    devices = []
+    agwatch_asgns = read_device_assignments(folder, 'agwatch')
+    agwatch_inv   = {d['id']: d for d in read_device_inventory(folder, 'agwatch')}
+    for a in agwatch_asgns:
+        if a.get('homer_id') == homer_id and a.get('returned_date') is None:
+            inv = agwatch_inv.get(a['device_id'], {})
+            devices.append({
+                'type':      'agwatch',
+                'device_id': a['device_id'],
+                'limb':      a.get('limb', ''),
+                'has_issue': bool(inv.get('has_issue')),
+                'lost':      bool(inv.get('lost_date')),
+            })
+
+    if patient.get('group') == 'experimental':
+        all_sims = {s['id']: s for s in read_sims(folder)}
+        for dtype in ('pluto', 'mars', 'modems', 'laptops'):
+            inv_map = {d['id']: d for d in read_device_inventory(folder, dtype)}
+            for a in read_device_assignments(folder, dtype):
+                if a.get('homer_id') == homer_id and a.get('returned_date') is None:
+                    inv = inv_map.get(a['device_id'], {})
+                    entry = {
+                        'type':      dtype,
+                        'device_id': a['device_id'],
+                        'has_issue': bool(inv.get('has_issue')),
+                    }
+                    if dtype == 'modems' and inv.get('sim_id'):
+                        sim_rec = all_sims.get(inv['sim_id'], {})
+                        entry['sim'] = sim_rec.get('phoneNumber', inv['sim_id'])
+                    devices.append(entry)
+
+    return jsonify({'devices': devices})
+
+
+@bp.route('/api/patients/<homer_id>/device-return-devices', methods=['GET'])
+def api_device_return_devices(homer_id):
+    """Return currently open-assigned devices for the device return modal."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'engineer'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    devices = []
+    # AGWatch — both groups
+    agwatch_asgns = read_device_assignments(folder, 'agwatch')
+    agwatch_inv   = {d['id']: d for d in read_device_inventory(folder, 'agwatch')}
+    for a in agwatch_asgns:
+        if a.get('homer_id') == homer_id and a.get('returned_date') is None:
+            devices.append({
+                'type':      'agwatch',
+                'device_id': a['device_id'],
+                'limb':      a.get('limb', ''),
+                'info':      agwatch_inv.get(a['device_id'], {}),
+            })
+
+    # Pluto, Mars, Modem, Laptop — experimental only
+    if patient.get('group') == 'experimental':
+        for dtype in ('pluto', 'mars', 'modems', 'laptops'):
+            inv   = {d['id']: d for d in read_device_inventory(folder, dtype)}
+            asgns = read_device_assignments(folder, dtype)
+            for a in asgns:
+                if a.get('homer_id') == homer_id and a.get('returned_date') is None:
+                    entry = {
+                        'type':      dtype,
+                        'device_id': a['device_id'],
+                        'info':      inv.get(a['device_id'], {}),
+                    }
+                    devices.append(entry)
+                    # If modem has an associated SIM, add it
+                    if dtype == 'modems':
+                        sim_id = inv.get(a['device_id'], {}).get('sim_id')
+                        if sim_id:
+                            all_sims = read_sims(folder)
+                            sim_rec = next((s for s in all_sims if s['id'] == sim_id), None)
+                            if sim_rec:
+                                devices.append({
+                                    'type':   'sim',
+                                    'sim_id': sim_id,
+                                    'phone':  sim_rec.get('phoneNumber', sim_id),
+                                    'info':   sim_rec,
+                                })
+
+    return jsonify({'devices': devices})
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/device-return', methods=['POST'])
+def api_complete_device_return(homer_id):
+    """Complete the device return modal — closes all device assignments and logs device condition."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'engineer'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    patient = read_patient_meta(folder, homer_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    data            = request.get_json() or {}
+    event_id        = data.get('event_id')
+    completion_date = (data.get('completion_date') or '').strip()
+    notes           = (data.get('notes') or '').strip() or None
+    device_entries  = data.get('devices') or []
+
+    if not completion_date:
+        return jsonify({'error': 'Event date is required.'}), 400
+    try:
+        comp_dt = datetime.strptime(completion_date, '%Y-%m-%dT%H:%M')
+        if comp_dt > datetime.now():
+            return jsonify({'error': 'Event date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid date format.'}), 400
+
+    if events_data.get('free', {}).get('device_return'):
+        return jsonify({'error': 'Device return already completed.'}), 409
+
+    filed_at   = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    now_hhmm   = datetime.now().strftime('%Y-%m-%dT%H:%M')
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', -1)
+
+    # Close all open device assignments and process per-device outcomes
+    for dtype in ('pluto', 'mars', 'agwatch', 'modems', 'laptops'):
+        assignments = read_device_assignments(folder, dtype)
+        inv_list    = read_device_inventory(folder, dtype)
+        inv_map     = {d['id']: d for d in inv_list}
+        changed_asgn = False
+        changed_inv  = False
+        for a in assignments:
+            if a.get('homer_id') != homer_id or a.get('returned_date') is not None:
+                continue
+            dev_id  = a['device_id']
+            # Find matching device entry from submitted form data
+            if dtype == 'agwatch':
+                limb    = a.get('limb', '')
+                d_entry = next((e for e in device_entries
+                                if e.get('type') == 'agwatch' and e.get('device_id') == dev_id), None)
+                if d_entry:
+                    status = d_entry.get('status', 'returned')
+                    if status in ('lost', 'battery_dead'):
+                        issue_date = d_entry.get('issue_date', '')
+                        if dev_id in inv_map:
+                            inv_map[dev_id]['lost_date'] = issue_date or completion_date[:10]
+                            changed_inv = True
+                        a['lost'] = True
+                        append_device_event(folder, dtype, dev_id, 'lost', loginid,
+                                            homer_id=homer_id, notes=f'{status.replace("_", " ").title()} at device return ({issue_date or completion_date[:10]})')
+                    else:
+                        if dev_id in inv_map:
+                            inv_map[dev_id].pop('has_issue', None)
+            else:
+                d_entry = next((e for e in device_entries
+                                if e.get('type') == dtype and e.get('device_id') == dev_id), None)
+                if d_entry:
+                    condition = d_entry.get('condition', 'working')
+                    if condition == 'faulty':
+                        if dev_id in inv_map:
+                            inv_map[dev_id]['has_issue'] = True
+                            changed_inv = True
+                        append_device_event(folder, dtype, dev_id, 'faulty', loginid,
+                                            homer_id=homer_id, notes='Faulty at device return')
+                    else:
+                        if dev_id in inv_map:
+                            inv_map[dev_id].pop('has_issue', None)
+                    # Clear SIM from modem when closing modem assignment
+                    if dtype == 'modems' and dev_id in inv_map:
+                        inv_map[dev_id]['sim_id'] = None
+                        changed_inv = True
+            a['returned_date'] = now_hhmm
+            changed_asgn = True
+        if changed_asgn:
+            write_device_assignments(folder, dtype, assignments)
+        if changed_inv:
+            write_device_inventory(folder, dtype, {'devices': inv_list})
+
+    # Handle SIM status
+    sim_entry = next((e for e in device_entries if e.get('type') == 'sim'), None)
+    if sim_entry:
+        sim_id     = sim_entry.get('sim_id')
+        sim_status = sim_entry.get('status', 'returned')
+        if sim_id and sim_status == 'lost':
+            all_sims = read_sims(folder)
+            for s in all_sims:
+                if s['id'] == sim_id:
+                    s['lost_date'] = sim_entry.get('issue_date', completion_date[:10])
+                    break
+            write_sims(folder, all_sims)
+
+    # Remove stub from incomplete
+    if event_id:
+        events_data['incomplete'] = [
+            e for e in events_data.get('incomplete', [])
+            if e.get('id') != event_id
+        ]
+    else:
+        events_data['incomplete'] = [
+            e for e in events_data.get('incomplete', [])
+            if e.get('protocol_event_id') != 'device_return'
+        ]
+
+    # Build completed record
+    record_id = event_id or str(uuid.uuid4())
+    record = {
+        'id':              record_id,
+        'protocol_event_id': 'device_return',
+        'completion_date': completion_date,
+        'filed_at':        filed_at,
+        'notes':           notes,
+        'devices':         device_entries,
+    }
+    events_data.setdefault('free', {})['device_return'] = record
+    write_protocol_events(folder, homer_id, events_data)
+
+    try:
+        write_patient_log(folder, homer_id, loginid, session_id, 'Device return recorded.')
     except Exception as e:
         print(f'Warning: could not write patient log: {e}')
 
@@ -1561,11 +2008,12 @@ def api_complete_training_completion(homer_id):
     if patient and patient.get('discontinuationDate'):
         return jsonify({'error': 'Patient is discontinued. No further changes are allowed.'}), 403
 
-    event_id        = (request.form.get('event_id') or '').strip()
-    completion_date = (request.form.get('completion_date') or '').strip()
-    notes           = (request.form.get('notes') or '').strip()
-    feedback_notes  = (request.form.get('feedback_form_notes') or '').strip()
-    qual_str        = (request.form.get('qualitative_recruited') or 'false').strip().lower()
+    event_id          = (request.form.get('event_id') or '').strip()
+    completion_date   = (request.form.get('completion_date') or '').strip()
+    notes             = (request.form.get('notes') or '').strip()
+    a1_appointment    = (request.form.get('a1_appointment_date') or '').strip()
+    feedback_notes    = (request.form.get('feedback_form_notes') or '').strip()
+    qual_str          = (request.form.get('qualitative_recruited') or 'false').strip().lower()
     qualitative_recruited = qual_str in ('true', '1', 'yes')
     attachment_caption = (request.form.get('attachment_caption') or '').strip()
 
@@ -1682,6 +2130,17 @@ def api_complete_training_completion(homer_id):
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != eid]
     _cancel_training_ended_stubs(events_data, ['watch_record', 'resolve_robot_issue_visit'], filed_at)
     events_data.setdefault('complete', []).append(complete_entry)
+
+    # If therapist set an A1 appointment date, update the a1_assessment stub's scheduled_date.
+    if a1_appointment:
+        try:
+            _appt_str = datetime.strptime(a1_appointment, '%Y-%m-%d').strftime('%Y-%m-%dT09:00')
+            for _e in events_data.get('incomplete', []):
+                if _e.get('protocol_event_id') == 'a1_assessment':
+                    _e['scheduled_date'] = [_appt_str, _appt_str]
+                    break
+        except ValueError:
+            pass  # ignore malformed date; assessment stub keeps original window
 
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
@@ -4964,70 +5423,310 @@ def api_complete_training(homer_id):
     return jsonify({'status': 'success', 'homerID': homer_id})
 
 
-@bp.route('/api/patients/<homer_id>/a1', methods=['POST'])
-def api_record_a1(homer_id):
+@bp.route('/api/patients/<homer_id>/complete-event/a1-assessment', methods=['POST'])
+def api_complete_a1_assessment(homer_id):
+    """Complete the a1_assessment protocol event."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
-    if flask_session.get('privilege') != 'admin':
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
         return jsonify({'error': 'Forbidden'}), 403
-    data = request.get_json() or {}
-    a1_date = (data.get('a1CompletionDate') or '').strip()
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body       = request.get_json() or {}
+    event_id   = (body.get('event_id') or '').strip()
+    a1_date    = (body.get('completion_date') or '').strip()
+    notes      = (body.get('notes') or '').strip()
+
     if not a1_date:
-        return jsonify({'error': 'a1CompletionDate is required'}), 400
+        return jsonify({'error': 'Assessment date is required.'}), 400
     try:
         if datetime.strptime(a1_date, '%Y-%m-%dT%H:%M') > datetime.now():
-            return jsonify({'error': 'a1CompletionDate cannot be in the future'}), 400
+            return jsonify({'error': 'Assessment date cannot be in the future.'}), 400
     except ValueError:
-        return jsonify({'error': 'a1CompletionDate format must be YYYY-MM-DDTHH:MM'}), 400
-    folder = get_hospital_folder(flask_session['login_place'])
-    if not folder:
-        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+        return jsonify({'error': 'Invalid date format.'}), 400
+
     patient = read_patient_meta(folder, homer_id)
     if not patient:
         return jsonify({'error': 'Patient not found'}), 404
-    if derive_status(patient) != 'training_completed':
-        return jsonify({'error': 'Patient must have completed training to record A1'}), 409
+    status = derive_status(patient)
+    if status not in ('training_completed', 'a1_completed', 'all_completed'):
+        return jsonify({'error': 'Patient must have completed training to record A1 assessment.'}), 409
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    entry = next(
+        (e for e in events_data.get('incomplete', [])
+         if e.get('protocol_event_id') == 'a1_assessment'
+         and (not event_id or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'A1 assessment event not found in incomplete list.'}), 404
+
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    complete_entry = {**entry, 'completion_date': a1_date, 'filed_at': filed_at, 'notes': notes}
+    # Remove the assessment entry and any orphaned schedule-call stubs.
+    events_data['incomplete'] = [
+        e for e in events_data['incomplete']
+        if e.get('id') != entry['id']
+        and e.get('protocol_event_id') != 'schedule_a1_call'
+    ]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
     patient['a1CompletionDate'] = a1_date
     write_patient_meta(folder, homer_id, patient)
-    try:
-        write_patient_log(folder, homer_id, flask_session.get('loginid', 'unknown'),
-                          flask_session.get('session_id', 0), 'A1 assessment recorded')
-    except Exception as e:
-        print(f'Warning: could not write patient log: {e}')
-    return jsonify({'status': 'success', 'homerID': homer_id})
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', 0)
+    write_patient_log(folder, homer_id, loginid, session_id, 'A1 assessment recorded')
+    return jsonify({'ok': True})
 
 
-@bp.route('/api/patients/<homer_id>/a2', methods=['POST'])
-def api_record_a2(homer_id):
+@bp.route('/api/patients/<homer_id>/complete-event/a2-assessment', methods=['POST'])
+def api_complete_a2_assessment(homer_id):
+    """Complete the a2_assessment protocol event."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
-    if flask_session.get('privilege') != 'admin':
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
         return jsonify({'error': 'Forbidden'}), 403
-    data = request.get_json() or {}
-    a2_date = (data.get('a2CompletionDate') or '').strip()
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body       = request.get_json() or {}
+    event_id   = (body.get('event_id') or '').strip()
+    a2_date    = (body.get('completion_date') or '').strip()
+    notes      = (body.get('notes') or '').strip()
+
     if not a2_date:
-        return jsonify({'error': 'a2CompletionDate is required'}), 400
+        return jsonify({'error': 'Assessment date is required.'}), 400
     try:
         if datetime.strptime(a2_date, '%Y-%m-%dT%H:%M') > datetime.now():
-            return jsonify({'error': 'a2CompletionDate cannot be in the future'}), 400
+            return jsonify({'error': 'Assessment date cannot be in the future.'}), 400
     except ValueError:
-        return jsonify({'error': 'a2CompletionDate format must be YYYY-MM-DDTHH:MM'}), 400
-    folder = get_hospital_folder(flask_session['login_place'])
-    if not folder:
-        return jsonify({'error': 'Cannot determine hospital folder'}), 400
+        return jsonify({'error': 'Invalid date format.'}), 400
+
     patient = read_patient_meta(folder, homer_id)
     if not patient:
         return jsonify({'error': 'Patient not found'}), 404
-    if derive_status(patient) != 'a1_completed':
-        return jsonify({'error': 'Patient must have completed A1 to record A2'}), 409
+    status = derive_status(patient)
+    if status not in ('a1_completed', 'all_completed'):
+        return jsonify({'error': 'Patient must have completed A1 assessment to record A2.'}), 409
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    entry = next(
+        (e for e in events_data.get('incomplete', [])
+         if e.get('protocol_event_id') == 'a2_assessment'
+         and (not event_id or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'A2 assessment event not found in incomplete list.'}), 404
+
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    complete_entry = {**entry, 'completion_date': a2_date, 'filed_at': filed_at, 'notes': notes}
+    # Remove the assessment entry and any orphaned schedule-call stubs.
+    events_data['incomplete'] = [
+        e for e in events_data['incomplete']
+        if e.get('id') != entry['id']
+        and e.get('protocol_event_id') != 'schedule_a2_call'
+    ]
+    events_data.setdefault('complete', []).append(complete_entry)
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
     patient['a2CompletionDate'] = a2_date
     write_patient_meta(folder, homer_id, patient)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', 0)
+    write_patient_log(folder, homer_id, loginid, session_id, 'A2 assessment recorded')
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/patients/<homer_id>/cancel-assessment-appointment', methods=['POST'])
+def api_cancel_assessment_appointment(homer_id):
+    """Cancel a scheduled a1_assessment or a2_assessment appointment.
+
+    Appends to appointment_cancellations on the stub and resets scheduled_date to null.
+    The auto-seeding in api_patient_events will then create the scheduling call stub.
+    """
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body            = request.get_json() or {}
+    assessment_type = (body.get('assessment_type') or '').strip()
+    event_id        = (body.get('event_id') or '').strip()
+    reason          = (body.get('reason') or '').strip()
+
+    if assessment_type not in ('a1', 'a2'):
+        return jsonify({'error': 'assessment_type must be a1 or a2'}), 400
+    if not reason:
+        return jsonify({'error': 'Cancellation reason is required.'}), 400
+
+    pid = f'{assessment_type}_assessment'
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    stub = next(
+        (e for e in events_data.get('incomplete', [])
+         if e.get('protocol_event_id') == pid
+         and (not event_id or e.get('id') == event_id)),
+        None
+    )
+    if not stub:
+        return jsonify({'error': f'{pid} not found in incomplete.'}), 404
+
+    sched = stub.get('scheduled_date')
+    if not sched or not sched[0]:
+        return jsonify({'error': 'No scheduled appointment to cancel.'}), 400
+
+    stub.setdefault('appointment_cancellations', []).append({
+        'cancelled_at':    datetime.now().strftime('%Y-%m-%dT%H:%M'),
+        'appointment_date': sched[0],
+        'reason':          reason,
+    })
+    stub['scheduled_date'] = None
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', 0)
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      f'{assessment_type.upper()} assessment appointment cancelled')
+    return jsonify({'ok': True})
+
+
+@bp.route('/api/patients/<homer_id>/complete-event/schedule-assessment-call', methods=['POST'])
+def api_complete_schedule_assessment_call(homer_id):
+    """Complete a schedule_a1_call or schedule_a2_call stub, update assessment scheduled_date."""
+    if not flask_session.get('login_place'):
+        return jsonify({'error': 'Not authenticated'}), 401
+    if flask_session.get('privilege') not in ('admin', 'therapist'):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    folder = find_patient_folder(flask_session['login_place'], homer_id)
+    if not folder:
+        return jsonify({'error': 'Patient not found'}), 404
+
+    body             = request.get_json() or {}
+    event_id         = (body.get('event_id') or '').strip()
+    call_type        = (body.get('call_type') or '').strip()
+    completion_date  = (body.get('completion_date') or '').strip()
+    duration_minutes = body.get('duration_minutes')
+    notes            = (body.get('notes') or '').strip()
+    new_appt_date    = (body.get('new_appointment_date') or '').strip()
+
+    if call_type not in ('schedule_a1_call', 'schedule_a2_call'):
+        return jsonify({'error': 'Invalid call_type.'}), 400
+    assessment_id = 'a1_assessment' if call_type == 'schedule_a1_call' else 'a2_assessment'
+
+    if not completion_date:
+        return jsonify({'error': 'Call date is required.'}), 400
     try:
-        write_patient_log(folder, homer_id, flask_session.get('loginid', 'unknown'),
-                          flask_session.get('session_id', 0), 'A2 assessment recorded')
-    except Exception as e:
-        print(f'Warning: could not write patient log: {e}')
-    return jsonify({'status': 'success', 'homerID': homer_id})
+        if datetime.strptime(completion_date, '%Y-%m-%dT%H:%M') > datetime.now():
+            return jsonify({'error': 'Call date cannot be in the future.'}), 400
+    except ValueError:
+        return jsonify({'error': 'Invalid call date format.'}), 400
+
+    try:
+        duration_minutes = int(duration_minutes)
+        if duration_minutes <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Duration must be a positive integer.'}), 400
+
+    if not notes:
+        return jsonify({'error': 'Notes are required.'}), 400
+    if not new_appt_date:
+        return jsonify({'error': 'New appointment date is required.'}), 400
+    try:
+        datetime.strptime(new_appt_date, '%Y-%m-%d')
+    except ValueError:
+        return jsonify({'error': 'Invalid appointment date format (YYYY-MM-DD required).'}), 400
+
+    # Validate appointment date falls within the assessment window.
+    _pt = read_patient_meta(folder, homer_id)
+    if _pt and _pt.get('activationDate'):
+        _proto = load_study_protocol()
+        for _s in _proto.get('shared', []):
+            if _s['id'] == assessment_id and _s.get('window'):
+                try:
+                    _act_d     = datetime.strptime(_pt['activationDate'][:10], '%Y-%m-%d').date()
+                    _win_start = _act_d + timedelta(days=_s['window']['start_day'] - 1)
+                    _win_end   = _act_d + timedelta(days=_s['window']['end_day']   - 1)
+                    _appt_d    = datetime.strptime(new_appt_date, '%Y-%m-%d').date()
+                    if not (_win_start <= _appt_d <= _win_end):
+                        return jsonify({'error': (
+                            f'Appointment date must be within the assessment window '
+                            f'({_win_start.isoformat()} to {_win_end.isoformat()}).'
+                        )}), 400
+                except Exception:
+                    pass
+                break
+
+    events_data = read_protocol_events(folder, homer_id)
+    if not events_data:
+        return jsonify({'error': 'Protocol events not found.'}), 404
+
+    entry = next(
+        (e for e in events_data.get('incomplete', [])
+         if e.get('protocol_event_id') == call_type
+         and (not event_id or e.get('id') == event_id)),
+        None
+    )
+    if not entry:
+        return jsonify({'error': 'Scheduling call stub not found.'}), 404
+
+    filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    complete_entry = {
+        **entry,
+        'completion_date':    completion_date,
+        'filed_at':           filed_at,
+        'duration_minutes':   duration_minutes,
+        'notes':              notes,
+        'new_appointment_date': new_appt_date,
+    }
+    events_data['incomplete'] = [e for e in events_data['incomplete'] if e.get('id') != entry['id']]
+    events_data.setdefault('free', {}).setdefault(call_type, []).append(complete_entry)
+
+    # Update the assessment stub's scheduled_date to the new appointment.
+    appt_str = datetime.strptime(new_appt_date, '%Y-%m-%d').strftime('%Y-%m-%dT09:00')
+    for e in events_data.get('incomplete', []):
+        if e.get('protocol_event_id') == assessment_id:
+            e['scheduled_date'] = [appt_str, appt_str]
+            break
+
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
+
+    loginid    = flask_session.get('loginid', 'unknown')
+    session_id = flask_session.get('session_id', 0)
+    label      = 'A1' if call_type == 'schedule_a1_call' else 'A2'
+    write_patient_log(folder, homer_id, loginid, session_id,
+                      f'{label} scheduling call recorded — new appointment: {new_appt_date}')
+    return jsonify({'ok': True})
 
 
 # ──────────────────────────────────────────────────────────────────────────────

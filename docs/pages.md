@@ -108,9 +108,7 @@ Patient list for the user's visible site(s).
 | paused             | Complete `training_completion_d29` event                                                              | `trainingCompletionDate`                                        | training_completed |
 | paused             | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
 | training_completed | Record A1                                                                                             | `a1CompletionDate`                                              | a1_completed       |
-| training_completed | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
 | a1_completed       | Record A2                                                                                             | `a2CompletionDate`                                              | all_completed      |
-| a1_completed       | Discontinue                                                                                           | `discontinuationDate`                                           | discontinued       |
 
 **Actions:** [Add Patient](#add-patient), [Assign Group](#assign-group), [Pre-Discontinue](#pre-discontinue)
 
@@ -213,7 +211,7 @@ Patient detail. Shown for patients `inactive` and beyond (including `broken_prot
 
 - **Stub tabs** — Devices, Call Logs, Watch Records, Robot Issues show "Coming soon"
 
-**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [File Adverse Event](#file-adverse-event-adverse_event), [Adverse Event Follow-up Call](#adverse-event-follow-up-call-adverse_event_followup), [Adverse Event Follow-up Visit](#adverse-event-follow-up-visit-adverse_event_followup_visit), [Adverse Event Clinical Visit](#adverse-event-clinical-visit-adverse_event_clinical_visit), [Record A1](#record-a1-assessment), [Record A2](#record-a2-assessment), [Discontinue](#discontinue)
+**Actions:** [Device Setup](#device-setup-exp_device_install), [Activate](#activate), [ADL Prescription](#adl-prescription-adl_prescription_d01), [VCG Prescription](#vcg-prescription-vcg_prescription_d01), [Prescription Printout](#prescription-printout-prescription_printout_d01), [ADL Prescription Revision](#adl-prescription-revision-adl_prescription_d15), [VCG Prescription Revision](#vcg-prescription-revision-vcg_prescription_d15), [Home Visit](#home-visit), [Follow-up Call](#follow-up-call-followup_call_d07-followup_call_d21), [Patient Call](#patient-call), [Watch Record](#watch-record-watch_record), [Training Completion](#training-completion-visit-training_completion_d29), [File Adverse Event](#file-adverse-event-adverse_event), [Adverse Event Follow-up Call](#adverse-event-follow-up-call-adverse_event_followup), [Adverse Event Follow-up Visit](#adverse-event-follow-up-visit-adverse_event_followup_visit), [Adverse Event Clinical Visit](#adverse-event-clinical-visit-adverse_event_clinical_visit), [Record A1](#record-a1-assessment-a1_assessment), [Record A2](#record-a2-assessment-a2_assessment), [Assessment Scheduling Call](#assessment-scheduling-call-schedule_a1_call-schedule_a2_call), [Discontinue](#discontinue)
 
 ---
 
@@ -385,27 +383,94 @@ Each action is defined once here. Pages above reference which actions apply to t
 
 ---
 
-### Record A1 Assessment
+### Record A1 Assessment (`a1_assessment`)
 
-- Trigger: "Record A1" button on patient detail (training_completed patients)
-- Allowed users: `admin`
-- Modal fields:
-  - A1 Assessment Date (datetime, required; cannot be in the future)
-- Server actions:
-  - Update `<homer_id>.json` with `a1CompletionDate`
-- Log message: `A1 assessment recorded`
+- Trigger: `a1_assessment` event row on patient detail — appears in overdue/upcoming panels once the patient reaches `training_completed` status. This is a windowed protocol event (window defined in `study_protocol.json`, approximately days 30–37 after activation, i.e. 2–4 weeks after D29).
+- Allowed users: `admin`, `therapist`
+- **Event row UI**: click the row to open the A1 recording modal. No inline buttons on the row.
+- Modal: `a1-assessment-modal`
+  - Title: "Record A1 Assessment"
+  - **Cancellation section (top)** — shown only when `scheduled_date` is not null:
+    - Displays the currently scheduled appointment date
+    - Reason (text input, required to confirm cancel)
+    - "Cancel Scheduled Assessment" button — on click: show a confirmation dialog ("Cancel the scheduled A1 assessment on \<date\>? This cannot be undone."). On confirm:
+      - Append `{ cancelled_at, appointment_date, reason }` to `appointment_cancellations` on the `a1_assessment` stub
+      - Reset `scheduled_date` to `null` on the stub
+      - Modal stays open; cancellation section disappears
+    - After cancellation, auto-seeding in `api_patient_events` will create a `schedule_a1_call` stub on next load
+  - Assessment Date (datetime, required; cannot be in the future)
+  - Notes (textarea, optional)
+  - Completion and cancellation are **independent** — the therapist can cancel only, complete only, or cancel then complete (patient arrived at a different time)
+- Server actions (completion):
+  - Move `a1_assessment` entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`
+  - Update `<homer_id>.json` with `a1CompletionDate = completion_date`
+- Server actions (cancellation — separate endpoint):
+  - Append cancellation record to `appointment_cancellations` on the `a1_assessment` incomplete stub
+  - Set `scheduled_date = null` on the stub
+- Log message: `A1 assessment recorded` / `A1 assessment appointment cancelled`
 
 ---
 
-### Record A2 Assessment
+### Record A2 Assessment (`a2_assessment`)
 
-- Trigger: "Record A2" button on patient detail (a1_completed patients)
-- Allowed users: `admin`
-- Modal fields:
-  - A2 Assessment Date (datetime, required; cannot be in the future)
+- Trigger: `a2_assessment` event row on patient detail — appears in overdue/upcoming panels once the patient reaches `a1_completed` status. Windowed protocol event (window defined in `study_protocol.json`, approximately days 60–90 after activation, i.e. ~4 weeks after A1 window).
+- Allowed users: `admin`, `therapist`
+- **`schedule_a2_call` auto-seeding:** In `api_patient_events`, if `today >= a2_window_start − 7 days` AND A2 is not complete AND no `schedule_a2_call` stub exists in `incomplete`, a new `schedule_a2_call` stub is created. This gives the therapist a 1-week lead time to contact the patient before the A2 window opens.
+- **Event row UI**: click the row to open the A2 recording modal. No inline buttons on the row.
+- Modal: `a2-assessment-modal`
+  - Title: "Record A2 Assessment"
+  - Same structure as A1 modal — cancellation section (top, conditional), then completion fields
+- Server actions: same as A1 but targets `a2_assessment` stub and writes `a2CompletionDate`
+- Log message: `A2 assessment recorded` / `A2 assessment appointment cancelled`
+
+---
+
+### Assessment Scheduling Call (`schedule_a1_call`, `schedule_a2_call`)
+
+Two free events — one per assessment. Record a phone call made by the therapist to schedule or reschedule an assessment appointment.
+
+**Display names:** `schedule_a1_call` → "Schedule A1 Assessment"; `schedule_a2_call` → "Schedule A2 Assessment"
+
+#### Auto-seeding (both)
+
+A scheduling call stub is auto-seeded by `api_patient_events` (lazily, once per patient) when:
+- The corresponding assessment (`a1_assessment` / `a2_assessment`) is in `incomplete` with `scheduled_date = null`
+- AND no stub for the corresponding scheduling call already exists in `incomplete`
+
+For A2 only: also seeded 7 days before the A2 window opens (`today >= a2_window_start − 7 days`) even if `scheduled_date` is not null — to give the therapist lead time to confirm the appointment.
+
+Only one stub may exist in `incomplete` at a time.
+
+#### `schedule_a1_call`
+
+- Trigger: auto-seeded (see above). Appears in overdue as **"Schedule A1 Assessment"**.
+- Allowed users: `admin`, `therapist`
+- Modal: `schedule-a1-call-modal`
+  - Title: "Schedule A1 Assessment"
+  - Call Date/Time (datetime, required; cannot be in the future)
+  - Duration (integer minutes, required; must be > 0)
+  - Notes (textarea, required)
+  - New Appointment Date (date only, required) — the date the patient agreed to come for A1
 - Server actions:
-  - Update `<homer_id>.json` with `a2CompletionDate`
-- Log message: `A2 assessment recorded`
+  - Remove stub from `incomplete`
+  - Append completed entry to `free.schedule_a1_call` with `completion_date`, `filed_at`, `duration_minutes`, `notes`, `new_appointment_date`
+  - Update the `a1_assessment` stub's `scheduled_date` in `incomplete` to `[new_appointment_date + "T09:00", new_appointment_date + "T09:00"]`
+- Log message: `A1 scheduling call recorded — new appointment: <date>`
+
+#### `schedule_a2_call`
+
+- Trigger: auto-seeded (see above). Appears in overdue as **"Schedule A2 Assessment"**.
+- Allowed users: `admin`, `therapist`
+- Modal: `schedule-a2-call-modal`
+  - Title: "Schedule A2 Assessment"
+  - Same fields as `schedule_a1_call`
+- Server actions: same as `schedule_a1_call` but targets `a2_assessment` stub and appends to `free.schedule_a2_call`
+- Log message: `A2 scheduling call recorded — new appointment: <date>`
+
+**Common notes:**
+- Missing an A1 or A2 assessment is not a broken protocol event and does not trigger discontinuation. The study continues with whatever assessments were completed.
+- History: all past scheduling calls are visible in the Timeline tab (as completed free events in `free.schedule_a1_call` / `free.schedule_a2_call`).
+- Appointment cancellation history is stored on the assessment stub's `appointment_cancellations` list (see data_schemas.md).
 
 ---
 
@@ -417,9 +482,9 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
 
 - Trigger: "Discontinue Patient" button in the patient detail header
 - Allowed users: `admin`
-- **Visible when:** patient status is NOT `broken_protocol` AND no real `discontinuation` stub exists in `incomplete`
-- **Hidden when:** a real `discontinuation` stub already exists in `incomplete` (avoid duplicate stubs), OR patient is `broken_protocol` (use `discontinuation_reminder` instead), OR patient is already `discontinued` or `all_completed` or `pre_discontinued`
-- Applicable states where button is visible: `inactive`, `active`, `paused`, `training_completed`, `a1_completed`
+- **Visible when:** patient status is `inactive`, `active`, or `paused` AND no real `discontinuation` stub exists in `incomplete`
+- **Hidden when:** a real `discontinuation` stub already exists in `incomplete` (avoid duplicate stubs), OR patient is `broken_protocol` (use `discontinuation_reminder` instead), OR patient is `training_completed`, `a1_completed`, `post_training`, `all_completed`, `discontinued`, or `pre_discontinued`. Training completion is the natural end of the protocol — discontinuation is not applicable from that point onwards.
+- Applicable states where button is visible: `inactive`, `active`, `paused`
 - On click — double confirmation popup:
   1. "Discontinuing a patient is a major and irreversible event. Are you sure you want to proceed?"
   2. "This will permanently close the patient record once the discontinuation event is completed. Confirm?"
@@ -438,7 +503,7 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
 - Trigger: clicking the real `discontinuation` stub in the overdue panel, **or** clicking the `discontinuation_reminder` synthetic event row (broken_protocol path)
 - Allowed users: `admin`
 - Modal: `discontinuation-modal`
-  - Context banner (read-only): "Once saved, this patient record becomes read-only. All device assignments will be closed automatically."
+  - Context banner (read-only): "Once saved, this patient record becomes read-only."
   - Discontinuation Date (datetime, required; cannot be in the future)
   - Reason (textarea, required)
   - Notes (textarea, optional)
@@ -446,7 +511,7 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
 - Server actions:
   - If triggered from real stub: remove the stub from `incomplete`
   - Set `discontinuationDate` on `<homer_id>.json`
-  - Close all device assignments for this patient: for every device type, write `end_date: now` to every open assignment entry in the site-level inventory; clear `has_issue: false` on all devices that were assigned to this patient (devices retain their `has_issue` history in device events but the flag is cleared so they become available again)
+  - **Does NOT close device assignments** — the `device_return` event (filed separately by the engineer) is responsible for closing all assignments
   - Append completed entry to `free.discontinuation` with `completion_date`, `filed_at`, `reason`, `notes`, `attachment`
 - Log message: `Patient discontinued`
 
@@ -730,6 +795,7 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
   - Title: "Training Completion Day 29"
   - Event Date (datetime, required; cannot be in the future)
   - Notes (textarea, optional)
+  - **A1 Appointment Date** (date only, optional) — when the patient's first A1 assessment is scheduled. If provided, the server updates the `a1_assessment` stub's `scheduled_date` to `[new_date, new_date]` directly; no `schedule_a1_call` event is created. Therapists use this to record an appointment agreed with the patient during the D29 visit.
   - **Feedback Form** section:
     - PDF upload (optional upload, but if absent then notes required)
     - Notes textarea (optional unless no file uploaded)
@@ -743,8 +809,60 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
   - POST to `/api/patients/<homer_id>/complete-event/training-completion` (multipart form)
   - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`, `feedback_form_attachment`, `feedback_form_notes`, `qualitative_recruited`, `qualitative_audio_attachment`, `qualitative_scan_attachment`, `attachment`, `attachment_caption`
   - Update `<homer_id>.json` with `trainingCompletionDate = completion_date`
+  - If `a1_appointment_date` provided: update the `a1_assessment` stub's `scheduled_date` in `incomplete` to `[a1_appointment_date, a1_appointment_date]`
   - If patient was `paused`, also clear `trainingPausedDate` and discard `resolve_robot_issue_visit` stubs
+  - **Does NOT close device assignments** — that is handled by the `device_return` event (filed separately by the engineer)
 - Log message: `Training completion visit recorded`
+
+---
+
+### Device Return (`device_return`)
+
+- **Groups:** Both — but device sections differ (see below)
+- **Trigger:** `device_return` event row on patient detail. Lazily seeded in `api_patient_events` the first time the page loads after training ends (any path): `trainingCompletionDate` set, OR `brokenProtocolDate` set, OR `discontinuationDate` set. Seeded with `scheduled_date: [now, now]` so it appears immediately as overdue. Only seeded once (guard: no existing stub in `incomplete` and no completed entry in `free.device_return`).
+- **Allowed users:** `engineer`, `admin`
+- **Modal:** `#device-return-modal`
+  - Title: "Device Return"
+  - Event Date (datetime, required; cannot be in the future)
+  - **Per-device sections** — one card per device currently assigned to the patient, fetched from open assignments:
+
+    **AG Watch — per limb (both groups):**
+    - Device ID + limb shown (read-only header)
+    - Status: **Returned** / **Lost** / **Battery dead** (required radio)
+    - If Lost or Battery dead: **"When did this happen?"** (date, required)
+    - Notes (optional)
+
+    **Pluto / Mars (experimental only):**
+    - Device ID shown (read-only header)
+    - Condition: **Working** / **Faulty** (required radio)
+    - Comments (optional)
+
+    **Laptop (experimental only):**
+    - Device ID shown (read-only header)
+    - Condition: **Working** / **Faulty** (required radio)
+    - Comments (optional)
+
+    **Modem (experimental only):**
+    - Device ID shown (read-only header)
+    - Condition: **Working** / **Faulty** (required radio)
+    - Comments (optional)
+
+    **SIM card (experimental only, if modem has a SIM assigned):**
+    - Phone number shown (read-only header)
+    - Status: **Returned** / **Lost** (required radio)
+    - If Lost: **"When did this happen?"** (date, required)
+    - Notes (optional)
+
+  - General Notes (textarea, optional)
+  - Attachment (optional PDF)
+
+- **Server actions:**
+  - Close all open device assignments for this patient across all types: write `returned_date = now` to every open assignment
+  - **AG Watch Lost or Battery dead:** set `lost_date` on the watch inventory record; close assignment with `lost: true`; append `faulty` device event with the reported issue date
+  - **Pluto / Mars / Laptop / Modem Faulty:** set `has_issue: true` in inventory; append `faulty` device event
+  - **SIM Lost:** mark SIM as lost in inventory
+  - Append completed entry to `free.device_return`
+- **Log message:** `Device return recorded`
 
 ---
 

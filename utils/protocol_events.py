@@ -115,6 +115,8 @@ def create_protocol_events(hospital_folder: str, homer_id: str,
         'watch_record':                 [],
         'activation_attempt':           [],
         'd15_attempt':                  [],
+        'schedule_a1_call':             [],
+        'schedule_a2_call':             [],
         'pre_discontinuation':          None,
         'discontinuation':              None,
     }

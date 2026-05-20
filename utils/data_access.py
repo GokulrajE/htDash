@@ -91,7 +91,7 @@ def derive_status(patient: dict) -> str:
     if not training:
         try:
             activation_date = datetime.fromisoformat(activation).date()
-            if date.today() > activation_date + timedelta(days=28):
+            if date.today() >= activation_date + timedelta(days=28):
                 return 'post_training'
         except Exception:
             pass

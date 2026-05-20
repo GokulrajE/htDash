@@ -53,13 +53,7 @@ function fmtDate(iso) {
 function _checkTrainingPeriodExpired(patient) {
   const banner = document.getElementById('training-period-expiry-banner');
   if (!banner) return;
-  if (!patient || !patient.activationDate || patient.trainingCompletionDate) {
-    banner.classList.add('hidden');
-    return;
-  }
-  const day28End = new Date(patient.activationDate);
-  day28End.setDate(day28End.getDate() + 28);
-  banner.classList.toggle('hidden', new Date() <= day28End);
+  banner.classList.toggle('hidden', !patient || patient.status !== 'post_training');
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -260,6 +254,14 @@ async function apiPost(url, body) {
   return { ok: res.ok, data };
 }
 
+async function apiGet(url) {
+  const res  = await fetch(url);
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: `Server error (${res.status})` }; }
+  return { ok: res.ok, data };
+}
+
 // ── Render overview ───────────────────────────────────────────────────────────
 
 function renderOverview(p) {
@@ -331,6 +333,47 @@ function renderOverview(p) {
   _checkTrainingPeriodExpired(p);
   renderPauseHistoryTable(p);
   renderActions(p);
+  loadOverviewDevices();
+}
+
+// ── Overview devices ──────────────────────────────────────────────────────────
+
+async function loadOverviewDevices() {
+  const section = document.getElementById('overview-devices-section');
+  const content = document.getElementById('overview-devices-content');
+  if (!section || !content) return;
+
+  const { ok, data } = await apiGet(`/api/patients/${PATIENT_HOMER_ID}/current-devices`);
+  if (!ok || !data.devices || !data.devices.length) {
+    section.classList.add('hidden');
+    return;
+  }
+
+  content.innerHTML = `<div class="grid grid-cols-3 gap-x-4 gap-y-4">${data.devices.map(_deviceChip).join('')}</div>`;
+  section.classList.remove('hidden');
+}
+
+function _deviceChip(d) {
+  const TYPE_LABEL = { pluto: 'Pluto', mars: 'Mars', modems: 'Modem', laptops: 'Laptop', agwatch: 'Watch' };
+  const label = TYPE_LABEL[d.type] || d.type;
+  const limb  = d.limb ? ` (${d.limb.charAt(0).toUpperCase() + d.limb.slice(1)})` : '';
+  const simLabel = d.sim ? ' (SIM)' : '';
+
+  let badge = '';
+  if (d.lost)           badge = '<span class="ml-1 text-xs font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-full">Lost</span>';
+  else if (d.has_issue) badge = '<span class="ml-1 text-xs font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full">Issue</span>';
+
+  const valueHtml = d.sim
+    ? `<div class="flex items-baseline gap-1.5 flex-wrap">` +
+      `<span class="text-sm font-semibold text-slate-800 font-mono whitespace-nowrap">${d.device_id}</span>` +
+      `<span class="text-xs text-slate-400 font-mono whitespace-nowrap">(${d.sim})</span>` +
+      `</div>`
+    : `<p class="text-sm font-semibold text-slate-800 font-mono">${d.device_id}</p>`;
+
+  return `<div>` +
+         `<p class="text-xs text-slate-400 font-medium mb-0.5">${label}${limb}${simLabel}${badge}</p>` +
+         `${valueHtml}` +
+         `</div>`;
 }
 
 // ── Pause banner ──────────────────────────────────────────────────────────────
@@ -537,21 +580,75 @@ function renderActions(p) {
 // ── Modal openers ─────────────────────────────────────────────────────────────
 
 
-function openA1Modal() {
-  document.getElementById('a1-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('a1-date').value = '';
-  setError('a1-error', '');
-  _attachDateGuard('a1-date', 'a1-error');
-  showModal('a1-modal');
+let _a1AssessmentEventId = null;
+let _a2AssessmentEventId = null;
+let _schedA1EventId = null;
+let _schedA2EventId = null;
+let _a1ScheduledDate = null;
+let _a2ScheduledDate = null;
+
+function _openAssessmentModal(which, ev) {
+  const color = which === 'a1' ? 'violet' : 'green';
+  if (which === 'a1') { _a1AssessmentEventId = ev ? ev.id : null; }
+  else                { _a2AssessmentEventId = ev ? ev.id : null; }
+
+  document.getElementById(`${which}-date`).value  = '';
+  document.getElementById(`${which}-notes`).value = '';
+  document.getElementById(`${which}-cancel-reason`).value = '';
+  setError(`${which}-error`, '');
+  const max = new Date().toISOString().slice(0, 16);
+  document.getElementById(`${which}-date`).max = max;
+  _attachDateGuard(`${which}-date`, `${which}-error`);
+
+  const sched = ev && ev.scheduled_date ? ev.scheduled_date[0] : null;
+  if (which === 'a1') { _a1ScheduledDate = sched; }
+  else                { _a2ScheduledDate = sched; }
+
+  const cancelSection = document.getElementById(`${which}-cancel-section`);
+  if (sched) {
+    const d = new Date(sched);
+    document.getElementById(`${which}-scheduled-date-display`).textContent =
+      d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    cancelSection.classList.remove('hidden');
+  } else {
+    cancelSection.classList.add('hidden');
+  }
+
+  showModal(`${which}-modal`);
 }
 
-function openA2Modal() {
-  document.getElementById('a2-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('a2-date').value = '';
-  setError('a2-error', '');
-  _attachDateGuard('a2-date', 'a2-error');
-  showModal('a2-modal');
+function openA1AssessmentModal(ev) { _openAssessmentModal('a1', ev); }
+function openA2AssessmentModal(ev) { _openAssessmentModal('a2', ev); }
+
+function openScheduleA1CallModal(ev) {
+  _schedA1EventId = ev ? ev.id : null;
+  document.getElementById('sa1-date').value        = '';
+  document.getElementById('sa1-duration').value    = '';
+  document.getElementById('sa1-notes').value       = '';
+  document.getElementById('sa1-appointment').value = '';
+  setError('sa1-error', '');
+  const max = new Date().toISOString().slice(0, 16);
+  document.getElementById('sa1-date').max = max;
+  _attachDateGuard('sa1-date', 'sa1-error');
+  showModal('schedule-a1-call-modal');
 }
+
+function openScheduleA2CallModal(ev) {
+  _schedA2EventId = ev ? ev.id : null;
+  document.getElementById('sa2-date').value        = '';
+  document.getElementById('sa2-duration').value    = '';
+  document.getElementById('sa2-notes').value       = '';
+  document.getElementById('sa2-appointment').value = '';
+  setError('sa2-error', '');
+  const max = new Date().toISOString().slice(0, 16);
+  document.getElementById('sa2-date').max = max;
+  _attachDateGuard('sa2-date', 'sa2-error');
+  showModal('schedule-a2-call-modal');
+}
+
+// Legacy openers used by ACTION_DEFS buttons — delegate to event-driven functions.
+function openA1Modal() { openA1AssessmentModal(null); }
+function openA2Modal() { openA2AssessmentModal(null); }
 
 let _discEventId = null;
 
@@ -594,22 +691,99 @@ async function _initiateDiscontinuation() {
 // ── Modal submitters ──────────────────────────────────────────────────────────
 
 
-async function submitA1() {
-  const date = document.getElementById('a1-date').value;
-  if (!date) { setError('a1-error', 'Please select an A1 assessment date.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/a1`, { a1CompletionDate: date });
+async function saveA1Assessment() {
+  const date  = document.getElementById('a1-date').value;
+  const notes = document.getElementById('a1-notes').value.trim();
+  if (!date) { setError('a1-error', 'Please select an assessment date.'); return; }
+  if (_hasDateValidationErrors(['a1-error'])) return;
+  const payload = { completion_date: date, notes };
+  if (_a1AssessmentEventId) payload.event_id = _a1AssessmentEventId;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/a1-assessment`, payload
+  );
   if (!ok) { setError('a1-error', data.error || 'Failed to record A1.'); return; }
   hideModal('a1-modal');
+  await loadPatientEvents();
   loadPatient();
 }
 
-async function submitA2() {
-  const date = document.getElementById('a2-date').value;
-  if (!date) { setError('a2-error', 'Please select an A2 assessment date.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/a2`, { a2CompletionDate: date });
+async function saveA2Assessment() {
+  const date  = document.getElementById('a2-date').value;
+  const notes = document.getElementById('a2-notes').value.trim();
+  if (!date) { setError('a2-error', 'Please select an assessment date.'); return; }
+  if (_hasDateValidationErrors(['a2-error'])) return;
+  const payload = { completion_date: date, notes };
+  if (_a2AssessmentEventId) payload.event_id = _a2AssessmentEventId;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/a2-assessment`, payload
+  );
   if (!ok) { setError('a2-error', data.error || 'Failed to record A2.'); return; }
   hideModal('a2-modal');
+  await loadPatientEvents();
   loadPatient();
+}
+
+async function cancelAssessmentAppointment(which) {
+  const reason = document.getElementById(`${which}-cancel-reason`).value.trim();
+  if (!reason) { setError(`${which}-error`, 'Please enter a reason for cancellation.'); return; }
+
+  const scheduledDate = which === 'a1' ? _a1ScheduledDate : _a2ScheduledDate;
+  const displayEl     = document.getElementById(`${which}-scheduled-date-display`);
+  const confirmed = window.confirm(
+    `Cancel the scheduled ${which.toUpperCase()} assessment on ${displayEl.textContent}? This cannot be undone.`
+  );
+  if (!confirmed) return;
+
+  const eventId = which === 'a1' ? _a1AssessmentEventId : _a2AssessmentEventId;
+  const payload = { assessment_type: which, reason };
+  if (eventId) payload.event_id = eventId;
+
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/cancel-assessment-appointment`, payload
+  );
+  if (!ok) { setError(`${which}-error`, data.error || 'Failed to cancel appointment.'); return; }
+
+  // Hide cancellation section — scheduled_date is now null
+  if (which === 'a1') { _a1ScheduledDate = null; }
+  else                { _a2ScheduledDate = null; }
+  document.getElementById(`${which}-cancel-section`).classList.add('hidden');
+  document.getElementById(`${which}-cancel-reason`).value = '';
+  setError(`${which}-error`, '');
+  await loadPatientEvents();
+}
+
+async function saveScheduleAssessmentCall(which) {
+  const prefix   = which === 'a1' ? 'sa1' : 'sa2';
+  const errId    = `${prefix}-error`;
+  const callType = which === 'a1' ? 'schedule_a1_call' : 'schedule_a2_call';
+  const eventId  = which === 'a1' ? _schedA1EventId : _schedA2EventId;
+
+  const date    = document.getElementById(`${prefix}-date`).value;
+  const dur     = document.getElementById(`${prefix}-duration`).value;
+  const notes   = document.getElementById(`${prefix}-notes`).value.trim();
+  const appt    = document.getElementById(`${prefix}-appointment`).value;
+
+  if (!date)  { setError(errId, 'Call date is required.'); return; }
+  if (!dur || parseInt(dur, 10) <= 0) { setError(errId, 'Duration must be a positive number.'); return; }
+  if (!notes) { setError(errId, 'Notes are required.'); return; }
+  if (!appt)  { setError(errId, 'New appointment date is required.'); return; }
+  if (_hasDateValidationErrors([errId])) return;
+
+  const payload = {
+    call_type:          callType,
+    completion_date:    date,
+    duration_minutes:   parseInt(dur, 10),
+    notes,
+    new_appointment_date: appt,
+  };
+  if (eventId) payload.event_id = eventId;
+
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/schedule-assessment-call`, payload
+  );
+  if (!ok) { setError(errId, data.error || 'Failed to save scheduling call.'); return; }
+  hideModal(which === 'a1' ? 'schedule-a1-call-modal' : 'schedule-a2-call-modal');
+  await loadPatientEvents();
 }
 
 async function saveDiscontinuation() {
@@ -3084,6 +3258,11 @@ const EVENT_OPENERS = {
   resolve_robot_issue_visit:    (ev) => openResolveRobotIssueVisitModal(ev),
   other_device_issue_call:      (ev) => openOtherDeviceIssueModal(ev),
   other_device_issue_visit:     (ev) => openOtherDeviceIssueVisitModal(ev),
+  a1_assessment:                (ev) => openA1AssessmentModal(ev),
+  a2_assessment:                (ev) => openA2AssessmentModal(ev),
+  schedule_a1_call:             (ev) => openScheduleA1CallModal(ev),
+  schedule_a2_call:             (ev) => openScheduleA2CallModal(ev),
+  device_return:                (ev) => openDeviceReturnModal(ev),
 };
 
 function patientEventRow(ev) {
@@ -3092,20 +3271,45 @@ function patientEventRow(ev) {
   const isActiveWindow = !!ev.active_window;
   const isOverdue   = !isActiveWindow && ev.days <= 0;
   const isUpcoming  = !isActiveWindow && (ev.days > 0 || onHold);
-  // For display date: upcoming/on-hold → start, active-window or past-due → end
-  const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
-  const d = new Date((refDate || '').replace(' ', 'T'));
-  const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
   const abs = Math.abs(ev.days);
-  let whenLabel;
-  if (onHold) {
-    whenLabel = 'On hold';
-  } else if (isActiveWindow) {
-    whenLabel = ev.days === 0 ? 'Due today' : `Due now · ${ev.days}d left`;
-  } else if (isOverdue) {
-    whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+  const _fmtD = s => new Date(s.replace(' ', 'T')).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+
+  const _ASSESSMENT_PIDS = new Set(['a1_assessment', 'a2_assessment']);
+  const isAssessment = _ASSESSMENT_PIDS.has(ev.protocol_event_id);
+
+  let dateStr, whenLabel, subLabel;
+  if (isAssessment) {
+    // Bottom-left: appointment date if scheduled, otherwise "Unscheduled"
+    dateStr = sched ? _fmtD(sched[0]) : 'Unscheduled';
+    // Window range shown below the days counter
+    const wsStr = ev.window_start ? _fmtD(ev.window_start) : null;
+    const weStr = ev.window_end   ? _fmtD(ev.window_end)   : null;
+    subLabel = wsStr && weStr ? `(${wsStr} – ${weStr})` : null;
+    // days label uses ev.days which is window_end − today
+    if (onHold) {
+      whenLabel = 'On hold';
+    } else if (isActiveWindow) {
+      whenLabel = ev.days === 0 ? 'Due today' : `${ev.days}d left`;
+    } else if (isOverdue) {
+      whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+    } else {
+      whenLabel = ev.days === 1 ? '1d left' : `${ev.days}d left`;
+    }
   } else {
-    whenLabel = `Available from ${dateStr}`;
+    subLabel = null;
+    // For display date: upcoming/on-hold → start, active-window or past-due → end
+    const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
+    const d = new Date((refDate || '').replace(' ', 'T'));
+    dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
+    if (onHold) {
+      whenLabel = 'On hold';
+    } else if (isActiveWindow) {
+      whenLabel = ev.days === 0 ? 'Due today' : `Due now · ${ev.days}d left`;
+    } else if (isOverdue) {
+      whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+    } else {
+      whenLabel = `Available from ${dateStr}`;
+    }
   }
   const urgency   = isOverdue       ? 'border-red-200 bg-red-50'
                   : isActiveWindow  ? 'border-amber-200 bg-amber-50'
@@ -3122,9 +3326,11 @@ function patientEventRow(ev) {
     'adverse_event', 'adverse_event_followup',
     'adverse_event_followup_visit', 'adverse_event_clinical_visit',
     'a1_assessment', 'a2_assessment',
+    'schedule_a1_call', 'schedule_a2_call',
   ]);
   const discontinuedBlocks = _patientDiscontinued && !_DISCONTINUED_VISIBLE.has(ev.protocol_event_id);
-  const clickable = hasOpener && !blocked && !isUpcoming && !onHold && !discontinuedBlocks;
+  // Assessment events are always clickable (cancel appointment or complete early).
+  const clickable = hasOpener && !blocked && (isAssessment || !isUpcoming) && !onHold && !discontinuedBlocks;
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
@@ -3136,6 +3342,11 @@ function patientEventRow(ev) {
     ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
     : onHold
     ? `<span class="text-xs font-semibold text-slate-600 bg-white border border-slate-300 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">On hold</span>`
+    : isAssessment && subLabel
+    ? `<div class="flex flex-col items-end gap-0.5 flex-shrink-0">
+         <span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>
+         <span class="text-xs text-slate-400 whitespace-nowrap">${subLabel}</span>
+       </div>`
     : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap flex-shrink-0">${whenLabel}</span>`;
 
   return `
@@ -3144,7 +3355,9 @@ function patientEventRow(ev) {
         ${eventName}
         ${subtitle}
       </div>
-      ${rightLabel}
+      <div class="flex items-center gap-1 flex-shrink-0">
+        ${rightLabel}
+      </div>
     </${tag}>`;
 }
 
@@ -5026,6 +5239,8 @@ async function saveD29() {
   form.append('event_id',              _d29EventId || '');
   form.append('completion_date',       completionDate);
   form.append('notes',                 document.getElementById('d29-notes').value.trim());
+  const a1Appt = (document.getElementById('d29-a1-appointment')?.value || '').trim();
+  if (a1Appt) form.append('a1_appointment_date', a1Appt);
   form.append('feedback_form_notes',   feedbackNotes);
   form.append('qualitative_recruited', qualStr);
   if (feedbackFile) form.append('feedback_form_file', feedbackFile);
@@ -6689,5 +6904,223 @@ async function saveOtherDeviceIssueVisit() {
   if (!ok) { setError('odiv-error', data.error || 'Failed to save.'); return; }
 
   hideModal('other-device-issue-visit-modal');
+  loadPatientEvents();
+}
+
+// ── Device Return ────────────────────────────────────────────────────────────
+
+let _drEventId  = null;
+let _drDevices  = [];
+
+async function openDeviceReturnModal(ev) {
+  _drEventId = ev.id;
+
+  document.getElementById('dr-homer-id').textContent = PATIENT_HOMER_ID;
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const dateEl = document.getElementById('dr-date');
+  dateEl.max   = nowStr;
+  dateEl.value = nowStr;
+  document.getElementById('dr-date-error').classList.add('hidden');
+  document.getElementById('dr-notes').value = '';
+  document.getElementById('dr-error').classList.add('hidden');
+  clearAttachment('dr');
+
+  // Fetch currently assigned devices
+  const { ok, data } = await apiGet(`/api/patients/${PATIENT_HOMER_ID}/device-return-devices`);
+  if (!ok) {
+    setError('dr-error', data.error || 'Could not load assigned devices.');
+    showModal('device-return-modal');
+    return;
+  }
+  _drDevices = data.devices || [];
+  _renderDeviceReturnCards();
+
+  // Keyboard validation for date
+  _attachDateGuard(dateEl, 'dr-date-error');
+
+  showModal('device-return-modal');
+}
+
+function _renderDeviceReturnCards() {
+  const container = document.getElementById('dr-devices-container');
+  if (!_drDevices.length) {
+    container.innerHTML = '<p class="text-sm text-slate-500 italic">No devices currently assigned to this patient.</p>';
+    return;
+  }
+  container.innerHTML = _drDevices.map((d, i) => _deviceReturnCard(d, i)).join('');
+
+  // Wire up issue-date visibility toggles for agwatch and SIM
+  _drDevices.forEach((d, i) => {
+    if (d.type === 'agwatch') {
+      const radios = document.querySelectorAll(`input[name="dr-aw-status-${i}"]`);
+      radios.forEach(r => r.addEventListener('change', () => _updateDrIssueDateVisibility(i, d.type)));
+    } else if (d.type === 'sim') {
+      const radios = document.querySelectorAll(`input[name="dr-sim-status-${i}"]`);
+      radios.forEach(r => r.addEventListener('change', () => _updateDrIssueDateVisibility(i, d.type)));
+    }
+  });
+}
+
+function _deviceReturnCard(d, i) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (d.type === 'agwatch') {
+    const limb = d.limb ? `(${d.limb.charAt(0).toUpperCase() + d.limb.slice(1)})` : '';
+    return `
+      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${d.device_id}</span>
+          <span class="text-sm text-slate-600">AG Watch ${limb}</span>
+        </div>
+        <div>
+          <p class="text-xs font-medium text-slate-600 mb-1">Status <span class="text-red-500">*</span></p>
+          <div class="flex gap-4">
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name="dr-aw-status-${i}" value="returned" checked class="accent-blue-600"> Returned
+            </label>
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name="dr-aw-status-${i}" value="lost" class="accent-blue-600"> Lost
+            </label>
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name="dr-aw-status-${i}" value="battery_dead" class="accent-blue-600"> Battery Dead
+            </label>
+          </div>
+        </div>
+        <div id="dr-aw-issue-date-row-${i}" class="hidden">
+          <label class="block text-xs font-medium text-slate-600 mb-1">When did this happen? <span class="text-red-500">*</span></label>
+          <input type="date" id="dr-aw-issue-date-${i}" max="${today}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes</label>
+          <input type="text" id="dr-aw-notes-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none" placeholder="Optional notes">
+        </div>
+      </div>`;
+  } else if (d.type === 'sim') {
+    const phone = d.phone || d.sim_id;
+    return `
+      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${phone}</span>
+          <span class="text-sm text-slate-600">SIM Card</span>
+        </div>
+        <div>
+          <p class="text-xs font-medium text-slate-600 mb-1">Status <span class="text-red-500">*</span></p>
+          <div class="flex gap-4">
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name="dr-sim-status-${i}" value="returned" checked class="accent-blue-600"> Returned
+            </label>
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name="dr-sim-status-${i}" value="lost" class="accent-blue-600"> Lost
+            </label>
+          </div>
+        </div>
+        <div id="dr-sim-issue-date-row-${i}" class="hidden">
+          <label class="block text-xs font-medium text-slate-600 mb-1">When did this happen? <span class="text-red-500">*</span></label>
+          <input type="date" id="dr-sim-issue-date-${i}" max="${today}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Notes</label>
+          <input type="text" id="dr-sim-notes-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none" placeholder="Optional notes">
+        </div>
+      </div>`;
+  } else {
+    // pluto, mars, modems, laptops
+    const typeLabel = { pluto: 'Pluto', mars: 'Mars', modems: 'Modem', laptops: 'Laptop' }[d.type] || d.type;
+    return `
+      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${d.device_id}</span>
+          <span class="text-sm text-slate-600">${typeLabel}</span>
+        </div>
+        <div>
+          <p class="text-xs font-medium text-slate-600 mb-1">Condition <span class="text-red-500">*</span></p>
+          <div class="flex gap-4">
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name="dr-cond-${i}" value="working" checked class="accent-blue-600"> Working
+            </label>
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="radio" name="dr-cond-${i}" value="faulty" class="accent-blue-600"> Faulty
+            </label>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Comments</label>
+          <input type="text" id="dr-dev-comments-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none" placeholder="Optional comments">
+        </div>
+      </div>`;
+  }
+}
+
+function _updateDrIssueDateVisibility(i, type) {
+  if (type === 'agwatch') {
+    const val = document.querySelector(`input[name="dr-aw-status-${i}"]:checked`)?.value;
+    const row = document.getElementById(`dr-aw-issue-date-row-${i}`);
+    if (row) row.classList.toggle('hidden', val === 'returned');
+  } else if (type === 'sim') {
+    const val = document.querySelector(`input[name="dr-sim-status-${i}"]:checked`)?.value;
+    const row = document.getElementById(`dr-sim-issue-date-row-${i}`);
+    if (row) row.classList.toggle('hidden', val !== 'lost');
+  }
+}
+
+async function saveDeviceReturn() {
+  const completionDate = document.getElementById('dr-date').value;
+  if (!completionDate) { setError('dr-error', 'Return date/time is required.'); return; }
+  const now = new Date();
+  if (new Date(completionDate) > now) { setError('dr-error', 'Return date cannot be in the future.'); return; }
+
+  // Collect per-device data
+  const deviceEntries = [];
+  for (let i = 0; i < _drDevices.length; i++) {
+    const d = _drDevices[i];
+    if (d.type === 'agwatch') {
+      const status    = document.querySelector(`input[name="dr-aw-status-${i}"]:checked`)?.value || 'returned';
+      const issueDate = document.getElementById(`dr-aw-issue-date-${i}`)?.value || '';
+      const notes     = document.getElementById(`dr-aw-notes-${i}`)?.value.trim() || null;
+      if ((status === 'lost' || status === 'battery_dead') && !issueDate) {
+        setError('dr-error', `Please enter when the issue occurred for watch ${d.device_id}.`);
+        return;
+      }
+      deviceEntries.push({ type: 'agwatch', device_id: d.device_id, limb: d.limb, status, issue_date: issueDate || null, notes });
+    } else if (d.type === 'sim') {
+      const status    = document.querySelector(`input[name="dr-sim-status-${i}"]:checked`)?.value || 'returned';
+      const issueDate = document.getElementById(`dr-sim-issue-date-${i}`)?.value || '';
+      const notes     = document.getElementById(`dr-sim-notes-${i}`)?.value.trim() || null;
+      if (status === 'lost' && !issueDate) {
+        setError('dr-error', `Please enter when the SIM was lost.`);
+        return;
+      }
+      deviceEntries.push({ type: 'sim', sim_id: d.sim_id, status, issue_date: issueDate || null, notes });
+    } else {
+      const condition = document.querySelector(`input[name="dr-cond-${i}"]:checked`)?.value || 'working';
+      const comments  = document.getElementById(`dr-dev-comments-${i}`)?.value.trim() || null;
+      deviceEntries.push({ type: d.type, device_id: d.device_id, condition, comments });
+    }
+  }
+
+  const notes = document.getElementById('dr-notes').value.trim() || null;
+
+  // Upload attachment first if present
+  const attachFile    = document.getElementById('dr-attachment-file')?.files[0];
+  const attachCaption = document.getElementById('dr-attachment-caption')?.value.trim() || null;
+  if (attachFile && !attachCaption) {
+    setError('dr-error', 'Please add a caption for the attachment.');
+    return;
+  }
+
+  setLoading('dr-save', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/device-return`,
+    { event_id: _drEventId, completion_date: completionDate, notes, devices: deviceEntries }
+  );
+  if (!ok) { setLoading('dr-save', false); setError('dr-error', data.error || 'Failed to save.'); return; }
+
+  if (attachFile) {
+    await saveAttachment(data.event_id, attachFile, attachCaption);
+  }
+
+  setLoading('dr-save', false);
+  hideModal('device-return-modal');
   loadPatientEvents();
 }

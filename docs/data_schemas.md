@@ -437,9 +437,27 @@ Modals that include the attachment widget (see CLAUDE.md → Attachment Module) 
 The complete entry stores only a relative path to the timing file. See [AG Watch Timing files](#ag-watch-timing-files) below.
 
 **`a1_assessment`** / **`a2_assessment`**
+
+The incomplete stub carries an `appointment_cancellations` list that grows each time the therapist cancels a scheduled appointment:
 ```json
-{ "assessor": "", "attachments": [] }
+{
+  "appointment_cancellations": [
+    {
+      "cancelled_at":    "2026-05-20T14:32",
+      "appointment_date": "2026-05-25T09:00",
+      "reason":          "Patient unavailable"
+    }
+  ]
+}
 ```
+
+- `appointment_cancellations` — list of cancellation records, one per cancelled appointment. Initially `[]`. Appended to (never overwritten) each time the therapist uses "Cancel Scheduled Assessment" in the modal.
+  - `cancelled_at` — server-generated ISO datetime when the cancellation was recorded.
+  - `appointment_date` — the single appointment datetime that was cancelled (the value of `scheduled_date[0]` at the time of cancellation — assessments are point-in-time events so `start == end`).
+  - `reason` — therapist-entered text (required, single line).
+- `a1_assessment` / `a2_assessment` are windowed protocol events (windows defined in `study_protocol.json`). Their `scheduled_date` is initially computed from the activation date window but is **reset to `null`** when an appointment is cancelled, and **updated** when a scheduling call is completed (`schedule_a1_call` / `schedule_a2_call`).
+- The `a1_assessment` stub's `scheduled_date` may also be set directly from the D29 modal (via the optional `a1_appointment_date` field) without creating a `schedule_a1_call` event.
+- When `scheduled_date` is `null` and no `schedule_a1_call` / `schedule_a2_call` stub exists in `incomplete`, `api_patient_events` auto-seeds the corresponding scheduling call stub.
 
 **`exp_device_install`**
 ```json
@@ -536,6 +554,8 @@ Extra fields on `complete`:
   "watch_record":                   [],
   "activation_attempt":             [],
   "d15_attempt":                    [],
+  "schedule_a1_call":               [],
+  "schedule_a2_call":               [],
   "pre_discontinuation":            null,
   "discontinuation":                null
 }
@@ -933,6 +953,114 @@ Stores engineering fault reports for Pluto and Mars devices. Not part of `protoc
 - `notes`: the swap notes from the modal at creation time; may be empty string.
 - `resolution`: `null` until completed via the "Complete Fault Report" action on the Devices page (future feature). When resolved, records fault description, repair action, and outcome (`repaired` | `condemned`). The device's `faulty` flag is only cleared when `resolution` is filled.
 
+**`device_return`**
+
+Free event seeded lazily when training ends (any path: D29 filed, broken protocol set, or discontinuation set). Filed by engineer or admin. Closes all open device assignments and documents the condition of each returned device.
+
+**Stub** (lives in `incomplete`):
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "device_return",
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "filed_at": "YYYY-MM-DDTHH:MM:SS"
+}
+```
+`scheduled_date` is `[now, now]` at creation so the stub appears immediately as overdue.
+
+**Completed record** (moves to `free.device_return`):
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "device_return",
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "notes": "",
+  "attachment": "attachments/<event_id>.pdf",
+  "attachment_caption": "",
+  "devices": [
+    {
+      "type": "agwatch",
+      "device_id": "AGW-1",
+      "limb": "right",
+      "status": "returned|lost|battery_dead",
+      "issue_date": "YYYY-MM-DD",
+      "notes": ""
+    },
+    {
+      "type": "pluto",
+      "device_id": "PLT-1",
+      "condition": "working|faulty",
+      "comments": ""
+    },
+    {
+      "type": "mars",
+      "device_id": "MRS-1",
+      "condition": "working|faulty",
+      "comments": ""
+    },
+    {
+      "type": "laptop",
+      "device_id": "LAP-1",
+      "condition": "working|faulty",
+      "comments": ""
+    },
+    {
+      "type": "modem",
+      "device_id": "MOD-1",
+      "condition": "working|faulty",
+      "comments": ""
+    },
+    {
+      "type": "sim",
+      "sim_id": "<phone_number>",
+      "status": "returned|lost",
+      "issue_date": "YYYY-MM-DD",
+      "notes": ""
+    }
+  ]
+}
+```
+
+Notes:
+- `issue_date` is required when AG watch status is `lost` or `battery_dead`, and when SIM status is `lost`. Omitted otherwise.
+- Only devices that were open-assigned to the patient at the time of filing appear in `devices[]`.
+- Control group patients have AG watch entries only.
+
+---
+
+**`schedule_a1_call`** / **`schedule_a2_call`**
+
+Scheduling call events that record a phone call made to (re)schedule the A1 or A2 assessment. Free events — not planned in advance, one stub at a time in `incomplete`. On completion, the corresponding `a1_assessment` or `a2_assessment` stub's `scheduled_date` is updated to the new appointment date.
+
+**Stub** (lives in `incomplete`):
+```json
+{
+  "id": "<uuid>",
+  "protocol_event_id": "schedule_a1_call",
+  "scheduled_date": ["YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM"],
+  "filed_at": "YYYY-MM-DDTHH:MM:SS"
+}
+```
+`scheduled_date` is set to `[now, now]` at creation so the stub appears immediately as overdue.
+
+**Completed record** (moves to `free.schedule_a1_call` or `free.schedule_a2_call`):
+```json
+{
+  "id": "<uuid>",
+  "completion_date": "YYYY-MM-DDTHH:MM",
+  "filed_at": "YYYY-MM-DDTHH:MM:SS",
+  "duration_minutes": 15,
+  "notes": "",
+  "new_appointment_date": "YYYY-MM-DD"
+}
+```
+
+- `duration_minutes`: positive integer; call duration in minutes (required).
+- `notes`: free text notes about the call (required).
+- `new_appointment_date`: the date the patient agreed to come for the assessment (date only, required). Written to the corresponding `a1_assessment` / `a2_assessment` `incomplete` stub's `scheduled_date` as `[new_appointment_date + "T09:00", new_appointment_date + "T09:00"]` (time normalised to 09:00; only the date is meaningful for scheduling display).
+- **At most one stub** may exist in `incomplete` at a time. If one already exists, the "Schedule Call" button on the assessment event row is hidden.
+
 **`pre_discontinuation`** / **`discontinuation`**
 ```json
 {
@@ -1150,6 +1278,7 @@ Each event definition:
 | `is_master` | bool | If `true`, completing this event triggers activation ate propagation |
 | `repeatable` | bool | Whether multiple instances can exist per patient |
 | `depends_on` | list of strings or null | IDs of events that must be in `complete` before this event can be completed. `null` or absent means no dependencies. |
+| `comes_after` | list of strings or null | IDs of events that should appear before this one in the overdue/upcoming list. Display ordering only — no blocking or clickability effect. `null` or absent means no ordering preference. |
 
 **Event dependencies (`depends_on`):**
 
@@ -1177,6 +1306,17 @@ Example: `activation` depends on `exp_device_install` — a patient cannot be ac
 - If any `depends_on` event is incomplete → render as a plain `<div>` (no href, no cursor) with a muted lock icon next to the event name and an amber badge on the right reading "Needs: \<blocking event name\>" in place of the date/urgency label
 - This matches the existing pattern for non-actionable events, which are also plain `<div>` elements
 
+**Display ordering (`comes_after`):**
+
+Unlike `depends_on`, `comes_after` is a soft hint used only by the overdue/upcoming sort — it carries no blocking semantics, produces no badge, and does not affect clickability. When event B lists event A in `comes_after` and both appear in the same event list, A is placed before B regardless of their scheduled dates. Currently used for:
+- `adl_agwatch_timing_d01` and `vcg_agwatch_timing_d01` — both list `watch_record` so that therapists see the watch-record task first on activation day.
+
+**Code-level ordering rules (not in protocol JSON):**
+
+Two ordering rules are enforced in the sort function rather than via `comes_after`, because the events involved are free events with no protocol definition entry:
+- `schedule_a1_call` is always placed immediately before `a1_assessment` when both appear in the same list.
+- `schedule_a2_call` is always placed immediately before `a2_assessment` when both appear in the same list.
+
 **Event types:**
 
 | `type` | Behaviour |
@@ -1198,46 +1338,50 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 
 #### Experimental only
 
-| ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
-|----|------|------|-----------|--------|--------------|--------------|---------|
-| `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
-| `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
-| `robot_issue_call` | Robot Issue — Engineer Call | anytime | — | — | `activation` | `user` | Engineer call to assess a robot malfunction reported during a home visit or patient call. Created directly when the "robot issue" toggle is checked in the triggering modal — no intermediate `robot_issue` event. May spawn a `robot_issue_visit` stub. |
-| `robot_issue_visit` | Robot Issue — Engineer Visit | anytime | — | — | `activation` | `user` | Engineer site visit to inspect and repair/swap Pluto and Mars devices. Both devices always shown; outcome required for each. Swapped outcome requires `swap_type` (fault-driven creates pending fault report stub; preventive does not). May spawn `resolve_robot_issue_visit` stub and training pause. |
-| `resolve_robot_issue_visit` | Robot Issue — Replacement Visit | anytime | — | — | `activation` | `user` | Engineer visit to deliver replacement for taken-back device. Taken-back device replacement required; optional section for the other device (full outcome sub-form). Clears the training pause when all outstanding stubs are resolved. |
-| `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
-| `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
+| ID | Name | Type | Reference | Window | `depends_on` | `comes_after` | `date source` | Purpose |
+|----|------|------|-----------|--------|--------------|--------------|--------------|---------|
+| `exp_device_install` | Device Installation + Demo | strict | assignment | day 1–5 | — | — | `user` | Install Pluto and Mars devices at the patient's home and demonstrate correct usage before training begins. |
+| `activation` | Patient Activation | strict | assignment | day 1–5 | `exp_device_install` | — | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
+| `robot_issue_call` | Robot Issue — Engineer Call | anytime | — | — | — | — | `user` | Engineer call to assess a robot malfunction reported during a home visit or patient call. Created directly when the "robot issue" toggle is checked in the triggering modal — no intermediate `robot_issue` event. May spawn a `robot_issue_visit` stub. |
+| `robot_issue_visit` | Robot Issue — Engineer Visit | anytime | — | — | — | — | `user` | Engineer site visit to inspect and repair/swap Pluto and Mars devices. Both devices always shown; outcome required for each. Swapped outcome requires `swap_type` (fault-driven creates pending fault report stub; preventive does not). May spawn `resolve_robot_issue_visit` stub and training pause. |
+| `resolve_robot_issue_visit` | Robot Issue — Replacement Visit | anytime | — | — | — | — | `user` | Engineer visit to deliver replacement for taken-back device. Taken-back device replacement required; optional section for the other device (full outcome sub-form). Clears the training pause when all outstanding stubs are resolved. |
+| `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01` | — | `= activation` | Provide the patient with a printed copy of their personalised ADL therapy prescription. |
+| `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15` | — | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL therapy prescription. |
 
 #### Control only
 
-| ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
-|----|------|------|-----------|--------|--------------|--------------|---------|
-| `activation` | Patient Activation | strict | assignment | day 1–5 | — | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
-| `vcg_prescription_d01` | VCG Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
-| `vcg_agwatch_timing_d03` | Add VCG AG Watch Timings | point_in_time | activation | day 3 | `home_visit_d03`, `vcg_prescription_d01` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 3. |
-| `vcg_prescription_d15` | VCG Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the VCG exercise programme at the mid-point of the intervention. |
-| `vcg_agwatch_timing_d15` | Add VCG AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `vcg_prescription_d15` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 15. |
-| `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01`, `vcg_prescription_d01` | `= activation` | Provide the patient with a printed copy of their personalised ADL + VCG therapy prescription. |
-| `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15`, `vcg_prescription_d15` | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL + VCG therapy prescription. |
+| ID | Name | Type | Reference | Window | `depends_on` | `comes_after` | `date source` | Purpose |
+|----|------|------|-----------|--------|--------------|--------------|--------------|---------|
+| `activation` | Patient Activation | strict | assignment | day 1–5 | — | — | `user` | First home visit to begin the training intervention. Marks the official start of the therapy period. |
+| `vcg_prescription_d01` | VCG Exercise Prescription | point_in_time | activation | day 1 | `activation` | — | `= activation` | Prescribe an individualised VCG exercise programme for the patient at the start of the intervention. |
+| `vcg_agwatch_timing_d01` | Add VCG AG Watch Timings Day 01 | point_in_time | activation | day 1 | `activation` | `watch_record` | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 1. |
+| `vcg_agwatch_timing_d02` | Add VCG AG Watch Timings Day 02 | point_in_time | activation | day 2 | `home_visit_d02` | — | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 2. |
+| `vcg_agwatch_timing_d03` | Add VCG AG Watch Timings Day 03 | point_in_time | activation | day 3 | `home_visit_d03`, `vcg_prescription_d01` | — | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 3. |
+| `vcg_prescription_d15` | VCG Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | — | `= home_visit_d15` | Review and revise the VCG exercise programme at the mid-point of the intervention. |
+| `vcg_agwatch_timing_d15` | Add VCG AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `vcg_prescription_d15` | — | `user` | Record actigraph watch active/inactive timing windows for VCG exercise sessions at day 15. |
+| `prescription_printout_d01` | Therapy Prescription Printout | point_in_time | activation | day 1 | `adl_prescription_d01`, `vcg_prescription_d01` | — | `= activation` | Provide the patient with a printed copy of their personalised ADL + VCG therapy prescription. |
+| `prescription_printout_d15` | Revised Therapy Prescription Printout | point_in_time | activation | day 15 | `adl_prescription_d15`, `vcg_prescription_d15` | — | `= home_visit_d15` | Provide the patient with a printed copy of their revised ADL + VCG therapy prescription. |
 
 #### Shared (both groups)
 
-| ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
-|----|------|------|-----------|--------|--------------|--------------|---------|
-| `adl_prescription_d01` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
-| `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | `= activation + 1d` | Second home visit — review training progress and address any early questions or difficulties. |
-| `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | `= activation + 2d` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
-| `adl_agwatch_timing_d03` | Add ADL AG Watch Timings Day 03 | point_in_time | activation | day 3 | `home_visit_d03` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 3. |
-| `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
-| `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
-| `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the ADL exercise programme at the mid-point of the intervention. |
-| `adl_agwatch_timing_d15` | Add ADL AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `adl_prescription_d15` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 15. |
-| `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | `user` | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
-| `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | `user` | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
-| `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |
-| `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | `user` | Six-month follow-up clinical outcome assessment. |
-| `watch_record` | Watch Record | chained | — | — | — | `user` | Track actigraph watch assignments and swaps throughout the study. First entry seeded at activation; each completion seeds the next. Can also be triggered by activation, a patient call, or a follow-up call — the existing open chain entry is claimed (stamped with `triggered_by` and `scheduled_date` set to now) rather than a new entry being created. |
-| `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
-| `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue_call` (exp only), and/or `watch_record` entries. |
-| `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study before group assignment. |
-| `discontinuation` | Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study after group assignment. |
+| ID | Name | Type | Reference | Window | `depends_on` | `comes_after` | `date source` | Purpose |
+|----|------|------|-----------|--------|--------------|--------------|--------------|---------|
+| `adl_prescription_d01` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | — | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
+| `adl_agwatch_timing_d01` | Add ADL AG Watch Timings Day 01 | point_in_time | activation | day 1 | `activation` | `watch_record` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 1. |
+| `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | — | `= activation + 1d` | Second home visit — review training progress and address any early questions or difficulties. |
+| `adl_agwatch_timing_d02` | Add ADL AG Watch Timings Day 02 | point_in_time | activation | day 2 | `home_visit_d02` | — | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 2. |
+| `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | — | `= activation + 2d` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
+| `adl_agwatch_timing_d03` | Add ADL AG Watch Timings Day 03 | point_in_time | activation | day 3 | `home_visit_d03` | — | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 3. |
+| `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
+| `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
+| `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | — | `= home_visit_d15` | Review and revise the ADL exercise programme at the mid-point of the intervention. |
+| `adl_agwatch_timing_d15` | Add ADL AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `adl_prescription_d15` | — | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 15. |
+| `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | — | `user` | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
+| `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | — | `user` | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
+| `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |
+| `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | — | `user` | Six-month follow-up clinical outcome assessment. |
+| `watch_record` | Watch Record | chained | — | — | — | — | `user` | Track actigraph watch assignments and swaps throughout the study. First entry seeded at activation; each completion seeds the next. Can also be triggered by activation, a patient call, or a follow-up call — the existing open chain entry is claimed (stamped with `triggered_by` and `scheduled_date` set to now) rather than a new entry being created. |
+| `adverse_event` | Adverse Event | anytime | — | — | — | — | `user` | Document any adverse event experienced by the patient during the intervention. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
+| `patient_call` | Patient Call | anytime | — | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue_call` (exp only), and/or `watch_record` entries. |
+| `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | — | `user` | Document withdrawal from the study before group assignment. |
+| `discontinuation` | Discontinuation | anytime | — | — | — | — | `user` | Document withdrawal from the study after group assignment. |

@@ -6,6 +6,19 @@
     function initPage() {
       loadDashboard();
       loadEvents();
+      _startClock();
+    }
+
+    function _startClock() {
+      function _tick() {
+        const now  = new Date();
+        const date = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+        const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const el   = document.getElementById('dashboard-clock');
+        if (el) el.textContent = `${date}  ${time}`;
+      }
+      _tick();
+      setInterval(_tick, 60000);
     }
 
     // Dashboard Data

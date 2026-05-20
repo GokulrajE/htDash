@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from flask import Blueprint, jsonify
 from models.user import current_session
 from utils.data_access import get_patients_for_user, derive_status, iter_patients_with_folder
@@ -15,7 +15,12 @@ _AE_FOLLOWUP_LABELS = {
 
 def _topo_sort(events, event_defs, date_fn):
     """Group events by date_fn, topo-sort within each group (parents before dependents),
-    return in ascending date order."""
+    return in ascending date order.
+
+    Ordering edges come from both `depends_on` (hard blocking) and `comes_after`
+    (soft display hint) in event_defs. Only `depends_on` drives the blocked_by badge;
+    both fields drive this sort.
+    """
     events_by_date = {}
     for ev in events:
         events_by_date.setdefault(date_fn(ev), []).append(ev)
@@ -32,7 +37,8 @@ def _topo_sort(events, event_defs, date_fn):
         dependents   = {ev['protocol_event_id']: [] for ev in group}
         for ev in group:
             pid  = ev['protocol_event_id']
-            deps = event_defs.get(pid, {}).get('depends_on') or []
+            def_entry = event_defs.get(pid, {})
+            deps = list(def_entry.get('depends_on') or []) + list(def_entry.get('comes_after') or [])
             for d in deps:
                 if d in ids_in_group:
                     in_degree[pid] += 1
@@ -49,6 +55,20 @@ def _topo_sort(events, event_defs, date_fn):
         placed = {ev['protocol_event_id'] for ev in sorted_group}
         sorted_group.extend(ev for ev in group if ev['protocol_event_id'] not in placed)
         result.extend(sorted_group)
+    return result
+
+
+def _apply_ordering_rules(events):
+    """Post-sort pass: schedule_a1_call and schedule_a2_call always appear
+    immediately before their assessment counterpart when both are in the same list."""
+    result = list(events)
+    for call_pid, assess_pid in (('schedule_a1_call', 'a1_assessment'),
+                                  ('schedule_a2_call', 'a2_assessment')):
+        call_idx   = next((i for i, e in enumerate(result) if e['protocol_event_id'] == call_pid), None)
+        assess_idx = next((i for i, e in enumerate(result) if e['protocol_event_id'] == assess_pid), None)
+        if call_idx is not None and assess_idx is not None and call_idx > assess_idx:
+            ev = result.pop(call_idx)
+            result.insert(assess_idx, ev)
     return result
 
 
@@ -94,6 +114,9 @@ def events():
         for e in protocol.get(section, []):
             event_names[e['id']] = e['name']
     event_names['training_pause_followup'] = 'Training Pause Follow-up'
+    event_names['schedule_a1_call']        = 'Schedule A1 Assessment'
+    event_names['schedule_a2_call']        = 'Schedule A2 Assessment'
+    event_names['device_return']           = 'Device Return'
 
     # Build per-group event_defs so depends_on is looked up against the correct
     # group definition (e.g. activation has different depends_on per group).
@@ -105,11 +128,18 @@ def events():
         for e in protocol.get(grp, []):
             defs[e['id']] = e
         defs['training_pause_followup'] = {'name': 'Training Pause Follow-up', 'depends_on': []}
+        defs['device_return']           = {'name': 'Device Return',            'depends_on': []}
         group_defs[grp] = defs
 
     # Merged defs for topo sort (experimental preferred — stricter depends_on).
     # Ordering within a date is cosmetic; correctness comes from blocked_by above.
     topo_defs = {**group_defs.get('control', {}), **group_defs.get('experimental', {})}
+
+    # A1/A2 window definitions (used to precompute per-patient window dates)
+    _assessment_defs = {}
+    for _s in protocol.get('shared', []):
+        if _s['id'] in ('a1_assessment', 'a2_assessment'):
+            _assessment_defs[_s['id']] = _s
 
     terminal = {'discontinued', 'pre_discontinued', 'all_completed'}
     today = date.today()
@@ -128,6 +158,7 @@ def events():
             _BP_INTERACTIVE = frozenset({
                 'adverse_event', 'adverse_event_followup',
                 'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+                'device_return',
             })
             ae_alias_map_bp = {
                 e['id']: e['alias']
@@ -228,28 +259,77 @@ def events():
             'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
             'other_device_issue_call', 'other_device_issue_visit',
             'training_completion_d29',
+            'device_return',
         })
         _DISCONTINUED_VISIBLE = frozenset({
             'adverse_event', 'adverse_event_followup',
             'adverse_event_followup_visit', 'adverse_event_clinical_visit',
             'a1_assessment', 'a2_assessment',
+            'schedule_a1_call', 'schedule_a2_call',
+            'device_return',
         })
-        is_paused       = bool(patient.get('trainingPausedDate'))
-        is_discontinued = bool(patient.get('discontinuationDate'))
+        _POST_TRAINING_VISIBLE = frozenset({
+            'training_completion_d29',
+            'adverse_event', 'adverse_event_followup',
+            'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+            'a1_assessment', 'a2_assessment',
+            'schedule_a1_call', 'schedule_a2_call',
+            'device_return',
+        })
+        is_paused        = bool(patient.get('trainingPausedDate'))
+        is_discontinued  = bool(patient.get('discontinuationDate'))
+        is_post_training = (derive_status(patient) == 'post_training')
+
+        # Precompute A1/A2 window dates for this patient
+        _pt_assessment_windows = {}
+        if patient.get('activationDate'):
+            try:
+                _act_dt = datetime.fromisoformat(patient['activationDate']).date()
+                for _pid, _def in _assessment_defs.items():
+                    _win = _def.get('window')
+                    if _win:
+                        _ws = _act_dt + timedelta(days=_win['start_day'] - 1)
+                        _we = _act_dt + timedelta(days=_win['end_day'] - 1)
+                        _pt_assessment_windows[_pid] = (_ws.isoformat(), _we.isoformat())
+            except Exception:
+                pass
+
+        _ASSESSMENT_PIDS = frozenset({'a1_assessment', 'a2_assessment'})
 
         for entry in events_data.get('incomplete', []):
+            pid   = entry.get('protocol_event_id')
             sched = entry.get('scheduled_date')
-            if not sched or not isinstance(sched, list) or len(sched) < 2:
-                continue
-            try:
-                start_date = datetime.fromisoformat(sched[0]).date()
-                end_date   = datetime.fromisoformat(sched[1]).date()
-            except Exception:
-                continue
 
-            pid     = entry.get('protocol_event_id')
+            if not sched or not isinstance(sched, list) or len(sched) < 2:
+                # Assessment events shown even without a scheduled appointment.
+                if pid not in _ASSESSMENT_PIDS or pid not in _pt_assessment_windows:
+                    continue
+                _ws_str, _we_str = _pt_assessment_windows[pid]
+                try:
+                    start_date = datetime.fromisoformat(_ws_str).date()
+                    end_date   = datetime.fromisoformat(_we_str).date()
+                except Exception:
+                    continue
+                sched = None
+            else:
+                try:
+                    start_date = datetime.fromisoformat(sched[0]).date()
+                    end_date   = datetime.fromisoformat(sched[1]).date()
+                except Exception:
+                    continue
+                # Assessment events: override categorisation bounds with window dates
+                if pid in _ASSESSMENT_PIDS and pid in _pt_assessment_windows:
+                    try:
+                        _ws_str, _we_str = _pt_assessment_windows[pid]
+                        start_date = datetime.fromisoformat(_ws_str).date()
+                        end_date   = datetime.fromisoformat(_we_str).date()
+                    except Exception:
+                        pass
 
             if is_discontinued and pid not in _DISCONTINUED_VISIBLE:
+                continue
+
+            if is_post_training and pid not in _POST_TRAINING_VISIBLE:
                 continue
 
             on_hold = is_paused and pid not in _PAUSE_VISIBLE and start_date <= today
@@ -272,6 +352,10 @@ def events():
                 'scheduled_date':    sched,
                 'blocked_by':        blocked_by,
             }
+            if pid in _ASSESSMENT_PIDS and pid in _pt_assessment_windows:
+                _ws_str, _we_str = _pt_assessment_windows[pid]
+                record['window_start'] = _ws_str
+                record['window_end']   = _we_str
             if entry.get('training_stopped'):
                 record['training_stopped'] = True
 
@@ -296,11 +380,15 @@ def events():
 
     # Active-window first, then past-due; within each sub-group sort by end date
     # and topo-sort within same-end-date groups so parents appear before dependents.
-    end_date_fn = lambda ev: ev['scheduled_date'][1][:10]
+    end_date_fn = lambda ev: (ev['scheduled_date'] or ['', ''])[1][:10]
     active_overdue = sorted([e for e in overdue if e.get('active_window')],     key=end_date_fn)
     past_overdue   = sorted([e for e in overdue if not e.get('active_window')], key=end_date_fn)
-    overdue  = (_topo_sort(active_overdue, topo_defs, end_date_fn) +
-                _topo_sort(past_overdue,   topo_defs, end_date_fn))
-    upcoming = _topo_sort(upcoming, topo_defs, lambda ev: ev['scheduled_date'][0][:10])
+    overdue  = _apply_ordering_rules(
+        _topo_sort(active_overdue, topo_defs, end_date_fn) +
+        _topo_sort(past_overdue,   topo_defs, end_date_fn)
+    )
+    upcoming = _apply_ordering_rules(
+        _topo_sort(upcoming, topo_defs, lambda ev: (ev['scheduled_date'] or ['', ''])[0][:10])
+    )
 
     return jsonify({'overdue': overdue, 'upcoming': upcoming})
