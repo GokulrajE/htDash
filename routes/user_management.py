@@ -123,6 +123,22 @@ def _topo_sort(events, event_defs, date_fn):
     return result
 
 
+def _cancel_training_ended_stubs(events_data, protocol_event_ids, cancelled_at):
+    """Move incomplete stubs to cancelled[] with reason 'training_ended'."""
+    ids = frozenset(protocol_event_ids)
+    remaining = []
+    for e in events_data.get('incomplete', []):
+        if e.get('protocol_event_id') in ids:
+            events_data.setdefault('cancelled', []).append({
+                **e,
+                'cancelled_at':        cancelled_at,
+                'cancellation_reason': 'training_ended',
+            })
+        else:
+            remaining.append(e)
+    events_data['incomplete'] = remaining
+
+
 def _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data):
     """Close the open pause epoch at Day 28 end-of-day if the training window has passed."""
     if not patient.get('trainingPausedDate'):
@@ -159,7 +175,11 @@ def _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data):
     if patient['cumulativePauseDays'] > 10 and not patient.get('brokenProtocolDate'):
         patient['brokenProtocolDate'] = day28_end_str
 
+    _cancel_training_ended_stubs(events_data, ['watch_record'], day28_end_str)
+
     write_patient_meta(folder, homer_id, patient)
+    from utils.protocol_events import write_protocol_events
+    write_protocol_events(folder, homer_id, events_data)
 
 
 @bp.route('/api/patients/<homer_id>/events', methods=['GET'])
@@ -819,6 +839,9 @@ def api_discontinue_patient(homer_id):
             e for e in events_data.get('incomplete', [])
             if e.get('protocol_event_id') != 'discontinuation'
         ]
+
+    # Cancel training-ended stubs
+    _cancel_training_ended_stubs(events_data, ['watch_record', 'resolve_robot_issue_visit'], filed_at)
 
     # Close all device assignments and clear has_issue flags
     _close_patient_device_assignments(folder, homer_id, now_hhmm)
@@ -1639,7 +1662,9 @@ def api_complete_training_completion(homer_id):
         complete_entry['attachment']         = generic_rel
         complete_entry['attachment_caption'] = attachment_caption
 
+    # Remove the D29 entry itself then cancel all training-ended stubs
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != eid]
+    _cancel_training_ended_stubs(events_data, ['watch_record', 'resolve_robot_issue_visit'], filed_at)
     events_data.setdefault('complete', []).append(complete_entry)
 
     from utils.protocol_events import write_protocol_events
@@ -1653,13 +1678,6 @@ def api_complete_training_completion(homer_id):
         patient['trainingCompletionDate'] = completion_date
         if patient.get('trainingPausedDate'):
             patient['trainingPausedDate'] = None
-            ev_data = read_protocol_events(folder, homer_id)
-            if ev_data:
-                ev_data['incomplete'] = [
-                    e for e in ev_data.get('incomplete', [])
-                    if e.get('protocol_event_id') != 'resolve_robot_issue_visit'
-                ]
-                write_protocol_events(folder, homer_id, ev_data)
             write_patient_log(folder, homer_id, loginid, session_id,
                               'Training pause cleared — training completed')
         write_patient_meta(folder, homer_id, patient)
@@ -1825,6 +1843,7 @@ def api_complete_home_visit(homer_id):
 
             if not patient.get('brokenProtocolDate'):
                 patient['brokenProtocolDate'] = visit_date[:10]
+            _cancel_training_ended_stubs(events_data, ['watch_record'], filed_at)
             write_patient_meta(folder, homer_id, patient)
             write_protocol_events(folder, homer_id, events_data)
 
@@ -2209,6 +2228,8 @@ def api_complete_adverse_event_followup(homer_id):
             if max_resume and _check_d0203_broken_protocol(events_data, max_resume):
                 if not patient_meta.get('brokenProtocolDate'):
                     patient_meta['brokenProtocolDate'] = filed_at[:10]
+            if patient_meta.get('brokenProtocolDate'):
+                _cancel_training_ended_stubs(events_data, ['watch_record'], filed_at)
             _shift_future_incomplete_events(events_data, pause_days)
             write_patient_meta(folder, homer_id, patient_meta)
             write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
@@ -2302,6 +2323,8 @@ def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_
     if max_resume and _check_d0203_broken_protocol(events_data, max_resume):
         if not patient_meta.get('brokenProtocolDate'):
             patient_meta['brokenProtocolDate'] = filed_at[:10]
+    if patient_meta.get('brokenProtocolDate'):
+        _cancel_training_ended_stubs(events_data, ['watch_record'], filed_at)
     _shift_future_incomplete_events(events_data, pause_days)
     write_patient_meta(folder, homer_id, patient_meta)
     write_patient_log(folder, homer_id, loginid, session_id, 'Adverse event(s) resolved — training resumed')
@@ -3949,6 +3972,8 @@ def api_complete_resolve_robot_issue_visit(homer_id):
         if _check_d0203_broken_protocol(events_data, max_resume):
             if not patient_meta.get('brokenProtocolDate'):
                 patient_meta['brokenProtocolDate'] = filed_at[:10]
+        if patient_meta.get('brokenProtocolDate'):
+            _cancel_training_ended_stubs(events_data, ['watch_record'], filed_at)
         _shift_future_incomplete_events(events_data, pause_days)
         write_patient_meta(folder, homer_id, patient_meta)
         write_patient_log(folder, homer_id, loginid, session_id,
