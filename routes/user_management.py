@@ -1975,6 +1975,12 @@ def api_complete_adverse_event_followup(homer_id):
         patient.get('brokenProtocolDate') or
         patient.get('discontinuationDate')
     ))
+    if not training_ended and patient and patient.get('activationDate'):
+        try:
+            _act = datetime.fromisoformat(patient['activationDate']).date()
+            training_ended = date.today() > _act + timedelta(days=28)
+        except Exception:
+            pass
     free_aes = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
     for r in ae_discussions:
         ae_id = r.get('adverse_event_id')
@@ -2283,6 +2289,12 @@ def api_complete_ae_followup_visit(homer_id):
         patient.get('brokenProtocolDate') or
         patient.get('discontinuationDate')
     ))
+    if not training_ended and patient and patient.get('activationDate'):
+        try:
+            _act = datetime.fromisoformat(patient['activationDate']).date()
+            training_ended = date.today() > _act + timedelta(days=28)
+        except Exception:
+            pass
     stub_ae_ids = entry.get('adverse_event_ids', [])
     free_aes    = {ae['id']: ae for ae in events_data.get('free', {}).get('adverse_event', [])}
 
@@ -2404,6 +2416,12 @@ def api_complete_ae_clinical_visit(homer_id):
         patient.get('brokenProtocolDate') or
         patient.get('discontinuationDate')
     ))
+    if not training_ended and patient and patient.get('activationDate'):
+        try:
+            _act = datetime.fromisoformat(patient['activationDate']).date()
+            training_ended = date.today() > _act + timedelta(days=28)
+        except Exception:
+            pass
 
     for r in ae_discussions:
         ae_id = r.get('adverse_event_id')
