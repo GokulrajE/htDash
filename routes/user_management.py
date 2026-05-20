@@ -200,20 +200,21 @@ def api_patient_events(homer_id):
     if patient:
         _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data)
 
-    # Lazy cleanup: cancel any watch_record stubs still in incomplete for post_training patients.
-    # Covers data written before the cancellation fix was in place.
-    if patient and events_data and derive_status(patient) == 'post_training':
-        has_stubs = any(
-            e.get('protocol_event_id') == 'watch_record'
-            for e in events_data.get('incomplete', [])
-        )
-        if has_stubs:
-            _cancel_training_ended_stubs(
-                events_data, ['watch_record'],
-                datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    # Lazy cleanup: cancel stray watch_record stubs for patients whose training has ended.
+    # Covers data written before the no-seed guard was in place.
+    if patient and events_data:
+        _st = derive_status(patient)
+        if _st in ('post_training', 'training_completed', 'a1_completed', 'all_completed'):
+            _stray = any(
+                e.get('protocol_event_id') == 'watch_record'
+                for e in events_data.get('incomplete', [])
             )
-            from utils.protocol_events import write_protocol_events as _wpev
-            _wpev(folder, homer_id, events_data)
+            if _stray:
+                _cancel_training_ended_stubs(
+                    events_data, ['watch_record'],
+                    datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+                )
+                write_protocol_events(folder, homer_id, events_data)
 
     # Build event_defs from shared + patient's group only so group-specific
     # depends_on (e.g. activation→exp_device_install for experimental) are not
@@ -4256,15 +4257,27 @@ def api_complete_watch_record(homer_id):
     events_data['incomplete'] = [e for e in incomplete if e.get('id') != event_id]
     events_data.setdefault('complete', []).append(complete_entry)
 
-    # Seed next chain entry
-    next_dt = (datetime.fromisoformat(completion_date) + timedelta(days=next_followup_days)).strftime('%Y-%m-%dT%H:%M')
-    events_data['incomplete'].append({
-        'id':                str(uuid.uuid4()),
-        'protocol_event_id': 'watch_record',
-        'scheduled_date':    [next_dt, next_dt],
-        'flagged':           False,
-        'notes':             '',
-    })
+    # Seed next chain entry only if training has not permanently ended
+    _training_ended = bool(
+        patient.get('trainingCompletionDate') or
+        patient.get('brokenProtocolDate') or
+        patient.get('discontinuationDate')
+    )
+    if not _training_ended and patient.get('activationDate'):
+        try:
+            _act = datetime.fromisoformat(patient['activationDate']).date()
+            _training_ended = date.today() > _act + timedelta(days=28)
+        except Exception:
+            pass
+    if not _training_ended:
+        next_dt = (datetime.fromisoformat(completion_date) + timedelta(days=next_followup_days)).strftime('%Y-%m-%dT%H:%M')
+        events_data['incomplete'].append({
+            'id':                str(uuid.uuid4()),
+            'protocol_event_id': 'watch_record',
+            'scheduled_date':    [next_dt, next_dt],
+            'flagged':           False,
+            'notes':             '',
+        })
     write_protocol_events(folder, homer_id, events_data)
 
     # Update patient meta
