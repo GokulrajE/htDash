@@ -242,7 +242,7 @@ def api_patient_events(homer_id):
         _filed_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         _dirty    = False
 
-        # A1: seed schedule_a1_call when a1_assessment.scheduled_date is null and no stub exists.
+        # A1: seed schedule_a1_call when a1_assessment.appointment_date is null and no stub exists.
         # Also clean up any orphaned schedule_a1_call stubs if a1 is already complete.
         _a1_complete = any(
             e.get('protocol_event_id') == 'a1_assessment'
@@ -264,7 +264,7 @@ def api_patient_events(homer_id):
                 e for e in events_data.get('incomplete', [])
                 if e.get('protocol_event_id') == 'a1_assessment'
             ), None)
-            if _a1_inc and _a1_inc.get('scheduled_date') is None:
+            if _a1_inc and _a1_inc.get('appointment_date') is None:
                 events_data.setdefault('incomplete', []).insert(0, {
                     'id':                str(uuid.uuid4()),
                     'protocol_event_id': 'schedule_a1_call',
@@ -273,7 +273,7 @@ def api_patient_events(homer_id):
                 })
                 _dirty = True
 
-        # A2: seed schedule_a2_call when a2_assessment.scheduled_date is null OR 7 days before window.
+        # A2: seed schedule_a2_call when a2_assessment.appointment_date is null OR 7 days before window.
         _a2_def = None
         for _e in protocol.get('shared', []):
             if _e['id'] == 'a2_assessment':
@@ -296,7 +296,7 @@ def api_patient_events(homer_id):
                     e for e in events_data.get('incomplete', [])
                     if e.get('protocol_event_id') == 'a2_assessment'
                 ), None)
-                _a2_null_date   = _a2_inc and _a2_inc.get('scheduled_date') is None
+                _a2_null_date   = _a2_inc and _a2_inc.get('appointment_date') is None
                 _a2_near_window = _today >= (_a2_start - timedelta(days=7))
 
                 # Clean up orphaned stub when A2 is already complete or already scheduled.
@@ -517,8 +517,9 @@ def api_patient_events(homer_id):
         }
         if pid in _ASSESSMENT_PIDS and pid in _assessment_windows:
             _ws_str, _we_str = _assessment_windows[pid]
-            record['window_start'] = _ws_str
-            record['window_end']   = _we_str
+            record['window_start']    = _ws_str
+            record['window_end']      = _we_str
+            record['appointment_date'] = entry.get('appointment_date')
         if entry.get('triggered_by'):
             record['triggered_by'] = entry['triggered_by']
         if entry.get('adverse_event_ids') is not None:
@@ -1180,11 +1181,12 @@ def api_device_return_devices(homer_id):
                             all_sims = read_sims(folder)
                             sim_rec = next((s for s in all_sims if s['id'] == sim_id), None)
                             if sim_rec:
+                                phone = sim_rec.get('phoneNumber', sim_id)
                                 devices.append({
-                                    'type':   'sim',
-                                    'sim_id': sim_id,
-                                    'phone':  sim_rec.get('phoneNumber', sim_id),
-                                    'info':   sim_rec,
+                                    'type':      'sims',
+                                    'device_id': phone,
+                                    'sim_id':    sim_id,
+                                    'info':      sim_rec,
                                 })
 
     return jsonify({'devices': devices})
@@ -1246,40 +1248,38 @@ def api_complete_device_return(homer_id):
             dev_id  = a['device_id']
             # Find matching device entry from submitted form data
             if dtype == 'agwatch':
-                limb    = a.get('limb', '')
                 d_entry = next((e for e in device_entries
                                 if e.get('type') == 'agwatch' and e.get('device_id') == dev_id), None)
-                if d_entry:
-                    status = d_entry.get('status', 'returned')
-                    if status in ('lost', 'battery_dead'):
-                        issue_date = d_entry.get('issue_date', '')
-                        if dev_id in inv_map:
-                            inv_map[dev_id]['lost_date'] = issue_date or completion_date[:10]
-                            changed_inv = True
-                        a['lost'] = True
-                        append_device_event(folder, dtype, dev_id, 'lost', loginid,
-                                            homer_id=homer_id, notes=f'{status.replace("_", " ").title()} at device return ({issue_date or completion_date[:10]})')
-                    else:
-                        if dev_id in inv_map:
-                            inv_map[dev_id].pop('has_issue', None)
             else:
                 d_entry = next((e for e in device_entries
                                 if e.get('type') == dtype and e.get('device_id') == dev_id), None)
-                if d_entry:
-                    condition = d_entry.get('condition', 'working')
-                    if condition == 'faulty':
-                        if dev_id in inv_map:
-                            inv_map[dev_id]['has_issue'] = True
-                            changed_inv = True
-                        append_device_event(folder, dtype, dev_id, 'faulty', loginid,
-                                            homer_id=homer_id, notes='Faulty at device return')
-                    else:
-                        if dev_id in inv_map:
-                            inv_map[dev_id].pop('has_issue', None)
-                    # Clear SIM from modem when closing modem assignment
-                    if dtype == 'modems' and dev_id in inv_map:
-                        inv_map[dev_id]['sim_id'] = None
+            if d_entry:
+                status     = d_entry.get('status', 'working')
+                issue_date = d_entry.get('issue_date', '') or completion_date[:10]
+                dev_notes  = d_entry.get('notes') or ''
+                if status in ('lost', 'low_battery'):
+                    if dev_id in inv_map:
+                        inv_map[dev_id]['lost_date'] = issue_date
                         changed_inv = True
+                    a['lost'] = True
+                    label = 'Low battery' if status == 'low_battery' else 'Lost'
+                    append_device_event(folder, dtype, dev_id, 'lost', loginid,
+                                        homer_id=homer_id,
+                                        notes=f'{label} at device return ({issue_date}){(": " + dev_notes) if dev_notes else ""}')
+                elif status == 'faulty':
+                    if dev_id in inv_map:
+                        inv_map[dev_id]['has_issue'] = True
+                        changed_inv = True
+                    append_device_event(folder, dtype, dev_id, 'faulty', loginid,
+                                        homer_id=homer_id,
+                                        notes=f'Faulty at device return{(": " + dev_notes) if dev_notes else ""}')
+                else:
+                    if dev_id in inv_map:
+                        inv_map[dev_id].pop('has_issue', None)
+                # Clear SIM from modem when closing modem assignment
+                if dtype == 'modems' and dev_id in inv_map:
+                    inv_map[dev_id]['sim_id'] = None
+                    changed_inv = True
             a['returned_date'] = now_hhmm
             changed_asgn = True
         if changed_asgn:
@@ -1288,15 +1288,19 @@ def api_complete_device_return(homer_id):
             write_device_inventory(folder, dtype, {'devices': inv_list})
 
     # Handle SIM status
-    sim_entry = next((e for e in device_entries if e.get('type') == 'sim'), None)
+    sim_entry = next((e for e in device_entries if e.get('type') == 'sims'), None)
     if sim_entry:
         sim_id     = sim_entry.get('sim_id')
-        sim_status = sim_entry.get('status', 'returned')
-        if sim_id and sim_status == 'lost':
+        sim_status = sim_entry.get('status', 'working')
+        issue_date = sim_entry.get('issue_date', completion_date[:10])
+        if sim_id and sim_status in ('lost', 'faulty'):
             all_sims = read_sims(folder)
             for s in all_sims:
                 if s['id'] == sim_id:
-                    s['lost_date'] = sim_entry.get('issue_date', completion_date[:10])
+                    if sim_status == 'lost':
+                        s['lost_date'] = issue_date
+                    else:
+                        s['has_issue'] = True
                     break
             write_sims(folder, all_sims)
 
@@ -2131,13 +2135,13 @@ def api_complete_training_completion(homer_id):
     _cancel_training_ended_stubs(events_data, ['watch_record', 'resolve_robot_issue_visit'], filed_at)
     events_data.setdefault('complete', []).append(complete_entry)
 
-    # If therapist set an A1 appointment date, update the a1_assessment stub's scheduled_date.
+    # If therapist set an A1 appointment date, update the a1_assessment stub's appointment_date.
     if a1_appointment:
         try:
             _appt_str = datetime.strptime(a1_appointment, '%Y-%m-%d').strftime('%Y-%m-%dT09:00')
             for _e in events_data.get('incomplete', []):
                 if _e.get('protocol_event_id') == 'a1_assessment':
-                    _e['scheduled_date'] = [_appt_str, _appt_str]
+                    _e['appointment_date'] = _appt_str
                     break
         except ValueError:
             pass  # ignore malformed date; assessment stub keeps original window
@@ -5561,7 +5565,7 @@ def api_complete_a2_assessment(homer_id):
 def api_cancel_assessment_appointment(homer_id):
     """Cancel a scheduled a1_assessment or a2_assessment appointment.
 
-    Appends to appointment_cancellations on the stub and resets scheduled_date to null.
+    Appends to appointment_cancellations on the stub and resets appointment_date to null.
     The auto-seeding in api_patient_events will then create the scheduling call stub.
     """
     if not flask_session.get('login_place'):
@@ -5597,16 +5601,16 @@ def api_cancel_assessment_appointment(homer_id):
     if not stub:
         return jsonify({'error': f'{pid} not found in incomplete.'}), 404
 
-    sched = stub.get('scheduled_date')
-    if not sched or not sched[0]:
+    appt_date = stub.get('appointment_date')
+    if not appt_date:
         return jsonify({'error': 'No scheduled appointment to cancel.'}), 400
 
     stub.setdefault('appointment_cancellations', []).append({
         'cancelled_at':    datetime.now().strftime('%Y-%m-%dT%H:%M'),
-        'appointment_date': sched[0],
+        'appointment_date': appt_date,
         'reason':          reason,
     })
-    stub['scheduled_date'] = None
+    stub['appointment_date'] = None
 
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
@@ -5620,7 +5624,7 @@ def api_cancel_assessment_appointment(homer_id):
 
 @bp.route('/api/patients/<homer_id>/complete-event/schedule-assessment-call', methods=['POST'])
 def api_complete_schedule_assessment_call(homer_id):
-    """Complete a schedule_a1_call or schedule_a2_call stub, update assessment scheduled_date."""
+    """Complete a schedule_a1_call or schedule_a2_call stub, update assessment appointment_date."""
     if not flask_session.get('login_place'):
         return jsonify({'error': 'Not authenticated'}), 401
     if flask_session.get('privilege') not in ('admin', 'therapist'):
@@ -5711,11 +5715,11 @@ def api_complete_schedule_assessment_call(homer_id):
     events_data['incomplete'] = [e for e in events_data['incomplete'] if e.get('id') != entry['id']]
     events_data.setdefault('free', {}).setdefault(call_type, []).append(complete_entry)
 
-    # Update the assessment stub's scheduled_date to the new appointment.
+    # Update the assessment stub's appointment_date (scheduled_date holds the window and is immutable).
     appt_str = datetime.strptime(new_appt_date, '%Y-%m-%d').strftime('%Y-%m-%dT09:00')
     for e in events_data.get('incomplete', []):
         if e.get('protocol_event_id') == assessment_id:
-            e['scheduled_date'] = [appt_str, appt_str]
+            e['appointment_date'] = appt_str
             break
 
     from utils.protocol_events import write_protocol_events

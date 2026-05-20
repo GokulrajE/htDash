@@ -104,7 +104,10 @@ def create_protocol_events(hospital_folder: str, homer_id: str,
         else:
             scheduled_date = None  # filled at activation
 
-        incomplete.append(_make_incomplete_entry(event, scheduled_date))
+        entry = _make_incomplete_entry(event, scheduled_date)
+        if event['id'] in ('a1_assessment', 'a2_assessment'):
+            entry['appointment_date'] = None
+        incomplete.append(entry)
 
     free: dict = {
         'adverse_event':                [],

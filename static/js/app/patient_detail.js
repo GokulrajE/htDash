@@ -167,17 +167,17 @@ function _validateSessionEndInput(startInput, endInput, errorId) {
 }
 
 function _attachDateGuard(inputId, errorId) {
-  // Sets max=now on the input and shows an inline error immediately on change if future date picked
   const input = document.getElementById(inputId);
   if (!input) return;
   input.max = _nowForInput();
-  // Remove any previously attached guard listener to avoid duplicates
-  if (input._dateGuard) input.removeEventListener('change', input._dateGuard);
-  input._dateGuard = () => {
-    _validateDateInput(input, errorId);
-  };
+  // Remove previously attached listeners to avoid duplicates on modal re-open.
+  if (input._dateGuard) {
+    input.removeEventListener('change', input._dateGuard);
+    input.removeEventListener('input',  input._dateGuard);
+  }
+  input._dateGuard = () => { _validateDateInput(input, errorId); };
   input.addEventListener('change', input._dateGuard);
-  input.addEventListener('input', input._dateGuard);
+  input.addEventListener('input',  input._dateGuard);
 }
 
 function _validateDateInput(input, errorId) {
@@ -600,13 +600,13 @@ function _openAssessmentModal(which, ev) {
   document.getElementById(`${which}-date`).max = max;
   _attachDateGuard(`${which}-date`, `${which}-error`);
 
-  const sched = ev && ev.scheduled_date ? ev.scheduled_date[0] : null;
-  if (which === 'a1') { _a1ScheduledDate = sched; }
-  else                { _a2ScheduledDate = sched; }
+  const apptDate = ev && ev.appointment_date ? ev.appointment_date : null;
+  if (which === 'a1') { _a1ScheduledDate = apptDate; }
+  else                { _a2ScheduledDate = apptDate; }
 
   const cancelSection = document.getElementById(`${which}-cancel-section`);
-  if (sched) {
-    const d = new Date(sched);
+  if (apptDate) {
+    const d = new Date(apptDate);
     document.getElementById(`${which}-scheduled-date-display`).textContent =
       d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
     cancelSection.classList.remove('hidden');
@@ -627,9 +627,14 @@ function openScheduleA1CallModal(ev) {
   document.getElementById('sa1-notes').value       = '';
   document.getElementById('sa1-appointment').value = '';
   setError('sa1-error', '');
-  const max = new Date().toISOString().slice(0, 16);
-  document.getElementById('sa1-date').max = max;
   _attachDateGuard('sa1-date', 'sa1-error');
+  // Attach guard first (sets max=today), then override with window bounds.
+  // _validateDateInput reads min/max at fire time, so the override takes effect.
+  _attachDateGuard('sa1-appointment', 'sa1-error');
+  const apptInput = document.getElementById('sa1-appointment');
+  const win = _assessmentWindows['a1_assessment'];
+  if (win) { apptInput.min = win.start; apptInput.max = win.end; }
+  else      { apptInput.removeAttribute('min'); apptInput.removeAttribute('max'); }
   showModal('schedule-a1-call-modal');
 }
 
@@ -640,9 +645,13 @@ function openScheduleA2CallModal(ev) {
   document.getElementById('sa2-notes').value       = '';
   document.getElementById('sa2-appointment').value = '';
   setError('sa2-error', '');
-  const max = new Date().toISOString().slice(0, 16);
-  document.getElementById('sa2-date').max = max;
   _attachDateGuard('sa2-date', 'sa2-error');
+  // Attach guard first (sets max=today), then override with window bounds.
+  _attachDateGuard('sa2-appointment', 'sa2-error');
+  const apptInput = document.getElementById('sa2-appointment');
+  const win = _assessmentWindows['a2_assessment'];
+  if (win) { apptInput.min = win.start; apptInput.max = win.end; }
+  else      { apptInput.removeAttribute('min'); apptInput.removeAttribute('max'); }
   showModal('schedule-a2-call-modal');
 }
 
@@ -743,7 +752,7 @@ async function cancelAssessmentAppointment(which) {
   );
   if (!ok) { setError(`${which}-error`, data.error || 'Failed to cancel appointment.'); return; }
 
-  // Hide cancellation section — scheduled_date is now null
+  // Hide cancellation section — appointment_date is now null
   if (which === 'a1') { _a1ScheduledDate = null; }
   else                { _a2ScheduledDate = null; }
   document.getElementById(`${which}-cancel-section`).classList.add('hidden');
@@ -835,6 +844,7 @@ let _completeEventsCache    = null;   // null = not yet loaded
 let _callLogsCache          = null;   // null = not yet loaded
 let _patientDiscontinued    = false;  // true if patient has discontinuationDate
 let _hasDiscontinuationStub = false;  // true if a real discontinuation stub is in incomplete
+let _assessmentWindows      = {};     // { a1_assessment: {start, end}, a2_assessment: {start, end} }
 
 async function loadPatientEvents() {
   const completedEl = document.getElementById('patient-completed-events');
@@ -851,6 +861,18 @@ async function loadPatientEvents() {
     eventsCache = [...overdue, ...upcoming];
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
+
+    // Cache assessment window bounds for use in scheduling call modals.
+    _assessmentWindows = {};
+    for (const e of eventsCache) {
+      if ((e.protocol_event_id === 'a1_assessment' || e.protocol_event_id === 'a2_assessment')
+          && e.window_start && e.window_end) {
+        _assessmentWindows[e.protocol_event_id] = {
+          start: e.window_start.slice(0, 10),
+          end:   e.window_end.slice(0, 10),
+        };
+      }
+    }
     _hasDiscontinuationStub = overdue.some(e => e.protocol_event_id === 'discontinuation');
 
     // Set discontinued flag and show banner if patient is discontinued
@@ -3280,7 +3302,7 @@ function patientEventRow(ev) {
   let dateStr, whenLabel, subLabel;
   if (isAssessment) {
     // Bottom-left: appointment date if scheduled, otherwise "Unscheduled"
-    dateStr = sched ? _fmtD(sched[0]) : 'Unscheduled';
+    dateStr = ev.appointment_date ? _fmtD(ev.appointment_date) : 'Unscheduled';
     // Window range shown below the days counter
     const wsStr = ev.window_start ? _fmtD(ev.window_start) : null;
     const weStr = ev.window_end   ? _fmtD(ev.window_end)   : null;
@@ -6925,7 +6947,7 @@ async function openDeviceReturnModal(ev) {
   document.getElementById('dr-date-error').classList.add('hidden');
   document.getElementById('dr-notes').value = '';
   document.getElementById('dr-error').classList.add('hidden');
-  clearAttachment('dr');
+  _resetAttachment('dr');
 
   // Fetch currently assigned devices
   const { ok, data } = await apiGet(`/api/patients/${PATIENT_HOMER_ID}/device-return-devices`);
@@ -6951,117 +6973,45 @@ function _renderDeviceReturnCards() {
   }
   container.innerHTML = _drDevices.map((d, i) => _deviceReturnCard(d, i)).join('');
 
-  // Wire up issue-date visibility toggles for agwatch and SIM
-  _drDevices.forEach((d, i) => {
-    if (d.type === 'agwatch') {
-      const radios = document.querySelectorAll(`input[name="dr-aw-status-${i}"]`);
-      radios.forEach(r => r.addEventListener('change', () => _updateDrIssueDateVisibility(i, d.type)));
-    } else if (d.type === 'sim') {
-      const radios = document.querySelectorAll(`input[name="dr-sim-status-${i}"]`);
-      radios.forEach(r => r.addEventListener('change', () => _updateDrIssueDateVisibility(i, d.type)));
-    }
-  });
+  // onchange is wired inline in the select element
 }
 
 function _deviceReturnCard(d, i) {
   const today = new Date().toISOString().slice(0, 10);
-  if (d.type === 'agwatch') {
-    const limb = d.limb ? `(${d.limb.charAt(0).toUpperCase() + d.limb.slice(1)})` : '';
-    return `
-      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
-        <div class="flex items-center gap-2">
-          <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${d.device_id}</span>
-          <span class="text-sm text-slate-600">AG Watch ${limb}</span>
-        </div>
-        <div>
-          <p class="text-xs font-medium text-slate-600 mb-1">Status <span class="text-red-500">*</span></p>
-          <div class="flex gap-4">
-            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input type="radio" name="dr-aw-status-${i}" value="returned" checked class="accent-blue-600"> Returned
-            </label>
-            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input type="radio" name="dr-aw-status-${i}" value="lost" class="accent-blue-600"> Lost
-            </label>
-            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input type="radio" name="dr-aw-status-${i}" value="battery_dead" class="accent-blue-600"> Battery Dead
-            </label>
-          </div>
-        </div>
-        <div id="dr-aw-issue-date-row-${i}" class="hidden">
-          <label class="block text-xs font-medium text-slate-600 mb-1">When did this happen? <span class="text-red-500">*</span></label>
-          <input type="date" id="dr-aw-issue-date-${i}" max="${today}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Notes</label>
-          <input type="text" id="dr-aw-notes-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none" placeholder="Optional notes">
-        </div>
-      </div>`;
-  } else if (d.type === 'sim') {
-    const phone = d.phone || d.sim_id;
-    return `
-      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
-        <div class="flex items-center gap-2">
-          <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${phone}</span>
-          <span class="text-sm text-slate-600">SIM Card</span>
-        </div>
-        <div>
-          <p class="text-xs font-medium text-slate-600 mb-1">Status <span class="text-red-500">*</span></p>
-          <div class="flex gap-4">
-            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input type="radio" name="dr-sim-status-${i}" value="returned" checked class="accent-blue-600"> Returned
-            </label>
-            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input type="radio" name="dr-sim-status-${i}" value="lost" class="accent-blue-600"> Lost
-            </label>
-          </div>
-        </div>
-        <div id="dr-sim-issue-date-row-${i}" class="hidden">
-          <label class="block text-xs font-medium text-slate-600 mb-1">When did this happen? <span class="text-red-500">*</span></label>
-          <input type="date" id="dr-sim-issue-date-${i}" max="${today}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Notes</label>
-          <input type="text" id="dr-sim-notes-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none" placeholder="Optional notes">
-        </div>
-      </div>`;
-  } else {
-    // pluto, mars, modems, laptops
-    const typeLabel = { pluto: 'Pluto', mars: 'Mars', modems: 'Modem', laptops: 'Laptop' }[d.type] || d.type;
-    return `
-      <div class="border border-slate-200 rounded-xl p-4 space-y-3">
-        <div class="flex items-center gap-2">
-          <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${d.device_id}</span>
-          <span class="text-sm text-slate-600">${typeLabel}</span>
-        </div>
-        <div>
-          <p class="text-xs font-medium text-slate-600 mb-1">Condition <span class="text-red-500">*</span></p>
-          <div class="flex gap-4">
-            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input type="radio" name="dr-cond-${i}" value="working" checked class="accent-blue-600"> Working
-            </label>
-            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
-              <input type="radio" name="dr-cond-${i}" value="faulty" class="accent-blue-600"> Faulty
-            </label>
-          </div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Comments</label>
-          <input type="text" id="dr-dev-comments-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none" placeholder="Optional comments">
-        </div>
-      </div>`;
-  }
+  const TYPE_LABEL = { pluto: 'Pluto', mars: 'Mars', modems: 'Modem', laptops: 'Laptop', agwatch: 'AG Watch', sims: 'SIM Card' };
+  const typeLabel  = TYPE_LABEL[d.type] || d.type;
+  const idBadge    = d.device_id;
+  const limbSuffix = d.limb ? ` (${d.limb.charAt(0).toUpperCase() + d.limb.slice(1)})` : '';
+
+  const lowBatteryOption = d.type === 'agwatch'
+    ? `<option value="low_battery">Low Battery</option>` : '';
+
+  return `
+    <div class="border border-slate-200 rounded-xl p-3">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${idBadge}</span>
+        <span class="text-sm font-medium text-slate-700">${typeLabel}${limbSuffix}</span>
+      </div>
+      <div class="flex gap-2 items-start">
+        <select id="dr-status-${i}" onchange="_updateDrIssueDateVisibility(${i})"
+          class="flex-shrink-0 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+          <option value="working">Working</option>
+          <option value="lost">Lost</option>
+          <option value="faulty">Faulty</option>
+          ${lowBatteryOption}
+        </select>
+        <input type="date" id="dr-issue-date-${i}" max="${today}"
+          class="hidden flex-shrink-0 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <input type="text" id="dr-dev-notes-${i}"
+          class="flex-1 min-w-0 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none" placeholder="Notes (optional)">
+      </div>
+    </div>`;
 }
 
-function _updateDrIssueDateVisibility(i, type) {
-  if (type === 'agwatch') {
-    const val = document.querySelector(`input[name="dr-aw-status-${i}"]:checked`)?.value;
-    const row = document.getElementById(`dr-aw-issue-date-row-${i}`);
-    if (row) row.classList.toggle('hidden', val === 'returned');
-  } else if (type === 'sim') {
-    const val = document.querySelector(`input[name="dr-sim-status-${i}"]:checked`)?.value;
-    const row = document.getElementById(`dr-sim-issue-date-row-${i}`);
-    if (row) row.classList.toggle('hidden', val !== 'lost');
-  }
+function _updateDrIssueDateVisibility(i) {
+  const val   = document.getElementById(`dr-status-${i}`)?.value;
+  const field = document.getElementById(`dr-issue-date-${i}`);
+  if (field) field.classList.toggle('hidden', val === 'working');
 }
 
 async function saveDeviceReturn() {
@@ -7073,30 +7023,19 @@ async function saveDeviceReturn() {
   // Collect per-device data
   const deviceEntries = [];
   for (let i = 0; i < _drDevices.length; i++) {
-    const d = _drDevices[i];
-    if (d.type === 'agwatch') {
-      const status    = document.querySelector(`input[name="dr-aw-status-${i}"]:checked`)?.value || 'returned';
-      const issueDate = document.getElementById(`dr-aw-issue-date-${i}`)?.value || '';
-      const notes     = document.getElementById(`dr-aw-notes-${i}`)?.value.trim() || null;
-      if ((status === 'lost' || status === 'battery_dead') && !issueDate) {
-        setError('dr-error', `Please enter when the issue occurred for watch ${d.device_id}.`);
-        return;
-      }
-      deviceEntries.push({ type: 'agwatch', device_id: d.device_id, limb: d.limb, status, issue_date: issueDate || null, notes });
-    } else if (d.type === 'sim') {
-      const status    = document.querySelector(`input[name="dr-sim-status-${i}"]:checked`)?.value || 'returned';
-      const issueDate = document.getElementById(`dr-sim-issue-date-${i}`)?.value || '';
-      const notes     = document.getElementById(`dr-sim-notes-${i}`)?.value.trim() || null;
-      if (status === 'lost' && !issueDate) {
-        setError('dr-error', `Please enter when the SIM was lost.`);
-        return;
-      }
-      deviceEntries.push({ type: 'sim', sim_id: d.sim_id, status, issue_date: issueDate || null, notes });
-    } else {
-      const condition = document.querySelector(`input[name="dr-cond-${i}"]:checked`)?.value || 'working';
-      const comments  = document.getElementById(`dr-dev-comments-${i}`)?.value.trim() || null;
-      deviceEntries.push({ type: d.type, device_id: d.device_id, condition, comments });
+    const d         = _drDevices[i];
+    const status    = document.getElementById(`dr-status-${i}`)?.value || 'working';
+    const issueDate = document.getElementById(`dr-issue-date-${i}`)?.value || '';
+    const notes     = document.getElementById(`dr-dev-notes-${i}`)?.value.trim() || null;
+    if (status !== 'working' && !issueDate) {
+      setError('dr-error', `Please enter when the issue occurred for ${d.device_id || d.sim_id || 'device'}.`);
+      return;
     }
+    const entry = { type: d.type, status, issue_date: issueDate || null, notes };
+    if (d.type === 'agwatch') { entry.device_id = d.device_id; entry.limb = d.limb; }
+    else if (d.type === 'sims') { entry.sim_id = d.sim_id; }
+    else { entry.device_id = d.device_id; }
+    deviceEntries.push(entry);
   }
 
   const notes = document.getElementById('dr-notes').value.trim() || null;
@@ -7117,7 +7056,7 @@ async function saveDeviceReturn() {
   if (!ok) { setLoading('dr-save', false); setError('dr-error', data.error || 'Failed to save.'); return; }
 
   if (attachFile) {
-    await saveAttachment(data.event_id, attachFile, attachCaption);
+    await _uploadAttachment(data.event_id, attachFile, attachCaption, 'dr-error');
   }
 
   setLoading('dr-save', false);

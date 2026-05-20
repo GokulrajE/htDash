@@ -321,7 +321,7 @@ free        — unscheduled events (adverse_event, patient_call, etc.)
 
 **On group assignment:** `incomplete` pre-populated with all timed events for that group + shared. `reference: "assignment"` events get `scheduled_date = [a0CompletionDate + (start_day−1), a0CompletionDate + (end_day−1)]`. `reference: "activation"` events are placeholders with `scheduled_date: null`.
 
-**On activation:** all `reference: "activation"` placeholders get `scheduled_date = [activationDate + (start_day−1), activationDate + (end_day−1)]`. First `watch_record` chained entry seeded in `incomplete` with `scheduled_date = [activationDate, activationDate]` — the therapist fills it via the Watch Record modal; it is **not** auto-completed at activation.
+**On activation:** all `reference: "activation"` placeholders get `scheduled_date = [activationDate + (start_day−1), activationDate + (end_day−1)]`, **except `a1_assessment` and `a2_assessment`** which keep `scheduled_date` holding the window but use a separate `appointment_date` field for the therapist-entered appointment (see below). First `watch_record` chained entry seeded in `incomplete` with `scheduled_date = [activationDate, activationDate]` — the therapist fills it via the Watch Record modal; it is **not** auto-completed at activation.
 
 > **Day numbering:** `start_day`/`end_day` in `study_protocol.json` are **1-based** — Day 1 = the reference date itself. Code converts with `offset = day − 1`.
 
@@ -438,9 +438,10 @@ The complete entry stores only a relative path to the timing file. See [AG Watch
 
 **`a1_assessment`** / **`a2_assessment`**
 
-The incomplete stub carries an `appointment_cancellations` list that grows each time the therapist cancels a scheduled appointment:
+The incomplete stub carries `appointment_date` (the current scheduled appointment) and an `appointment_cancellations` list that grows each time the therapist cancels:
 ```json
 {
+  "appointment_date": "2026-05-25T09:00",
   "appointment_cancellations": [
     {
       "cancelled_at":    "2026-05-20T14:32",
@@ -451,13 +452,13 @@ The incomplete stub carries an `appointment_cancellations` list that grows each 
 }
 ```
 
+- `appointment_date` — ISO datetime (`YYYY-MM-DDTHH:MM`) of the currently scheduled assessment appointment. Set by: (A1) `a1_appointment_date` field in the D29 modal; (both) `new_appointment_date` from a completed scheduling call. `null` when no appointment is scheduled (initial state, or after cancellation). **This field is entirely separate from `scheduled_date`, which holds the protocol window and is never modified after activation.**
 - `appointment_cancellations` — list of cancellation records, one per cancelled appointment. Initially `[]`. Appended to (never overwritten) each time the therapist uses "Cancel Scheduled Assessment" in the modal.
   - `cancelled_at` — server-generated ISO datetime when the cancellation was recorded.
-  - `appointment_date` — the single appointment datetime that was cancelled (the value of `scheduled_date[0]` at the time of cancellation — assessments are point-in-time events so `start == end`).
+  - `appointment_date` — the value of the stub's `appointment_date` field at the time of cancellation.
   - `reason` — therapist-entered text (required, single line).
-- `a1_assessment` / `a2_assessment` are windowed protocol events (windows defined in `study_protocol.json`). Their `scheduled_date` is initially computed from the activation date window but is **reset to `null`** when an appointment is cancelled, and **updated** when a scheduling call is completed (`schedule_a1_call` / `schedule_a2_call`).
-- The `a1_assessment` stub's `scheduled_date` may also be set directly from the D29 modal (via the optional `a1_appointment_date` field) without creating a `schedule_a1_call` event.
-- When `scheduled_date` is `null` and no `schedule_a1_call` / `schedule_a2_call` stub exists in `incomplete`, `api_patient_events` auto-seeds the corresponding scheduling call stub.
+- `scheduled_date` for `a1_assessment` / `a2_assessment` always holds the protocol window computed at activation (`activationDate + window days`). It is **never reset or overwritten** — `populate_activation_dates` sets it once and it is immutable thereafter.
+- When `appointment_date is null` and no `schedule_a1_call` / `schedule_a2_call` stub exists in `incomplete`, `api_patient_events` auto-seeds the corresponding scheduling call stub.
 
 **`exp_device_install`**
 ```json
