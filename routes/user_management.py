@@ -123,7 +123,6 @@ def _topo_sort(events, event_defs, date_fn):
     return result
 
 
-@bp.route('/api/patients/<homer_id>/events', methods=['GET'])
 def _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data):
     """Close the open pause epoch at Day 28 end-of-day if the training window has passed."""
     if not patient.get('trainingPausedDate'):
@@ -163,6 +162,7 @@ def _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data):
     write_patient_meta(folder, homer_id, patient)
 
 
+@bp.route('/api/patients/<homer_id>/events', methods=['GET'])
 def api_patient_events(homer_id):
     """Return overdue and upcoming incomplete protocol events for a single patient."""
     if not flask_session.get('login_place'):
