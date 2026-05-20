@@ -200,6 +200,21 @@ def api_patient_events(homer_id):
     if patient:
         _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data)
 
+    # Lazy cleanup: cancel any watch_record stubs still in incomplete for post_training patients.
+    # Covers data written before the cancellation fix was in place.
+    if patient and events_data and derive_status(patient) == 'post_training':
+        has_stubs = any(
+            e.get('protocol_event_id') == 'watch_record'
+            for e in events_data.get('incomplete', [])
+        )
+        if has_stubs:
+            _cancel_training_ended_stubs(
+                events_data, ['watch_record'],
+                datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            )
+            from utils.protocol_events import write_protocol_events as _wpev
+            _wpev(folder, homer_id, events_data)
+
     # Build event_defs from shared + patient's group only so group-specific
     # depends_on (e.g. activation→exp_device_install for experimental) are not
     # overwritten by the other group's definition.
