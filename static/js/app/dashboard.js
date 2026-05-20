@@ -21,6 +21,7 @@
         document.getElementById('stat-inactive').textContent           = stats.inactive;
         document.getElementById('stat-active').textContent             = stats.active;
         document.getElementById('stat-paused').textContent             = stats.paused;
+        document.getElementById('stat-post-training').textContent      = stats.post_training;
         document.getElementById('stat-training-completed').textContent = stats.training_completed;
         document.getElementById('stat-a1-completed').textContent       = stats.a1_completed;
         document.getElementById('stat-all-completed').textContent      = stats.all_completed;

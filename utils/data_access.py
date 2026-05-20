@@ -87,6 +87,15 @@ def derive_status(patient: dict) -> str:
     max_pause = cfg.get('max_cumulative_pause_days', 10)
     if cum_pause > max_pause:
         return 'broken_protocol'
+
+    if not training:
+        try:
+            activation_date = datetime.fromisoformat(activation).date()
+            if date.today() > activation_date + timedelta(days=28):
+                return 'post_training'
+        except Exception:
+            pass
+
     if patient.get('trainingPausedDate'):
         return 'paused'
 

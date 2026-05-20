@@ -78,6 +78,14 @@
     <!-- ── Overview ────────────────────────────────────────────────────────── -->
     <div id="tab-overview" class="tab-pane flex flex-col flex-1 min-h-0 gap-4">
 
+      <!-- Training period expiry banner (shown when Day 28 passed and D29 not yet filed) -->
+      <div id="training-period-expiry-banner" class="hidden flex-shrink-0 bg-sky-50 border border-sky-300 rounded-2xl px-5 py-3">
+        <div class="flex items-center gap-3">
+          <i class="fas fa-flag text-sky-600"></i>
+          <p class="text-sm font-medium text-sky-800">Training period has ended (Day 28 passed). Training completion (D29) can be filed when ready.</p>
+        </div>
+      </div>
+
       <!-- Pause alert banner (shown only when status = paused) -->
       <div id="pause-banner" class="hidden flex-shrink-0 bg-amber-50 border border-amber-300 rounded-2xl px-5 py-4">
         <div class="flex items-start gap-4">

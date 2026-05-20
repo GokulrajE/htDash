@@ -124,6 +124,45 @@ def _topo_sort(events, event_defs, date_fn):
 
 
 @bp.route('/api/patients/<homer_id>/events', methods=['GET'])
+def _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data):
+    """Close the open pause epoch at Day 28 end-of-day if the training window has passed."""
+    if not patient.get('trainingPausedDate'):
+        return
+    activation = patient.get('activationDate')
+    if not activation:
+        return
+    try:
+        activation_date = datetime.fromisoformat(activation).date()
+    except Exception:
+        return
+    day28_end = activation_date + timedelta(days=28)
+    if date.today() <= day28_end:
+        return
+
+    paused_since_str = patient['trainingPausedDate']
+    try:
+        paused_since = datetime.fromisoformat(paused_since_str).date()
+    except Exception:
+        return
+
+    pause_days = max(0, (day28_end - paused_since).days)
+    day28_end_str = datetime.combine(day28_end, datetime.min.time().replace(hour=23, minute=59)).isoformat()
+
+    open_epoch = next((e for e in patient.get('pauseHistory', []) if e.get('end') is None), None)
+    if open_epoch:
+        open_epoch['end']  = day28_end_str
+        open_epoch['days'] = pause_days
+        open_epoch['end_event_id'] = None
+
+    patient['cumulativePauseDays'] = (patient.get('cumulativePauseDays') or 0) + pause_days
+    patient['trainingPausedDate']  = None
+
+    if patient['cumulativePauseDays'] > 10 and not patient.get('brokenProtocolDate'):
+        patient['brokenProtocolDate'] = day28_end_str
+
+    write_patient_meta(folder, homer_id, patient)
+
+
 def api_patient_events(homer_id):
     """Return overdue and upcoming incomplete protocol events for a single patient."""
     if not flask_session.get('login_place'):
@@ -136,6 +175,10 @@ def api_patient_events(homer_id):
 
     patient    = read_patient_meta(folder, homer_id)
     events_data = read_protocol_events(folder, homer_id)
+
+    # Auto-terminate pause if Day 28 has passed
+    if patient:
+        _auto_terminate_pause_if_expired(patient, folder, homer_id, events_data)
 
     # Build event_defs from shared + patient's group only so group-specific
     # depends_on (e.g. activation→exp_device_install for experimental) are not
@@ -177,11 +220,13 @@ def api_patient_events(homer_id):
     }
 
     # When training is paused only follow-up events (AE/RI resolution chain) are shown.
+    # training_completion_d29 is also visible — it can be filed independently of the AE chain.
     _PAUSE_VISIBLE = frozenset({
         'adverse_event', 'adverse_event_followup', 'adverse_event_followup_visit',
         'adverse_event_clinical_visit',
         'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
         'other_device_issue_call', 'other_device_issue_visit',
+        'training_completion_d29',
     })
     # For broken_protocol patients only AE/RI/ODI chains + assessments are interactive.
     _BROKEN_PROTOCOL_INTERACTIVE = frozenset({

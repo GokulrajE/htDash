@@ -70,6 +70,7 @@ def stats():
         'inactive':           sum(1 for s in statuses if s == 'inactive'),
         'active':             sum(1 for s in statuses if s == 'active'),
         'paused':             sum(1 for s in statuses if s == 'paused'),
+        'post_training':      sum(1 for s in statuses if s == 'post_training'),
         'training_completed': sum(1 for s in statuses if s == 'training_completed'),
         'a1_completed':       sum(1 for s in statuses if s == 'a1_completed'),
         'all_completed':      sum(1 for s in statuses if s == 'all_completed'),
@@ -226,6 +227,7 @@ def events():
             'adverse_event_clinical_visit',
             'robot_issue_call', 'robot_issue_visit', 'resolve_robot_issue_visit',
             'other_device_issue_call', 'other_device_issue_visit',
+            'training_completion_d29',
         })
         _DISCONTINUED_VISIBLE = frozenset({
             'adverse_event', 'adverse_event_followup',

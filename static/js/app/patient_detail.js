@@ -15,6 +15,7 @@ const STATUS_LABEL = {
   inactive:            'Inactive',
   active:              'Active',
   paused:              'Paused',
+  post_training:       'Post Training',
   broken_protocol:     'Broken Protocol',
   training_completed:  'Training Complete',
   a1_completed:        'A1 Complete',
@@ -28,6 +29,7 @@ const STATUS_CLASS = {
   inactive:            'bg-yellow-100 text-yellow-700',
   active:              'bg-blue-100 text-blue-700',
   paused:              'bg-amber-100 text-amber-700',
+  post_training:       'bg-sky-100 text-sky-700',
   broken_protocol:     'bg-red-100 text-red-700',
   training_completed:  'bg-teal-100 text-teal-700',
   a1_completed:        'bg-violet-100 text-violet-700',
@@ -44,6 +46,20 @@ const GROUP_CLASS = {
 function fmtDate(iso) {
   if (!iso) return '—';
   return iso.replace('T', ' ');
+}
+
+// ── Training state helpers ────────────────────────────────────────────────────
+
+function _checkTrainingPeriodExpired(patient) {
+  const banner = document.getElementById('training-period-expiry-banner');
+  if (!banner) return;
+  if (!patient || !patient.activationDate || patient.trainingCompletionDate) {
+    banner.classList.add('hidden');
+    return;
+  }
+  const day28End = new Date(patient.activationDate);
+  day28End.setDate(day28End.getDate() + 28);
+  banner.classList.toggle('hidden', new Date() <= day28End);
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -312,6 +328,7 @@ function renderOverview(p) {
 
   renderPauseBanner(p);
   _checkD0203AtRisk(p);
+  _checkTrainingPeriodExpired(p);
   renderPauseHistoryTable(p);
   renderActions(p);
 }
@@ -674,6 +691,7 @@ async function loadPatientEvents() {
     // Re-render pause banner, at-risk banner, and history table with updated patient data
     renderPauseBanner(patientData);
     _checkD0203AtRisk(patientData);
+    _checkTrainingPeriodExpired(patientData);
     renderPauseHistoryTable(patientData);
     renderTimelineTab();
     renderAdverseEventsTab();
@@ -2166,7 +2184,14 @@ let _aefEventId    = null;
 let _aefAeDetails  = [];   // [{id, date, training_blocked}] for each AE in stub
 
 function _trainingPermanentlyEnded() {
-  return !!(patientData?.trainingCompletionDate || patientData?.brokenProtocolDate || patientData?.discontinuationDate);
+  if (!patientData) return false;
+  if (patientData.trainingCompletionDate || patientData.brokenProtocolDate || patientData.discontinuationDate) return true;
+  if (patientData.activationDate) {
+    const day28End = new Date(patientData.activationDate);
+    day28End.setDate(day28End.getDate() + 28);
+    if (new Date() > day28End) return true;
+  }
+  return false;
 }
 
 function openAdverseEventFollowupModal(ev) {
