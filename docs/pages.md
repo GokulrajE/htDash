@@ -795,7 +795,7 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
   - Title: "Training Completion Day 29"
   - Event Date (datetime, required; cannot be in the future)
   - Notes (textarea, optional)
-  - **A1 Appointment Date** (date only, optional) — when the patient's first A1 assessment is scheduled. If provided, the server updates the `a1_assessment` stub's `scheduled_date` to `[new_date, new_date]` directly; no `schedule_a1_call` event is created. Therapists use this to record an appointment agreed with the patient during the D29 visit.
+  - **A1 Appointment Date** (date only, optional) — when the patient's first A1 assessment is scheduled. If provided, the server updates the `a1_assessment` stub's `appointment_date` directly; no `schedule_a1_call` event is created. Therapists use this to record an appointment agreed with the patient during the D29 visit. Date must fall within the A1 assessment protocol window.
   - **Feedback Form** section:
     - PDF upload (optional upload, but if absent then notes required)
     - Notes textarea (optional unless no file uploaded)
@@ -809,9 +809,11 @@ Discontinuing a patient is a two-step process: (1) a `discontinuation` stub is c
   - POST to `/api/patients/<homer_id>/complete-event/training-completion` (multipart form)
   - Move entry from `incomplete` to `complete` in `protocol_events.json`, adding `completion_date`, `filed_at`, `notes`, `feedback_form_attachment`, `feedback_form_notes`, `qualitative_recruited`, `qualitative_audio_attachment`, `qualitative_scan_attachment`, `attachment`, `attachment_caption`
   - Update `<homer_id>.json` with `trainingCompletionDate = completion_date`
-  - If `a1_appointment_date` provided: update the `a1_assessment` stub's `scheduled_date` in `incomplete` to `[a1_appointment_date, a1_appointment_date]`
+  - If `a1_appointment_date` provided: update the `a1_assessment` stub's `appointment_date` in `incomplete` to `a1_appointment_date + "T09:00"`
   - If patient was `paused`, also clear `trainingPausedDate` and discard `resolve_robot_issue_visit` stubs
   - **Does NOT close device assignments** — that is handled by the `device_return` event (filed separately by the engineer)
+  - **AE Discussion** (Yes/No, required when an `adverse_event_followup` stub exists in `incomplete`; hidden otherwise) — "Did any AE-related discussion happen during this visit?" If Yes, the AE follow-up modal opens automatically after D29 saves. If No, D29 saves normally and the stub remains in `incomplete` for later access from the overdue panel.
+- **Post-save AE follow-up (client-side):** if `ae_discussion = "yes"` and an `adverse_event_followup` stub exists, the AE follow-up modal is opened automatically after save. If `ae_discussion = "no"`, or no stub exists, the modal is not opened. The stub always persists in `incomplete` regardless.
 - Log message: `Training completion visit recorded`
 
 ---
@@ -1084,7 +1086,7 @@ The goal is to document which devices are faulty. No device swaps or assignment 
     - AE name/date (read-only label)
     - **Discussion notes** (textarea, optional) — what was discussed about this AE during the call
     - **Resolved** (checkbox)
-    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise) — the earliest date training is possible again from this AE's perspective
+    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden if training has permanently ended — i.e. `trainingCompletionDate`, `brokenProtocolDate`, or `discontinuationDate` is set, or status is `post_training`) — the earliest date training is possible again from this AE's perspective. Not applicable once training is over.
   - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). If an `adverse_event_followup_visit` stub already exists that covers all current `adverse_event_ids`, this toggle is hidden (stub already scheduled)
   - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Same hide-if-exists logic as above.
   - Attachment (optional PDF)
@@ -1094,7 +1096,7 @@ The goal is to document which devices are faulty. No device swaps or assignment 
   - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids: [<all AE IDs in this call>]`, `triggered_by: {type: "adverse_event_followup", id: <this_event_id>}`
   - If clinical visit scheduled: same for `adverse_event_clinical_visit`
   - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
-  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: compute `max_resume = max(can_resume_from across all pausing AEs)`; increment `cumulativePauseDays` by `(max_resume − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`
+  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete` **and training has not permanently ended**: compute `max_resume = max(can_resume_from across all pausing AEs)`; increment `cumulativePauseDays` by `(max_resume − trainingPausedDate.date()).days` (minimum 0); clear `trainingPausedDate`; if `cumulativePauseDays` > 10, patient transitions to `broken_protocol`. **If training has permanently ended** (`trainingCompletionDate`, `brokenProtocolDate`, or `discontinuationDate` set): skip pause clearance entirely — `can_resume_from` is not collected and pause fields are not modified.
   - **D02/D03 broken protocol check (Path 3):** after pause clears, check if `max_resume > scheduled_date[1]` for `home_visit_d02` or `home_visit_d03` and those visits are still in `incomplete`. If so, the server returns a 409 with `broken_protocol_warning: true` and the affected day(s). The client shows the double confirmation popup. On re-submit with `confirmed_broken_protocol: true`, the server sets `brokenProtocolDate` and completes the follow-up.
   - If all AEs resolved but `resolve_robot_issue_visit` stubs still remain: no change to pause fields (robot issue still blocking)
 - Log message: `Adverse event follow-up call recorded`; if visits scheduled: `AE follow-up visit scheduled` / `AE clinical visit scheduled`; if all resolved: also `Adverse event(s) resolved`
@@ -1172,7 +1174,7 @@ Same fault-documentation approach as `robot_issue_visit` broken-protocol mode. N
     - AE alias + date (read-only label, e.g. "AE02 — 2026-05-01")
     - **Discussion notes** (textarea, optional) — what was discussed / observed during this visit for this AE
     - **Resolved** (checkbox)
-    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
+    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden if training has permanently ended — same rule as `adverse_event_followup`)
   - Visit-level notes (textarea, optional)
   - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_followup_visit` stub already exists covering all current `adverse_event_ids`.
   - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_clinical_visit` stub already exists covering all current `adverse_event_ids`.
@@ -1184,7 +1186,7 @@ Same fault-documentation approach as `robot_issue_visit` broken-protocol mode. N
   - If follow-up visit scheduled: create `adverse_event_followup_visit` stub in `incomplete` with `scheduled_date: [target, target]`, `adverse_event_ids` = unresolved AE IDs, `triggered_by: {type: "adverse_event_followup_visit", id: <this_event_id>}`
   - If clinical visit scheduled: same for `adverse_event_clinical_visit`
   - If any AEs remain unresolved: seed next `adverse_event_followup` stub with `adverse_event_ids` = unresolved AE IDs, `scheduled_date: [today, today + 1 day]`
-  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: clear pause (same logic as follow-up call)
+  - If all AEs resolved and no `resolve_robot_issue_visit` stubs remain in `incomplete`: clear pause (same logic as follow-up call, including training-permanently-ended skip)
 - Log message: `Adverse event follow-up visit recorded`; if all resolved: also `Adverse event(s) resolved`
 
 ---
@@ -1202,7 +1204,7 @@ Same fault-documentation approach as `robot_issue_visit` broken-protocol mode. N
     - AE alias + date (read-only label, e.g. "AE02 — 2026-05-01")
     - **Discussion notes** (textarea, optional) — notes from the consultant / therapist discussion about this AE
     - **Resolved** (checkbox)
-    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden otherwise)
+    - **Can resume from** (date, required if resolved AND that AE had `training_blocked: true`; hidden if training has permanently ended — same rule as `adverse_event_followup`)
   - Visit-level notes (textarea, optional)
   - **Schedule follow-up visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_followup_visit` stub already exists covering all current `adverse_event_ids`.
   - **Schedule clinical visit** (optional toggle): when enabled, shows a target date/time input (required when toggle is on; cannot be in the past). Hidden if an `adverse_event_clinical_visit` stub already exists covering all current `adverse_event_ids`.

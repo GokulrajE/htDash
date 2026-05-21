@@ -995,6 +995,20 @@
         <label class="block text-sm font-medium text-slate-700 mb-1">A1 Appointment Date <span class="text-slate-400 font-normal">(optional — sets the A1 assessment date)</span></label>
         <input id="d29-a1-appointment" type="date" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
       </div>
+      <!-- AE discussion — shown only when an adverse_event_followup stub exists -->
+      <div id="d29-ae-section" class="hidden border border-amber-200 bg-amber-50 rounded-xl p-4 space-y-2">
+        <p class="text-sm font-semibold text-amber-800">Adverse Event Discussion</p>
+        <p class="text-xs text-amber-700">There is an ongoing adverse event follow-up. Did any AE-related discussion happen during this visit?</p>
+        <input type="hidden" id="d29-ae-discussed" value="">
+        <div class="flex gap-3 pt-1">
+          <button type="button" id="d29-ae-yes-btn"
+                  onclick="_d29SelectAeDiscussed(true)"
+                  class="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 font-medium hover:bg-slate-100 transition-colors">Yes</button>
+          <button type="button" id="d29-ae-no-btn"
+                  onclick="_d29SelectAeDiscussed(false)"
+                  class="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 font-medium hover:bg-slate-100 transition-colors">No</button>
+        </div>
+      </div>
       <!-- Feedback form section -->
       <div class="border border-slate-200 rounded-xl p-4 space-y-3">
         <p class="text-sm font-semibold text-slate-700">Feedback Form</p>

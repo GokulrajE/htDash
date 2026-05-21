@@ -264,7 +264,16 @@ def api_patient_events(homer_id):
                 e for e in events_data.get('incomplete', [])
                 if e.get('protocol_event_id') == 'a1_assessment'
             ), None)
-            if _a1_inc and _a1_inc.get('appointment_date') is None:
+            # Gate: only seed after training permanently ends via an explicit event
+            # (D29 completion, broken protocol, or discontinuation). post_training
+            # (Day 28 passed but D29 not yet filed) does NOT trigger seeding — the
+            # D29 modal sets the A1 appointment inline and must be filed first.
+            _a1_training_ended = bool(patient and (
+                patient.get('trainingCompletionDate') or
+                patient.get('brokenProtocolDate') or
+                patient.get('discontinuationDate')
+            ))
+            if _a1_inc and _a1_inc.get('appointment_date') is None and _a1_training_ended:
                 events_data.setdefault('incomplete', []).insert(0, {
                     'id':                str(uuid.uuid4()),
                     'protocol_event_id': 'schedule_a1_call',
@@ -2676,7 +2685,7 @@ def api_complete_adverse_event_followup(homer_id):
             e for e in events_data.get('incomplete', [])
             if e.get('protocol_event_id') == 'resolve_robot_issue_visit'
         ]
-        if patient_meta and patient_meta.get('trainingPausedDate') and not resolve_ri_stubs:
+        if patient_meta and patient_meta.get('trainingPausedDate') and not resolve_ri_stubs and not training_ended:
             # Compute cumulativePauseDays from max can_resume_from across all pausing AEs
             training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
             resume_dates = []
@@ -2765,13 +2774,13 @@ def _shift_future_incomplete_events(events_data, pause_days):
             pass
 
 
-def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_aes, filed_at, event_id, folder, homer_id, loginid, session_id):
+def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_aes, filed_at, event_id, folder, homer_id, loginid, session_id, training_ended=False):
     """Clear trainingPausedDate if all AEs resolved and no resolve_robot_issue_visit stubs remain."""
     resolve_ri_stubs = [
         e for e in events_data.get('incomplete', [])
         if e.get('protocol_event_id') == 'resolve_robot_issue_visit'
     ]
-    if not patient_meta or not patient_meta.get('trainingPausedDate') or resolve_ri_stubs:
+    if not patient_meta or not patient_meta.get('trainingPausedDate') or resolve_ri_stubs or training_ended:
         return
     training_paused = datetime.fromisoformat(patient_meta['trainingPausedDate']).date()
     resume_dates = []
@@ -2811,7 +2820,7 @@ def _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_
 
 def _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
                                      patient_meta, filed_at, event_id,
-                                     folder, homer_id, loginid, session_id):
+                                     folder, homer_id, loginid, session_id, training_ended=False):
     """Seed next follow-up stub for unresolved AEs, or clear pause if all resolved.
     Only one adverse_event_followup stub may exist in incomplete at a time."""
     resolved_ids   = {r['adverse_event_id'] for r in ae_discussions if r.get('resolved')}
@@ -2840,7 +2849,8 @@ def _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, fr
             if e.get('protocol_event_id') != 'adverse_event_followup'
         ]
         _clear_ae_pause_if_resolved(patient_meta, events_data, ae_discussions, free_aes,
-                                     filed_at, event_id, folder, homer_id, loginid, session_id)
+                                     filed_at, event_id, folder, homer_id, loginid, session_id,
+                                     training_ended=training_ended)
 
 
 def _create_ae_visit_stubs(events_data, source_type, source_id, ae_ids,
@@ -2981,7 +2991,8 @@ def api_complete_ae_followup_visit(homer_id):
     patient_meta = read_patient_meta(folder, homer_id)
     _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
                                      patient_meta, filed_at, event_id,
-                                     folder, homer_id, loginid, session_id)
+                                     folder, homer_id, loginid, session_id,
+                                     training_ended=training_ended)
 
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)
@@ -3106,7 +3117,8 @@ def api_complete_ae_clinical_visit(homer_id):
     patient_meta = read_patient_meta(folder, homer_id)
     _seed_next_ae_followup_or_clear(events_data, stub_ae_ids, ae_discussions, free_aes,
                                      patient_meta, filed_at, event_id,
-                                     folder, homer_id, loginid, session_id)
+                                     folder, homer_id, loginid, session_id,
+                                     training_ended=training_ended)
 
     from utils.protocol_events import write_protocol_events
     write_protocol_events(folder, homer_id, events_data)

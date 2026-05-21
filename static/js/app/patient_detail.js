@@ -5197,6 +5197,23 @@ function openD29Modal(ev) {
   errEl.classList.add('hidden');
   errEl.textContent = '';
 
+  // Attach guard first (sets max=today), then override with window bounds.
+  _attachDateGuard('d29-a1-appointment', 'd29-error');
+  const a1ApptInput = document.getElementById('d29-a1-appointment');
+  if (a1ApptInput) {
+    a1ApptInput.value = '';
+    const a1Win = _assessmentWindows['a1_assessment'];
+    if (a1Win) { a1ApptInput.min = a1Win.start; a1ApptInput.max = a1Win.end; }
+    else        { a1ApptInput.removeAttribute('min'); a1ApptInput.removeAttribute('max'); }
+  }
+
+  // Show AE discussion section only when an adverse_event_followup stub exists.
+  const hasAefStub = eventsCache.some(e => e.protocol_event_id === 'adverse_event_followup');
+  const aeSect = document.getElementById('d29-ae-section');
+  if (aeSect) aeSect.classList.toggle('hidden', !hasAefStub);
+  document.getElementById('d29-ae-discussed').value = '';
+  _d29StyleAeBtn(null);
+
   document.getElementById('d29-feedback-file').onchange = _d29UpdateFeedbackLabel;
   _attachDateGuard('d29-date', 'd29-error');
   showModal('d29-modal');
@@ -5230,6 +5247,22 @@ function _d29StyleQualBtn(recruited) {
   no.className  = `${base} ${recruited === false ? active : inactive}`;
 }
 
+function _d29SelectAeDiscussed(discussed) {
+  document.getElementById('d29-ae-discussed').value = discussed ? 'yes' : 'no';
+  _d29StyleAeBtn(discussed);
+}
+
+function _d29StyleAeBtn(discussed) {
+  const yes = document.getElementById('d29-ae-yes-btn');
+  const no  = document.getElementById('d29-ae-no-btn');
+  if (!yes || !no) return;
+  const base     = 'flex-1 px-3 py-2 border rounded-xl text-sm font-medium transition-colors';
+  const active   = 'bg-amber-600 border-amber-600 text-white';
+  const inactive = 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100';
+  yes.className = `${base} ${discussed === true  ? active : inactive}`;
+  no.className  = `${base} ${discussed === false ? active : inactive}`;
+}
+
 async function saveD29() {
   const err = document.getElementById('d29-error');
   const setErr = (msg) => { err.textContent = msg; err.classList.remove('hidden'); };
@@ -5257,6 +5290,10 @@ async function saveD29() {
   const { file: genericFile, caption: genericCaption } = _readAttachment('d29');
   if (genericFile && !genericCaption) return setErr('Please describe the attachment before saving.');
 
+  const aeSectVisible = !document.getElementById('d29-ae-section')?.classList.contains('hidden');
+  const aeDiscussed   = document.getElementById('d29-ae-discussed').value;
+  if (aeSectVisible && !aeDiscussed) return setErr('Please indicate whether any AE-related discussion happened during this visit.');
+
   const form = new FormData();
   form.append('event_id',              _d29EventId || '');
   form.append('completion_date',       completionDate);
@@ -5279,6 +5316,10 @@ async function saveD29() {
     if (!res.ok) return setErr(data.error || 'Save failed.');
     hideModal('d29-modal');
     await loadPatientEvents();
+    if (aeDiscussed === 'yes') {
+      const aefStub = eventsCache.find(e => e.protocol_event_id === 'adverse_event_followup');
+      if (aefStub) openAdverseEventFollowupModal(aefStub);
+    }
   } catch (e) {
     setErr('Network error. Please try again.');
   } finally {
