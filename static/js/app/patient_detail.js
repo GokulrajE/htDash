@@ -6418,6 +6418,18 @@ async function loadPrivilege() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
+function _startClock() {
+  function _tick() {
+    const now  = new Date();
+    const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const date = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' });
+    const el   = document.getElementById('patient-overdue-clock');
+    if (el) el.textContent = `${date}  ${time}`;
+  }
+  _tick();
+  setInterval(_tick, 60000);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Store submit button labels for loading state
   [
@@ -6435,6 +6447,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   _setupPrescSearchListener('adl');
   _setupPrescSearchListener('vcg');
 
+  _startClock();
   await loadPrivilege();
   await loadPatient();
   await loadPatientEvents();
