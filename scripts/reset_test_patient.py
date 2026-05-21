@@ -23,8 +23,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import json
-
 from utils.data_access import (
     get_patients_path,
     write_patient_meta,
@@ -32,11 +30,15 @@ from utils.data_access import (
     create_patient_log,
     read_device_assignments,
     write_device_assignments,
+    read_device_inventory,
+    write_device_inventory,
+    read_sims,
+    write_sims,
 )
 from utils.protocol_events import create_protocol_events
 
 HOSPITAL       = 'ranipet'
-DEVICE_TYPES   = ('pluto', 'mars', 'agwatch')
+DEVICE_TYPES   = ('pluto', 'mars', 'agwatch', 'modems', 'laptops')
 CURRENT_YEAR   = datetime.now().year
 
 # Fixed patient definitions — order matches the four date arguments
@@ -68,46 +70,51 @@ def clear_all_device_assignments() -> None:
             print(f"  Cleared all {dtype} assignments ({len(assignments)} record(s))")
 
 
-def _devices_log_dir() -> Path:
-    return PROJECT_ROOT / 'data' / HOSPITAL / 'devices' / 'logs'
-
-
-def _inventory_dir() -> Path:
-    return PROJECT_ROOT / 'data' / HOSPITAL / 'devices' / 'inventory'
-
-
 def clean_device_inventory() -> None:
-    """Remove faulty flags and lost_date from all devices in all inventory files."""
-    inv_dir = _inventory_dir()
-    if not inv_dir.exists():
-        return
-    for inv_path in sorted(inv_dir.glob('*.json')):
-        with open(inv_path, encoding='utf-8') as f:
-            data = json.load(f)
+    """Reset faulty, lost_date, has_issue flags and modem sim links in all inventory files."""
+    for dtype in DEVICE_TYPES:
+        devices = read_device_inventory(HOSPITAL, dtype)
         changed = 0
-        for d in data.get('devices', []):
+        for d in devices:
             if d.get('faulty', False):
                 d['faulty'] = False
                 changed += 1
             if 'lost_date' in d:
                 del d['lost_date']
                 changed += 1
+            if d.get('has_issue', False):
+                d['has_issue'] = False
+                changed += 1
+            if dtype == 'modems':
+                if d.get('sim_id') is not None:
+                    d['sim_id'] = None
+                    changed += 1
+                if d.get('sim_assigned_date') is not None:
+                    d['sim_assigned_date'] = None
+                    changed += 1
         if changed:
-            tmp = inv_path.with_suffix('.tmp')
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            tmp.replace(inv_path)
-            print(f"  Cleaned {changed} field(s) from {inv_path.name}")
+            write_device_inventory(HOSPITAL, dtype, {'devices': devices})
+            print(f"  Cleaned {changed} field(s) from {dtype} inventory")
+
+    sims = read_sims(HOSPITAL)
+    changed = 0
+    for s in sims:
+        if s.get('has_issue', False):
+            s['has_issue'] = False
+            changed += 1
+    if changed:
+        write_sims(HOSPITAL, sims)
+        print(f"  Cleaned {changed} field(s) from sims inventory")
 
 
 def clear_all_device_logs() -> None:
     """Strip all patient-event lines from every device log, keeping only headers."""
-    log_dir = _devices_log_dir()
-    if not log_dir.exists():
+    devices_root = PROJECT_ROOT / 'data' / HOSPITAL / 'devices'
+    if not devices_root.exists():
         return
-    for log_path in sorted(log_dir.glob('*.log')):
-        lines  = log_path.read_text(encoding='utf-8').splitlines(keepends=True)
-        kept   = [l for l in lines if l.startswith(':')]
+    for log_path in sorted(devices_root.glob('*/logs/*.log')):
+        lines   = log_path.read_text(encoding='utf-8').splitlines(keepends=True)
+        kept    = [l for l in lines if l.startswith(':')]
         removed = len(lines) - len(kept)
         if removed:
             log_path.write_text(''.join(kept), encoding='utf-8')

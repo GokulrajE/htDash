@@ -116,7 +116,7 @@
   </main>
 
   <script>const USE_LOCAL_STORAGE = {{ use_local_storage | tojson }};</script>
-  <script src="{{ url_for('static', filename='js/app/app.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app/app.js') }}?v={{ js_version }}"></script>
   {% block scripts %}{% endblock %}
 
 </body>

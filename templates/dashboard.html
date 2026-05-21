@@ -53,6 +53,12 @@
     </div>
     <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
       <div class="flex items-center justify-between">
+        <div><p class="text-xs font-medium text-slate-500">Post Training</p><p id="stat-post-training" class="text-2xl font-bold text-sky-600 mt-1">--</p></div>
+        <div class="p-2 bg-sky-100 rounded-lg"><i class="fas fa-flag text-sky-600"></i></div>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
+      <div class="flex items-center justify-between">
         <div><p class="text-xs font-medium text-slate-500">Training Complete</p><p id="stat-training-completed" class="text-2xl font-bold text-teal-600 mt-1">--</p></div>
         <div class="p-2 bg-teal-100 rounded-lg"><i class="fas fa-dumbbell text-teal-600"></i></div>
       </div>
@@ -103,7 +109,10 @@
           <i class="fas fa-circle-exclamation text-red-500"></i>
           <h3 class="text-sm font-semibold text-slate-800">Overdue</h3>
         </div>
-        <span id="overdue-count" class="text-xs font-bold bg-red-100 text-red-600 px-2 py-0.5 rounded-full">0</span>
+        <div class="flex items-center gap-3">
+          <span id="dashboard-clock" class="text-xs text-slate-600 font-mono tabular-nums border border-slate-200 bg-slate-50 px-2 py-0.5 rounded-md"></span>
+          <span id="overdue-count" class="text-xs font-bold bg-red-100 text-red-600 px-2 py-0.5 rounded-full">0</span>
+        </div>
       </div>
       <div id="overdue-events" class="flex-1 overflow-y-auto p-3 space-y-2">
         <div class="flex flex-col items-center justify-center py-8 text-slate-400">

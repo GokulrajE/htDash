@@ -60,9 +60,17 @@ def log_user_activity(action, data=None, user_id=None):
     
     log_line = f"{date_str} {time_str} INFO >> {message}"
     
+    if Config.USE_S3:
+        from utils.s3_store import s3_append_text
+        try:
+            s3_append_text(f"user_logs/{safe_user_id}.txt", log_line + "\n")
+        except Exception as e:
+            print(f"Error logging user activity (S3): {e}")
+        return
+
     os.makedirs(Config.LOG_DIR, exist_ok=True)
     filename = os.path.join(Config.LOG_DIR, f"{safe_user_id}.txt")
-    
+
     try:
         with open(filename, "a") as f:
             f.write(log_line + "\n")
@@ -135,7 +143,8 @@ def validate_login():
             login_place=user_data["place"],
             privilege=user_data.get("privilege", "user")
         )
-        flask_session['loginid'] = loginid
+        flask_session['loginid']   = loginid
+        flask_session['privilege'] = user_data.get('privilege', 'user')
         session_id = -1
         try:
             from utils.data_access import open_session, get_hospital_folder

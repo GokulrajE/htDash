@@ -6,6 +6,19 @@
     function initPage() {
       loadDashboard();
       loadEvents();
+      _startClock();
+    }
+
+    function _startClock() {
+      function _tick() {
+        const now  = new Date();
+        const date = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+        const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const el   = document.getElementById('dashboard-clock');
+        if (el) el.textContent = `${date}  ${time}`;
+      }
+      _tick();
+      setInterval(_tick, 60000);
     }
 
     // Dashboard Data
@@ -21,6 +34,7 @@
         document.getElementById('stat-inactive').textContent           = stats.inactive;
         document.getElementById('stat-active').textContent             = stats.active;
         document.getElementById('stat-paused').textContent             = stats.paused;
+        document.getElementById('stat-post-training').textContent      = stats.post_training;
         document.getElementById('stat-training-completed').textContent = stats.training_completed;
         document.getElementById('stat-a1-completed').textContent       = stats.a1_completed;
         document.getElementById('stat-all-completed').textContent      = stats.all_completed;
@@ -35,15 +49,63 @@
       const overdueEl  = document.getElementById('overdue-events');
       const upcomingEl = document.getElementById('upcoming-events');
       try {
-        const res = await fetch('/api/dashboard/events');
-        if (!res.ok) throw new Error('Failed to load events');
-        const { overdue, upcoming } = await res.json();
+        const [evRes, simRes] = await Promise.all([
+          fetch('/api/dashboard/events'),
+          fetch('/sim_cards/reminders').catch(() => null),
+        ]);
+        if (!evRes.ok) throw new Error('Failed to load events');
+        const { overdue, upcoming } = await evRes.json();
 
-        document.getElementById('overdue-count').textContent  = overdue.length;
-        document.getElementById('upcoming-count').textContent = upcoming.length;
+        // SIM expiry injection
+        let expiredSims = [], expiringSims = [];
+        if (simRes?.ok) {
+          const simData = await simRes.json();
+          const sims = simData.reminders || [];
+          expiredSims  = sims.filter(s => s.isExpired);
+          expiringSims = sims.filter(s => !s.isExpired && s.daysUntilExpiry !== undefined && s.daysUntilExpiry <= 5);
+        }
 
-        overdueEl.innerHTML  = overdue.length  ? overdue.map(eventRow).join('')  : emptyState('check-circle', 'text-green-500', 'All clear — no overdue events');
-        upcomingEl.innerHTML = upcoming.length ? upcoming.map(eventRow).join('') : emptyState('calendar-check', 'text-slate-400', 'No events in the next 7 days');
+        const totalOverdue  = overdue.length  + expiredSims.length;
+        const totalUpcoming = upcoming.length + expiringSims.length;
+        document.getElementById('overdue-count').textContent  = totalOverdue;
+        document.getElementById('upcoming-count').textContent = totalUpcoming;
+
+        const simOverdueHtml = expiredSims.map(s => `
+          <div class="flex items-center justify-between px-4 py-3 rounded-xl border border-red-200 bg-red-50 gap-3">
+            <div class="min-w-0">
+              <div class="font-medium text-slate-800 text-sm truncate">
+                <i class="fas fa-sim-card mr-1.5 text-red-500"></i>SIM Expired — ${s.phoneNumber || '—'}
+              </div>
+              <div class="text-xs text-slate-500 mt-0.5">${s.network || '—'}${s.modemSerial ? ` · Modem: ${s.modemSerial}` : ''} · Expired ${new Date(s.expiryDate).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div>
+            </div>
+            <span class="text-xs font-semibold text-red-600 whitespace-nowrap flex-shrink-0">Expired</span>
+          </div>`).join('');
+
+        const simUpcomingHtml = expiringSims.map(s => {
+          const d = s.daysUntilExpiry;
+          const whenLabel = d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : `In ${d}d`;
+          const urgency   = d <= 1 ? 'border-red-200 bg-red-50' : 'border-amber-100 bg-amber-50';
+          const textColor = d <= 1 ? 'text-red-600' : 'text-amber-600';
+          return `
+          <div class="flex items-center justify-between px-4 py-3 rounded-xl border ${urgency} gap-3">
+            <div class="min-w-0">
+              <div class="font-medium text-slate-800 text-sm truncate">
+                <i class="fas fa-sim-card mr-1.5 text-amber-500"></i>SIM Expiring — ${s.phoneNumber || '—'}
+              </div>
+              <div class="text-xs text-slate-500 mt-0.5">${s.network || '—'}${s.modemSerial ? ` · Modem: ${s.modemSerial}` : ''} · Expires ${new Date(s.expiryDate).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div>
+            </div>
+            <span class="text-xs font-semibold ${textColor} whitespace-nowrap flex-shrink-0">${whenLabel}</span>
+          </div>`;
+        }).join('');
+
+        overdueEl.innerHTML  = (overdue.length || expiredSims.length)
+          ? (overdue.map(eventRow).join('') + simOverdueHtml)
+          : emptyState('check-circle', 'text-green-500', 'All clear — no overdue events');
+
+        upcomingEl.innerHTML = (upcoming.length || expiringSims.length)
+          ? (upcoming.map(eventRow).join('') + simUpcomingHtml)
+          : emptyState('calendar-check', 'text-slate-400', 'No events in the next 7 days');
+
       } catch (e) {
         console.error('Error loading events:', e);
         overdueEl.innerHTML  = '<p class="text-sm text-red-500 text-center py-4">Error loading events</p>';
@@ -53,9 +115,10 @@
 
     function eventRow(ev) {
       const sched = ev.scheduled_date;
+      const onHold = !!ev.on_hold;
       const isActiveWindow = !!ev.active_window;
       const isOverdue = !isActiveWindow && ev.days <= 0;
-      const isUpcoming = !isActiveWindow && ev.days > 0;
+      const isUpcoming = !isActiveWindow && (ev.days > 0 || onHold);
       const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
       const d = new Date((refDate || '').replace(' ', 'T'));
       const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
@@ -91,6 +154,8 @@
         </div>`;
       const rightLabel = blocked
         ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
+        : onHold
+        ? `<span class="text-xs font-semibold text-slate-600 bg-white border border-slate-300 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">On hold</span>`
         : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>`;
       return `
         <${tag} ${href} class="flex items-center justify-between px-3 py-2.5 rounded-xl border ${urgency} gap-3 ${extra}">

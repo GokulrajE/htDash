@@ -15,6 +15,7 @@ const STATUS_LABEL = {
   inactive:            'Inactive',
   active:              'Active',
   paused:              'Paused',
+  post_training:       'Post Training',
   broken_protocol:     'Broken Protocol',
   training_completed:  'Training Complete',
   a1_completed:        'A1 Complete',
@@ -28,6 +29,7 @@ const STATUS_CLASS = {
   inactive:            'bg-yellow-100 text-yellow-700',
   active:              'bg-blue-100 text-blue-700',
   paused:              'bg-amber-100 text-amber-700',
+  post_training:       'bg-sky-100 text-sky-700',
   broken_protocol:     'bg-red-100 text-red-700',
   training_completed:  'bg-teal-100 text-teal-700',
   a1_completed:        'bg-violet-100 text-violet-700',
@@ -46,6 +48,14 @@ function fmtDate(iso) {
   return iso.replace('T', ' ');
 }
 
+// ── Training state helpers ────────────────────────────────────────────────────
+
+function _checkTrainingPeriodExpired(patient) {
+  const banner = document.getElementById('training-period-expiry-banner');
+  if (!banner) return;
+  banner.classList.toggle('hidden', !patient || patient.status !== 'post_training');
+}
+
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
 function switchTab(tab) {
@@ -59,6 +69,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-pane').forEach(pane => {
     pane.classList.toggle('hidden', pane.id !== `tab-${tab}`);
   });
+  if (tab === 'devices')   loadDevicesTab();
   if (tab === 'adl')      loadAdlTab();
   if (tab === 'vcg')      loadVcgTab();
   if (tab === 'calls')         renderCallLogsTab();
@@ -98,40 +109,128 @@ function _nowForInput() {
 
 function _attachSessionEndGuard(startInputId, endInputId, errorId) {
   // Fires on change of the end input; validates same date and end > start immediately.
+  const startInput = document.getElementById(startInputId);
   const endInput = document.getElementById(endInputId);
-  if (!endInput) return;
-  if (endInput._sessionEndGuard) endInput.removeEventListener('change', endInput._sessionEndGuard);
+  if (!endInput || !startInput) return;
+
+  if (endInput._sessionEndGuard) {
+    endInput.removeEventListener('change', endInput._sessionEndGuard);
+    endInput.removeEventListener('input', endInput._sessionEndGuard);
+  }
+
   endInput._sessionEndGuard = () => {
-    const startVal = document.getElementById(startInputId)?.value;
-    const endVal   = endInput.value;
-    if (!startVal || !endVal) return;
-    if (startVal.split('T')[0] !== endVal.split('T')[0]) {
-      setError(errorId, 'Session start and end must be on the same date.');
-    } else if (endVal <= startVal) {
-      setError(errorId, 'Session end must be after session start.');
-    } else {
-      setError(errorId, '');
-    }
+    _validateSessionEndInput(startInput, endInput, errorId);
   };
+
   endInput.addEventListener('change', endInput._sessionEndGuard);
+  endInput.addEventListener('input', endInput._sessionEndGuard);
+
+  // Also validate start input changes
+  if (startInput._sessionStartGuard) {
+    startInput.removeEventListener('change', startInput._sessionStartGuard);
+    startInput.removeEventListener('input', startInput._sessionStartGuard);
+  }
+
+  startInput._sessionStartGuard = () => {
+    _validateSessionEndInput(startInput, endInput, errorId);
+  };
+
+  startInput.addEventListener('change', startInput._sessionStartGuard);
+  startInput.addEventListener('input', startInput._sessionStartGuard);
+}
+
+function _validateSessionEndInput(startInput, endInput, errorId) {
+  // Validate session start/end pairs for keyboard input
+  const startVal = startInput?.value;
+  const endVal   = endInput?.value;
+
+  if (!startVal || !endVal) {
+    setError(errorId, '');
+    return true;
+  }
+
+  const startDate = startVal.split('T')[0];
+  const endDate   = endVal.split('T')[0];
+
+  if (startDate !== endDate) {
+    setError(errorId, 'Session start and end must be on the same date.');
+    return false;
+  }
+
+  if (endVal <= startVal) {
+    setError(errorId, 'Session end must be after session start.');
+    return false;
+  }
+
+  setError(errorId, '');
+  return true;
 }
 
 function _attachDateGuard(inputId, errorId) {
-  // Sets max=now on the input and shows an inline error immediately on change if future date picked
   const input = document.getElementById(inputId);
   if (!input) return;
   input.max = _nowForInput();
-  // Remove any previously attached guard listener to avoid duplicates
-  if (input._dateGuard) input.removeEventListener('change', input._dateGuard);
-  input._dateGuard = () => {
-    if (input.value && input.value > input.max) {
-      setError(errorId, 'Date cannot be in the future.');
-      input.value = '';
-    } else {
-      setError(errorId, '');
-    }
-  };
+  // Remove previously attached listeners to avoid duplicates on modal re-open.
+  if (input._dateGuard) {
+    input.removeEventListener('change', input._dateGuard);
+    input.removeEventListener('input',  input._dateGuard);
+  }
+  input._dateGuard = () => { _validateDateInput(input, errorId); };
   input.addEventListener('change', input._dateGuard);
+  input.addEventListener('input',  input._dateGuard);
+}
+
+function _validateDateInput(input, errorId) {
+  // Comprehensive validation for keyboard-entered dates against min/max constraints
+  if (!input.value) {
+    setError(errorId, '');
+    return true;
+  }
+
+  const value = input.value;
+  let errorMsg = '';
+
+  // Check min constraint
+  if (input.min && value < input.min) {
+    const minDate = input.min.includes('T') ? input.min.split('T')[0] : input.min;
+    const valueDate = value.includes('T') ? value.split('T')[0] : value;
+    errorMsg = `Date cannot be before ${_formatDateForDisplay(minDate)}.`;
+  }
+
+  // Check max constraint
+  if (!errorMsg && input.max && value > input.max) {
+    const maxDate = input.max.includes('T') ? input.max.split('T')[0] : input.max;
+    const valueDate = value.includes('T') ? value.split('T')[0] : value;
+    errorMsg = `Date cannot be after ${_formatDateForDisplay(maxDate)}.`;
+  }
+
+  setError(errorId, errorMsg);
+  return !errorMsg;
+}
+
+function _formatDateForDisplay(dateStr) {
+  // Convert YYYY-MM-DD to readable format (e.g., "30 Apr 2026")
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
+function _hasDateValidationErrors(errorElementIds) {
+  // Check if any date validation error elements have visible errors
+  // errorElementIds: array of error element IDs to check (e.g., ['activation-error', 'device-setup-error'])
+  // Returns: true if any errors are visible, false if all clear
+  if (!errorElementIds || errorElementIds.length === 0) return false;
+
+  for (const errorId of errorElementIds) {
+    const el = document.getElementById(errorId);
+    if (el && !el.classList.contains('hidden') && el.textContent.trim()) {
+      return true; // Found a visible error
+    }
+  }
+  return false; // No visible errors
 }
 
 function setLoading(btnId, loading) {
@@ -149,7 +248,18 @@ async function apiPost(url, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return res.json().then(data => ({ ok: res.ok, data }));
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: `Server error (${res.status})` }; }
+  return { ok: res.ok, data };
+}
+
+async function apiGet(url) {
+  const res  = await fetch(url);
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: `Server error (${res.status})` }; }
+  return { ok: res.ok, data };
 }
 
 // ── Render overview ───────────────────────────────────────────────────────────
@@ -219,8 +329,51 @@ function renderOverview(p) {
   if (robotBtn) robotBtn.classList.toggle('hidden', p.group !== 'experimental');
 
   renderPauseBanner(p);
+  _checkD0203AtRisk(p);
+  _checkTrainingPeriodExpired(p);
   renderPauseHistoryTable(p);
   renderActions(p);
+  loadOverviewDevices();
+}
+
+// ── Overview devices ──────────────────────────────────────────────────────────
+
+async function loadOverviewDevices() {
+  const section = document.getElementById('overview-devices-section');
+  const content = document.getElementById('overview-devices-content');
+  if (!section || !content) return;
+
+  const { ok, data } = await apiGet(`/api/patients/${PATIENT_HOMER_ID}/current-devices`);
+  if (!ok || !data.devices || !data.devices.length) {
+    section.classList.add('hidden');
+    return;
+  }
+
+  content.innerHTML = `<div class="grid grid-cols-3 gap-x-4 gap-y-4">${data.devices.map(_deviceChip).join('')}</div>`;
+  section.classList.remove('hidden');
+}
+
+function _deviceChip(d) {
+  const TYPE_LABEL = { pluto: 'Pluto', mars: 'Mars', modems: 'Modem', laptops: 'Laptop', agwatch: 'Watch' };
+  const label = TYPE_LABEL[d.type] || d.type;
+  const limb  = d.limb ? ` (${d.limb.charAt(0).toUpperCase() + d.limb.slice(1)})` : '';
+  const simLabel = d.sim ? ' (SIM)' : '';
+
+  let badge = '';
+  if (d.lost)           badge = '<span class="ml-1 text-xs font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-full">Lost</span>';
+  else if (d.has_issue) badge = '<span class="ml-1 text-xs font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full">Issue</span>';
+
+  const valueHtml = d.sim
+    ? `<div class="flex items-baseline gap-1.5 flex-wrap">` +
+      `<span class="text-sm font-semibold text-slate-800 font-mono whitespace-nowrap">${d.device_id}</span>` +
+      `<span class="text-xs text-slate-400 font-mono whitespace-nowrap">(${d.sim})</span>` +
+      `</div>`
+    : `<p class="text-sm font-semibold text-slate-800 font-mono">${d.device_id}</p>`;
+
+  return `<div>` +
+         `<p class="text-xs text-slate-400 font-medium mb-0.5">${label}${limb}${simLabel}${badge}</p>` +
+         `${valueHtml}` +
+         `</div>`;
 }
 
 // ── Pause banner ──────────────────────────────────────────────────────────────
@@ -284,6 +437,42 @@ function renderPauseBanner(p) {
 
   _renderPauseReasonPills();
   banner.classList.remove('hidden');
+}
+
+// ── D02/D03 at-risk banner ─────────────────────────────────────────────────────
+
+function _checkD0203AtRisk(p) {
+  const banner = document.getElementById('d0203-atrisk-banner');
+  if (!banner) return;
+
+  if (p.status !== 'paused' || !p.activationDate) {
+    banner.classList.add('hidden');
+    return;
+  }
+
+  const today      = new Date(); today.setHours(0, 0, 0, 0);
+  const activation = new Date(p.activationDate); activation.setHours(0, 0, 0, 0);
+  // 1-based day numbering: day 2 end = activation + 1d; day 3 end = activation + 2d
+  const d02End = new Date(activation); d02End.setDate(d02End.getDate() + 1);
+  const d03End = new Date(activation); d03End.setDate(d03End.getDate() + 2);
+
+  const completeIds = new Set((_completeEventsCache || []).map(e => e.protocol_event_id));
+  let atRiskLabel = null;
+  if (!completeIds.has('home_visit_d02') && today > d02End) {
+    atRiskLabel = 'Day 2';
+  } else if (!completeIds.has('home_visit_d03') && today > d03End) {
+    atRiskLabel = 'Day 3';
+  }
+
+  if (atRiskLabel) {
+    const msgEl = document.getElementById('d0203-atrisk-msg');
+    if (msgEl) {
+      msgEl.textContent = `Training at risk — ${atRiskLabel} home visit window has passed while training is paused. Broken protocol will be flagged when the pause is cleared.`;
+    }
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
 }
 
 function _renderPauseReasonPills() {
@@ -391,63 +580,271 @@ function renderActions(p) {
 // ── Modal openers ─────────────────────────────────────────────────────────────
 
 
-function openA1Modal() {
-  document.getElementById('a1-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('a1-date').value = '';
-  setError('a1-error', '');
-  _attachDateGuard('a1-date', 'a1-error');
-  showModal('a1-modal');
+let _a1AssessmentEventId = null;
+let _a2AssessmentEventId = null;
+let _schedA1EventId = null;
+let _schedA2EventId = null;
+let _a1ScheduledDate = null;
+let _a2ScheduledDate = null;
+
+function _openAssessmentModal(which, ev) {
+  const color = which === 'a1' ? 'violet' : 'green';
+  if (which === 'a1') { _a1AssessmentEventId = ev ? ev.id : null; }
+  else                { _a2AssessmentEventId = ev ? ev.id : null; }
+
+  document.getElementById(`${which}-date`).value  = '';
+  document.getElementById(`${which}-notes`).value = '';
+  document.getElementById(`${which}-cancel-reason`).value = '';
+  setError(`${which}-error`, '');
+  const max = new Date().toISOString().slice(0, 16);
+  document.getElementById(`${which}-date`).max = max;
+  _attachDateGuard(`${which}-date`, `${which}-error`);
+
+  const apptDate = ev && ev.appointment_date ? ev.appointment_date : null;
+  if (which === 'a1') { _a1ScheduledDate = apptDate; }
+  else                { _a2ScheduledDate = apptDate; }
+
+  const cancelSection = document.getElementById(`${which}-cancel-section`);
+  if (apptDate) {
+    const d = new Date(apptDate);
+    document.getElementById(`${which}-scheduled-date-display`).textContent =
+      d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    cancelSection.classList.remove('hidden');
+  } else {
+    cancelSection.classList.add('hidden');
+  }
+
+  showModal(`${which}-modal`);
 }
 
-function openA2Modal() {
-  document.getElementById('a2-homer-id').textContent = PATIENT_HOMER_ID;
-  document.getElementById('a2-date').value = '';
-  setError('a2-error', '');
-  _attachDateGuard('a2-date', 'a2-error');
-  showModal('a2-modal');
+function openA1AssessmentModal(ev) { _openAssessmentModal('a1', ev); }
+function openA2AssessmentModal(ev) { _openAssessmentModal('a2', ev); }
+
+function openScheduleA1CallModal(ev) {
+  _schedA1EventId = ev ? ev.id : null;
+  document.getElementById('sa1-date').value        = '';
+  document.getElementById('sa1-duration').value    = '';
+  document.getElementById('sa1-notes').value       = '';
+  document.getElementById('sa1-appointment').value = '';
+  setError('sa1-error', '');
+  _attachDateGuard('sa1-date', 'sa1-error');
+  // Attach guard first (sets max=today), then override with window bounds.
+  // _validateDateInput reads min/max at fire time, so the override takes effect.
+  _attachDateGuard('sa1-appointment', 'sa1-error');
+  const apptInput = document.getElementById('sa1-appointment');
+  const win = _assessmentWindows['a1_assessment'];
+  if (win) { apptInput.min = win.start; apptInput.max = win.end; }
+  else      { apptInput.removeAttribute('min'); apptInput.removeAttribute('max'); }
+  showModal('schedule-a1-call-modal');
 }
 
-function openDiscontinueModal() {
+function openScheduleA2CallModal(ev) {
+  _schedA2EventId = ev ? ev.id : null;
+  document.getElementById('sa2-date').value        = '';
+  document.getElementById('sa2-duration').value    = '';
+  document.getElementById('sa2-notes').value       = '';
+  document.getElementById('sa2-appointment').value = '';
+  setError('sa2-error', '');
+  _attachDateGuard('sa2-date', 'sa2-error');
+  // Attach guard first (sets max=today), then override with window bounds.
+  _attachDateGuard('sa2-appointment', 'sa2-error');
+  const apptInput = document.getElementById('sa2-appointment');
+  const win = _assessmentWindows['a2_assessment'];
+  if (win) { apptInput.min = win.start; apptInput.max = win.end; }
+  else      { apptInput.removeAttribute('min'); apptInput.removeAttribute('max'); }
+  showModal('schedule-a2-call-modal');
+}
+
+// Legacy openers used by ACTION_DEFS buttons — delegate to event-driven functions.
+function openA1Modal() { openA1AssessmentModal(null); }
+function openA2Modal() { openA2AssessmentModal(null); }
+
+let _discEventId = null;
+
+function openDiscontinueModal(ev) {
+  _discEventId = ev ? ev.id : null;
   document.getElementById('discontinue-homer-id').textContent = PATIENT_HOMER_ID;
+  document.getElementById('disc-date').value = '';
   document.getElementById('discontinue-reason').value = '';
+  document.getElementById('discontinue-notes').value = '';
+  _resetAttachment('disc');
   setError('discontinue-error', '');
+  const now = new Date();
+  const maxStr = now.toISOString().slice(0, 16);
+  document.getElementById('disc-date').max = maxStr;
+  _attachDateGuard('disc-date', 'discontinue-error');
   showModal('discontinue-modal');
+}
+
+async function _initiateDiscontinuation() {
+  const confirmed1 = window.confirm(
+    'Discontinuing a patient is a major and irreversible event.\nAre you sure you want to proceed?'
+  );
+  if (!confirmed1) return;
+  const confirmed2 = window.confirm(
+    'This will permanently close the patient record once the discontinuation event is completed.\nConfirm discontinuation?'
+  );
+  if (!confirmed2) return;
+
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/create-discontinuation-stub`, {}
+  );
+  if (!ok) {
+    alert(data.error || 'Failed to create discontinuation stub.');
+    return;
+  }
+  await loadPatientEvents();  // sets _hasDiscontinuationStub = true
+  loadPatient();              // re-evaluates button visibility using updated flag
 }
 
 // ── Modal submitters ──────────────────────────────────────────────────────────
 
 
-async function submitA1() {
-  const date = document.getElementById('a1-date').value;
-  if (!date) { setError('a1-error', 'Please select an A1 assessment date.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/a1`, { a1CompletionDate: date });
+async function saveA1Assessment() {
+  const date  = document.getElementById('a1-date').value;
+  const notes = document.getElementById('a1-notes').value.trim();
+  if (!date) { setError('a1-error', 'Please select an assessment date.'); return; }
+  if (_hasDateValidationErrors(['a1-error'])) return;
+  const payload = { completion_date: date, notes };
+  if (_a1AssessmentEventId) payload.event_id = _a1AssessmentEventId;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/a1-assessment`, payload
+  );
   if (!ok) { setError('a1-error', data.error || 'Failed to record A1.'); return; }
   hideModal('a1-modal');
+  await loadPatientEvents();
   loadPatient();
 }
 
-async function submitA2() {
-  const date = document.getElementById('a2-date').value;
-  if (!date) { setError('a2-error', 'Please select an A2 assessment date.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/a2`, { a2CompletionDate: date });
+async function saveA2Assessment() {
+  const date  = document.getElementById('a2-date').value;
+  const notes = document.getElementById('a2-notes').value.trim();
+  if (!date) { setError('a2-error', 'Please select an assessment date.'); return; }
+  if (_hasDateValidationErrors(['a2-error'])) return;
+  const payload = { completion_date: date, notes };
+  if (_a2AssessmentEventId) payload.event_id = _a2AssessmentEventId;
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/a2-assessment`, payload
+  );
   if (!ok) { setError('a2-error', data.error || 'Failed to record A2.'); return; }
   hideModal('a2-modal');
+  await loadPatientEvents();
   loadPatient();
 }
 
-async function submitDiscontinue() {
+async function cancelAssessmentAppointment(which) {
+  const reason = document.getElementById(`${which}-cancel-reason`).value.trim();
+  if (!reason) { setError(`${which}-error`, 'Please enter a reason for cancellation.'); return; }
+
+  const scheduledDate = which === 'a1' ? _a1ScheduledDate : _a2ScheduledDate;
+  const displayEl     = document.getElementById(`${which}-scheduled-date-display`);
+  const confirmed = window.confirm(
+    `Cancel the scheduled ${which.toUpperCase()} assessment on ${displayEl.textContent}? This cannot be undone.`
+  );
+  if (!confirmed) return;
+
+  const eventId = which === 'a1' ? _a1AssessmentEventId : _a2AssessmentEventId;
+  const payload = { assessment_type: which, reason };
+  if (eventId) payload.event_id = eventId;
+
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/cancel-assessment-appointment`, payload
+  );
+  if (!ok) { setError(`${which}-error`, data.error || 'Failed to cancel appointment.'); return; }
+
+  // Hide cancellation section — appointment_date is now null
+  if (which === 'a1') { _a1ScheduledDate = null; }
+  else                { _a2ScheduledDate = null; }
+  document.getElementById(`${which}-cancel-section`).classList.add('hidden');
+  document.getElementById(`${which}-cancel-reason`).value = '';
+  setError(`${which}-error`, '');
+  await loadPatientEvents();
+}
+
+async function saveScheduleAssessmentCall(which) {
+  const prefix   = which === 'a1' ? 'sa1' : 'sa2';
+  const errId    = `${prefix}-error`;
+  const callType = which === 'a1' ? 'schedule_a1_call' : 'schedule_a2_call';
+  const eventId  = which === 'a1' ? _schedA1EventId : _schedA2EventId;
+
+  const date    = document.getElementById(`${prefix}-date`).value;
+  const dur     = document.getElementById(`${prefix}-duration`).value;
+  const notes   = document.getElementById(`${prefix}-notes`).value.trim();
+  const appt    = document.getElementById(`${prefix}-appointment`).value;
+
+  if (!date)  { setError(errId, 'Call date is required.'); return; }
+  if (!dur || parseInt(dur, 10) <= 0) { setError(errId, 'Duration must be a positive number.'); return; }
+  if (!notes) { setError(errId, 'Notes are required.'); return; }
+  if (!appt)  { setError(errId, 'New appointment date is required.'); return; }
+  if (_hasDateValidationErrors([errId])) return;
+
+  const payload = {
+    call_type:          callType,
+    completion_date:    date,
+    duration_minutes:   parseInt(dur, 10),
+    notes,
+    new_appointment_date: appt,
+  };
+  if (eventId) payload.event_id = eventId;
+
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/schedule-assessment-call`, payload
+  );
+  if (!ok) { setError(errId, data.error || 'Failed to save scheduling call.'); return; }
+  hideModal(which === 'a1' ? 'schedule-a1-call-modal' : 'schedule-a2-call-modal');
+  await loadPatientEvents();
+}
+
+async function saveDiscontinuation() {
+  const date   = document.getElementById('disc-date').value;
   const reason = document.getElementById('discontinue-reason').value.trim();
+  const notes  = document.getElementById('discontinue-notes').value.trim();
+  const btn    = document.getElementById('discontinue-submit');
+
+  if (!date)   { setError('discontinue-error', 'Please select a discontinuation date.'); return; }
   if (!reason) { setError('discontinue-error', 'Please enter a reason.'); return; }
-  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/discontinue`, { reason });
-  if (!ok) { setError('discontinue-error', data.error || 'Failed to discontinue patient.'); return; }
+  if (!_validateAttachment('disc', 'discontinue-error')) return;
+
+  if (!window.confirm('This will permanently close the patient record and all device assignments. Are you sure?')) return;
+
+  btn.disabled = true;
+  setError('discontinue-error', '');
+  const payload = { completion_date: date, reason, notes: notes || null };
+  if (_discEventId && _discEventId !== 'discontinuation_reminder') {
+    payload.event_id = _discEventId;
+  }
+
+  let ok, data;
+  try {
+    ({ ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/discontinue`, payload));
+  } catch (e) {
+    setError('discontinue-error', 'Server error — could not save discontinuation. Check the server logs.');
+    btn.disabled = false;
+    return;
+  }
+  if (!ok) { setError('discontinue-error', data?.error || 'Failed to discontinue patient.'); btn.disabled = false; return; }
+
+  if (data.event_id) {
+    const { file, caption } = _readAttachment('disc');
+    if (file) {
+      const uploaded = await _uploadAttachment(data.event_id, file, caption, 'discontinue-error');
+      if (!uploaded) { btn.disabled = false; return; }
+    }
+  }
+
   hideModal('discontinue-modal');
+  btn.disabled = false;
+  await loadPatientEvents();
   loadPatient();
 }
 
 // ── Patient events ────────────────────────────────────────────────────────────
 
-let _completeEventsCache = null;  // null = not yet loaded
-let _callLogsCache      = null;  // null = not yet loaded
+let _completeEventsCache    = null;   // null = not yet loaded
+let _callLogsCache          = null;   // null = not yet loaded
+let _patientDiscontinued    = false;  // true if patient has discontinuationDate
+let _hasDiscontinuationStub = false;  // true if a real discontinuation stub is in incomplete
+let _assessmentWindows      = {};     // { a1_assessment: {start, end}, a2_assessment: {start, end} }
 
 async function loadPatientEvents() {
   const completedEl = document.getElementById('patient-completed-events');
@@ -464,7 +861,34 @@ async function loadPatientEvents() {
     eventsCache = [...overdue, ...upcoming];
     _completeEventsCache = complete || [];
     _callLogsCache = null;  // invalidate so call logs tab re-fetches
+
+    // Cache assessment window bounds for use in scheduling call modals.
+    _assessmentWindows = {};
+    for (const e of eventsCache) {
+      if ((e.protocol_event_id === 'a1_assessment' || e.protocol_event_id === 'a2_assessment')
+          && e.window_start && e.window_end) {
+        _assessmentWindows[e.protocol_event_id] = {
+          start: e.window_start.slice(0, 10),
+          end:   e.window_end.slice(0, 10),
+        };
+      }
+    }
+    _hasDiscontinuationStub = overdue.some(e => e.protocol_event_id === 'discontinuation');
+
+    // Set discontinued flag and show banner if patient is discontinued
+    _patientDiscontinued = !!patientData?.discontinuationDate;
+    const discontinuedBanner = document.getElementById('discontinued-readonly-banner');
+    if (_patientDiscontinued && discontinuedBanner) {
+      discontinuedBanner.classList.remove('hidden');
+    } else if (!_patientDiscontinued && discontinuedBanner) {
+      discontinuedBanner.classList.add('hidden');
+    }
     _renderPauseReasonPills();
+    // Re-render pause banner, at-risk banner, and history table with updated patient data
+    renderPauseBanner(patientData);
+    _checkD0203AtRisk(patientData);
+    _checkTrainingPeriodExpired(patientData);
+    renderPauseHistoryTable(patientData);
     renderTimelineTab();
     renderAdverseEventsTab();
     renderWatchRecordsTab();
@@ -533,7 +957,7 @@ const _FIELD_ORDER = [
   'description', 'action_taken', 'training_blocked',
   'visit_start', 'visit_end',
   'duration_minutes',
-  'ae_discussions', 'resolutions',
+  'ae_discussions',
 ];
 
 const _FIELD_LABELS = {
@@ -541,6 +965,9 @@ const _FIELD_LABELS = {
   ag_watch_left:       'Left Watch',
   pluto_id:            'Pluto Device',
   mars_id:             'Mars Device',
+  modem_id:            'Modem Device',
+  laptop_id:           'Laptop Device',
+  sim_id:              'SIM Card',
   demo_done:           'Demo Done',
   prescription_file:   'Prescription File',
   duration_minutes:    'Duration',
@@ -561,7 +988,6 @@ const _FIELD_LABELS = {
   visit_start:          'Visit Start',
   visit_end:            'Visit End',
   ae_discussions:       'AE Discussions',
-  resolutions:          'AE Resolutions',
   training_blocked:     'Training Blocked',
   paused:              'Paused',
   notes:               'Notes',
@@ -630,7 +1056,7 @@ function _timelineExtraFields(ev) {
         const note = d.notes ? ` (${d.notes})` : '';
         return `${dev}: ${from} → ${to}${note}`;
       }).join('; ');
-    } else if ((key === 'ae_discussions' || key === 'resolutions') && Array.isArray(val)) {
+    } else if (key === 'ae_discussions' && Array.isArray(val)) {
       if (!val.length) continue;
       display = val.map(r => {
         const status = r.resolved ? '✓ Resolved' : '○ Ongoing';
@@ -754,13 +1180,20 @@ function _deriveTransitions(patient, events) {
     }
   }
 
-  // Events that cleared a pause — id matches a closed pauseHistory[*].end_event_id
-  const resumingIds = new Set(
-    pauseHistory.filter(e => e.end_event_id).map(e => e.end_event_id)
-  );
+  const brokenDate     = (patient.brokenProtocolDate     || '').slice(0, 10);
+  const discDate       = (patient.discontinuationDate    || '').slice(0, 10);
+  const completionDate = (patient.trainingCompletionDate || '').slice(0, 10);
 
-  const brokenDate = (patient.brokenProtocolDate || '').slice(0, 10);
-  const discDate   = (patient.discontinuationDate || '').slice(0, 10);
+  // Suppress "Training resumed" if the pause cleared on or after any terminal date.
+  const resumingIds = new Set();
+  for (const epoch of pauseHistory) {
+    if (!epoch.end_event_id || !epoch.end) continue;
+    const epochEnd = epoch.end.slice(0, 10);
+    if (completionDate && epochEnd >= completionDate) continue;
+    if (brokenDate     && epochEnd >= brokenDate)     continue;
+    if (discDate       && epochEnd >= discDate)        continue;
+    resumingIds.add(epoch.end_event_id);
+  }
 
   for (const ev of events) {
     if (ev._synthetic || !ev.id) continue;
@@ -811,9 +1244,21 @@ function renderTimelineTab() {
 
   const transitions = _deriveTransitions(patientData || {}, all);
 
+  // Build a lookup for incomplete event scheduled_dates (for fallback on attempt entries)
+  const _incompleteSchedMap = {};
+  for (const e of (eventsCache || [])) {
+    if (e.protocol_event_id && e.scheduled_date)
+      _incompleteSchedMap[e.protocol_event_id] = e.scheduled_date;
+  }
+  const _ATTEMPT_PARENT = { d15_attempt: 'home_visit_d15', activation_attempt: 'activation' };
+
   const items = all.map((ev, i) => {
     const isLast   = i === all.length - 1;
-    const schedStr = _fmtDate(ev.scheduled_date);
+    const schedDate = ev.scheduled_date
+      || (_ATTEMPT_PARENT[ev.protocol_event_id]
+          ? _incompleteSchedMap[_ATTEMPT_PARENT[ev.protocol_event_id]]
+          : null);
+    const schedStr = _fmtDate(schedDate);
     const compStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
     const filedStr = ev.filed_at ? _fmtDateTime(ev.filed_at) : '';
     const extra    = _timelineExtraFields(ev);
@@ -821,15 +1266,24 @@ function renderTimelineTab() {
     const dayNum   = _dayNumber(ev.completion_date);
     const dayLabel = dayNum !== null ? `Day ${dayNum}` : null;
     const isSynthetic = !!ev._synthetic;
-    const circleCls   = isSynthetic ? 'bg-blue-500 ring-blue-300' : 'bg-green-500 ring-green-300';
+    const isDisc      = ev.protocol_event_id === 'discontinuation';
+    const circleCls   = isSynthetic ? 'bg-blue-500 ring-blue-300'
+                      : isDisc      ? 'bg-red-500 ring-red-300'
+                      :               'bg-green-500 ring-green-300';
     const badge       = !isSynthetic ? _transitionBadgeHtml(transitions.get(ev.id)) : '';
+    const discBadge   = isDisc
+      ? `<span class="inline-flex items-center gap-1 text-xs font-semibold bg-red-100 text-red-700 border border-red-200 rounded-full px-2 py-0.5 mt-1"><i class="fas fa-ban text-[10px]"></i>Discontinued</span>`
+      : '';
+    const rowHighlight = isDisc ? 'bg-red-50 rounded-lg' : rowBg;
+    const nameCls      = isDisc ? 'text-sm font-bold text-red-700' : 'text-sm font-semibold text-slate-800';
     return `
-      <div class="grid gap-x-4 px-2 -mx-2 ${rowBg}" style="grid-template-columns:1fr 20px 1fr">
+      <div class="grid gap-x-4 px-2 -mx-2 ${rowHighlight}" style="grid-template-columns:1fr 20px 1fr">
         <div class="text-right pb-${isLast ? '2' : '7'} pt-2">
-          <p class="text-sm font-semibold text-slate-800">${ev.event_name}</p>
-          ${!isSynthetic ? `<p class="text-xs text-slate-400 mt-0.5">Scheduled: ${schedStr}</p>` : ''}
+          <p class="${nameCls}">${ev.event_name}</p>
+          ${!isSynthetic && schedDate ? `<p class="text-xs text-slate-400 mt-0.5">Scheduled: ${schedStr}</p>` : ''}
           ${dayLabel ? `<p class="text-sm font-semibold text-indigo-500 mt-1">${dayLabel}</p>` : ''}
           ${badge}
+          ${discBadge}
         </div>
         <div class="flex flex-col items-center pt-2">
           <div class="w-3 h-3 rounded-full ${circleCls} border-2 border-white ring-1 z-10 flex-shrink-0"></div>
@@ -937,15 +1391,22 @@ function _callCard(c) {
 
 // ── Adverse Events tab ────────────────────────────────────────────────────────
 
+const _AEF_TYPE_LABELS = {
+  adverse_event_followup:        'Follow-up Call',
+  adverse_event_followup_visit:  'Follow-up Visit',
+  adverse_event_clinical_visit:  'Clinical Visit',
+};
+const _AE_FOLLOWUP_TYPES = ['adverse_event_followup', 'adverse_event_followup_visit', 'adverse_event_clinical_visit'];
+
 function renderAdverseEventsTab() {
   const container = document.getElementById('adverse-events-content');
   if (!container) return;
 
-  const events = (_completeEventsCache || [])
+  const aeEvents = (_completeEventsCache || [])
     .filter(e => e.protocol_event_id === 'adverse_event')
-    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || '')); // newest first
 
-  if (!events.length) {
+  if (!aeEvents.length) {
     container.innerHTML = `
       <div class="flex flex-col items-center justify-center py-16 text-slate-300">
         <i class="fas fa-exclamation-triangle text-3xl mb-3"></i>
@@ -953,14 +1414,81 @@ function renderAdverseEventsTab() {
       </div>`;
     return;
   }
-  container.innerHTML = events.map(_adverseEventCard).join('');
+
+  const followupEvents = (_completeEventsCache || []).filter(e => _AE_FOLLOWUP_TYPES.includes(e.protocol_event_id));
+  container.innerHTML = aeEvents.map(ev => _adverseEventCard(ev, followupEvents)).join('');
 }
 
-function _adverseEventCard(ev) {
-  const dayNum   = _dayNumber(ev.completion_date);
-  const dayBadge = dayNum !== null ? `<span class="text-xs font-semibold text-red-500">Day ${dayNum}</span>` : '';
-  const dateStr  = ev.completion_date ? _fmtDateTime(ev.completion_date) : '—';
+function _toggleAeCard(cardId) {
+  const body    = document.getElementById(`ae-body-${cardId}`);
+  const chevron = document.getElementById(`ae-chevron-${cardId}`);
+  if (!body) return;
+  const isHidden = body.classList.toggle('hidden');
+  if (chevron) chevron.style.transform = isHidden ? '' : 'rotate(180deg)';
+}
 
+function _adverseEventCard(ev, followupEvents) {
+  // Find all follow-ups referencing this AE, sorted chronologically
+  const related = followupEvents
+    .filter(fe => (fe.ae_discussions || []).some(d => d.adverse_event_id === ev.id))
+    .sort((a, b) => (b.completion_date || '').localeCompare(a.completion_date || ''));
+
+  let resolvedEntry = null;
+  for (const fe of related) {
+    const disc = (fe.ae_discussions || []).find(d => d.adverse_event_id === ev.id);
+    if (disc?.resolved) { resolvedEntry = { fe, disc }; break; }
+  }
+
+  const isResolved = !!resolvedEntry;
+  const isBlocked  = ev.training_blocked && !isResolved;
+
+  // Color theme
+  let borderCls, headerBg, headerText, statusBadge;
+  if (isBlocked) {
+    borderCls   = 'border-red-300';
+    headerBg    = 'bg-red-100';
+    headerText  = 'text-red-900';
+    statusBadge = `<span class="inline-flex items-center gap-1 text-xs bg-red-600 text-white rounded-full px-2 py-0.5 font-medium">
+                     <i class="fas fa-pause text-[10px]"></i>Ongoing — Training blocked</span>`;
+  } else if (!isResolved) {
+    borderCls   = 'border-amber-300';
+    headerBg    = 'bg-amber-50';
+    headerText  = 'text-amber-900';
+    statusBadge = `<span class="inline-flex items-center gap-1 text-xs bg-amber-100 text-amber-800 border border-amber-300 rounded-full px-2 py-0.5">
+                     <i class="fas fa-clock text-[10px]"></i>Ongoing</span>`;
+  } else {
+    borderCls   = 'border-green-200';
+    headerBg    = 'bg-green-50';
+    headerText  = 'text-green-900';
+    statusBadge = `<span class="inline-flex items-center gap-1 text-xs bg-green-100 text-green-800 border border-green-200 rounded-full px-2 py-0.5">
+                     <i class="fas fa-check text-[10px]"></i>Resolved</span>`;
+  }
+
+  // Dates and duration
+  const reportDateStr = ev.completion_date ? _fmtDate(ev.completion_date) : '—';
+  let resolveDateStr = '';
+  let durationStr    = '';
+  if (isResolved && resolvedEntry.fe.completion_date) {
+    resolveDateStr = _fmtDate(resolvedEntry.fe.completion_date);
+    const d1   = new Date(ev.completion_date);
+    const d2   = new Date(resolvedEntry.fe.completion_date);
+    const days = Math.max(0, Math.round((d2 - d1) / 86400000));
+    durationStr = `${days} day${days !== 1 ? 's' : ''}`;
+  } else if (!isResolved && ev.completion_date) {
+    const days = Math.max(0, Math.round((Date.now() - new Date(ev.completion_date)) / 86400000));
+    durationStr = `${days} day${days !== 1 ? 's' : ''} ongoing`;
+  }
+
+  const dayNum = _dayNumber(ev.completion_date);
+  const sep    = `<span class="text-slate-300 mx-1.5">|</span>`;
+  const metaParts = [
+    `<span class="text-xs text-slate-500"><span class="text-slate-400">Reported:</span> ${reportDateStr}</span>`,
+    resolveDateStr ? `<span class="text-xs text-slate-500"><span class="text-slate-400">Resolved:</span> ${resolveDateStr}</span>` : '',
+    durationStr    ? `<span class="text-xs text-slate-500"><span class="text-slate-400">Duration:</span> ${durationStr}</span>` : '',
+    dayNum !== null ? `<span class="text-xs text-slate-400">Day ${dayNum}</span>` : '',
+  ].filter(Boolean).join(sep);
+
+  // Triggered by
   let triggerStr = '';
   if (ev.triggered_by) {
     const typeLabel   = _WR_TRIGGER_NAMES[ev.triggered_by.type] || (ev.triggered_by.type || '').replace(/_/g, ' ');
@@ -969,30 +1497,66 @@ function _adverseEventCard(ev) {
     triggerStr = `<div class="text-xs text-slate-500"><span class="text-slate-400">Triggered by:</span> ${typeLabel}${triggerDate}</div>`;
   }
 
-  const pausedStr = ev.paused
-    ? `<div class="inline-flex items-center gap-1 text-xs bg-red-50 text-red-700 border border-red-200 rounded-full px-2 py-0.5"><i class="fas fa-pause text-[10px]"></i>Training paused</div>`
-    : '';
-
   const attachmentStr = (ev.attachment && ev.id)
     ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${ev.id}" target="_blank"
          class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
-         <i class="fas fa-paperclip"></i>Download attachment</a>` : '';
+         <i class="fas fa-paperclip"></i>Attachment</a>`
+    : '';
+
+  // Follow-up history rows
+  const followupRows = related.map(fe => {
+    const disc      = (fe.ae_discussions || []).find(d => d.adverse_event_id === ev.id);
+    const typeLabel = _AEF_TYPE_LABELS[fe.protocol_event_id] || fe.protocol_event_id;
+    const feDate    = fe.completion_date ? _fmtDateTime(fe.completion_date) : '—';
+    const feNotes   = fe.notes   ? `<p class="text-xs text-slate-500 mt-0.5">${fe.notes}</p>`        : '';
+    const discNotes = disc?.notes ? `<p class="text-xs text-slate-500 mt-0.5 italic">${disc.notes}</p>` : '';
+    const resumeStr = disc?.can_resume_from
+      ? ` <span class="text-xs text-slate-400">(resume from ${disc.can_resume_from})</span>` : '';
+    const statusEl  = disc?.resolved
+      ? `<span class="inline-flex items-center gap-1 text-xs text-green-700"><i class="fas fa-check-circle text-[10px]"></i>Resolved${resumeStr}</span>`
+      : `<span class="inline-flex items-center gap-1 text-xs text-amber-700"><i class="fas fa-circle text-[10px]"></i>Unresolved</span>`;
+    const feAttach  = (fe.attachment && fe.id)
+      ? `<a href="/api/patients/${PATIENT_HOMER_ID}/download-attachment/${fe.id}" target="_blank"
+           class="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
+           <i class="fas fa-paperclip"></i>Attachment</a>` : '';
+    return `
+      <div class="py-2 border-t border-slate-100">
+        <div class="flex items-center justify-between flex-wrap gap-1 mb-0.5">
+          <span class="text-xs font-medium text-slate-700">${typeLabel}</span>
+          <span class="text-xs text-slate-400">${feDate}</span>
+        </div>
+        ${feNotes}${discNotes}
+        <div class="mt-1 flex items-center gap-3 flex-wrap">${statusEl}${feAttach}</div>
+      </div>`;
+  }).join('');
+
+  const followupSection = related.length
+    ? `<div class="mt-3 pt-2 border-t border-slate-200">
+         <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Follow-up history</p>
+         ${followupRows}
+       </div>`
+    : '';
+
+  const cardId = ev.id.replace(/-/g, '');
 
   return `
-    <div class="bg-white rounded-xl border border-red-200 shadow-sm mb-3 overflow-hidden">
-      <div class="bg-red-50 border-b border-red-100 px-4 py-2.5 flex items-center justify-between">
-        <span class="text-sm font-semibold text-red-800">Adverse Event</span>
-        <div class="flex items-center gap-3">
-          ${dayBadge}
-          <span class="text-xs text-slate-500">${dateStr}</span>
+    <div class="rounded-xl border ${borderCls} shadow-sm mb-3 overflow-hidden">
+      <div class="${headerBg} px-4 py-2.5 cursor-pointer select-none flex items-center justify-between"
+           onclick="_toggleAeCard('${cardId}')">
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <span class="text-sm font-bold ${headerText}">${ev.alias || ''}</span>
+          ${statusBadge}
         </div>
+        <i class="fas fa-chevron-down text-xs ${headerText}" id="ae-chevron-${cardId}"
+           style="transition: transform 0.15s"></i>
       </div>
-      <div class="px-4 py-3 space-y-1.5">
-        ${ev.description ? `<p class="text-sm text-slate-700">${ev.description}</p>` : ''}
+      <div class="px-4 py-2 border-b border-slate-100 bg-white flex items-center flex-wrap gap-0">${metaParts}</div>
+      <div id="ae-body-${cardId}" class="hidden bg-white px-4 py-3 space-y-1.5">
+        ${ev.description  ? `<p class="text-sm text-slate-700">${ev.description}</p>` : ''}
         ${ev.action_taken ? `<div class="text-xs text-slate-500"><span class="text-slate-400">Action taken:</span> ${ev.action_taken}</div>` : ''}
-        ${pausedStr}
         ${triggerStr}
         ${attachmentStr}
+        ${followupSection}
       </div>
     </div>`;
 }
@@ -1172,13 +1736,15 @@ function _robotIssueCard(ev) {
 // ── Adverse Event modal ────────────────────────────────────────────────────────
 
 const _AE_TRIGGER_NAMES = {
-  activation:        'Patient Activation',
-  home_visit_d02:    'Home Visit Day 02',
-  home_visit_d03:    'Home Visit Day 03',
-  home_visit_d15:    'Home Visit Day 15',
-  followup_call_d07: 'Follow-up Call Day 07',
-  followup_call_d21: 'Follow-up Call Day 21',
-  patient_call:      'Patient Call',
+  activation:         'Patient Activation',
+  activation_attempt: 'Activation Attempt (training not completed)',
+  primary_reason:     'Primary Reason',
+  home_visit_d02:     'Home Visit Day 02',
+  home_visit_d03:     'Home Visit Day 03',
+  home_visit_d15:     'Home Visit Day 15',
+  followup_call_d07:  'Follow-up Call Day 07',
+  followup_call_d21:  'Follow-up Call Day 21',
+  patient_call:       'Patient Call',
 };
 
 let _aeEventId = null;
@@ -1192,7 +1758,9 @@ function openAdverseEventModal(ev) {
   document.getElementById('ae-date').value         = '';
   document.getElementById('ae-description').value  = '';
   document.getElementById('ae-action-taken').value = '';
-  document.getElementById('ae-paused').checked     = false;
+  const isActivated = !!patientData?.activationDate;
+  document.getElementById('ae-paused-wrap').classList.toggle('hidden', !isActivated);
+  document.getElementById('ae-paused').checked = isActivated && !!ev.training_stopped;
 
   document.getElementById('ae-schedule-visit').checked    = false;
   document.getElementById('ae-visit-date-wrap').classList.add('hidden');
@@ -1260,20 +1828,99 @@ async function saveAdverseEvent() {
   await loadPatientEvents();
 }
 
+// ── Device Issue Date Validation Helpers ───────────────────────────────────────
+
+async function _fetchIssueValidationDates(triggeredById) {
+  try {
+    const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/issue-validation-dates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ triggered_by_id: triggeredById || '' }),
+    });
+    if (!res.ok) {
+      console.error(`API error: ${res.status}`);
+      return { enroll_date: null, issue_occur_date: null };
+    }
+    const data = await res.json();
+    return data;
+  } catch (e) {
+    console.error('Failed to fetch issue validation dates:', e);
+    return { enroll_date: null, issue_occur_date: null };
+  }
+}
+
+function _setIssueModalDateBounds(enrollDate, issueOccurDate, issueOccurInputId, visitInputId) {
+  const today = new Date().toISOString().split('T')[0];
+
+  function formatDateForInput(dateStr, inputElement) {
+    if (!dateStr) return null;
+    if (inputElement.type === 'datetime-local') {
+      // datetime-local needs YYYY-MM-DDTHH:MM format
+      return dateStr.includes('T') ? dateStr.substring(0, 16) : dateStr + 'T00:00';
+    } else {
+      // date input needs YYYY-MM-DD format
+      return dateStr.split('T')[0];
+    }
+  }
+
+  if (issueOccurInputId) {
+    const inp = document.getElementById(issueOccurInputId);
+    if (inp) {
+      const formattedEnrollDate = formatDateForInput(enrollDate, inp);
+      if (formattedEnrollDate) {
+        inp.min = formattedEnrollDate;
+      } else {
+        inp.removeAttribute('min');
+      }
+      // For datetime-local, also format today
+      if (inp.type === 'datetime-local') {
+        inp.max = today + 'T23:59';
+      } else {
+        inp.max = today;
+      }
+    } else {
+      console.warn(`Could not find input: ${issueOccurInputId}`);
+    }
+  }
+  if (visitInputId) {
+    const inp = document.getElementById(visitInputId);
+    if (inp) {
+      const formattedIssueDate = formatDateForInput(issueOccurDate, inp);
+      if (formattedIssueDate) {
+        inp.min = formattedIssueDate;
+      } else {
+        inp.removeAttribute('min');
+      }
+      // For datetime-local, also format today
+      if (inp.type === 'datetime-local') {
+        inp.max = today + 'T23:59';
+      } else {
+        inp.max = today;
+      }
+    } else {
+      console.warn(`Could not find input: ${visitInputId}`);
+    }
+  }
+}
+
 // ── Robot Issue Call modal ─────────────────────────────────────────────────────
 
 let _ricEventId = null;
+let _ricIsBp    = false;
 
-function openRobotIssueCallModal(ev) {
+async function openRobotIssueCallModal(ev) {
   _ricEventId = ev.id;
+  _ricIsBp    = !!patientData?.brokenProtocolDate;
   const triggerType  = ev.triggered_by?.type || '';
   const triggerName  = _AE_TRIGGER_NAMES[triggerType] || triggerType;
   const triggerEvent = (_completeEventsCache || []).find(e => e.id === ev.triggered_by?.id);
   const dateStr = triggerEvent?.completion_date ? ` on ${_fmtDateTime(triggerEvent.completion_date)}` : '';
   document.getElementById('ric-context-banner').textContent =
     `Robot issue reported during ${triggerName}${dateStr}`;
-  document.getElementById('ric-date').value  = '';
-  document.getElementById('ric-notes').value = '';
+  document.getElementById('ric-bp-banner').classList.toggle('hidden', !_ricIsBp);
+  document.getElementById('ric-date').value             = '';
+  document.getElementById('ric-issue-occur-date').value = '';
+  document.getElementById('ric-notes').value             = '';
   _resetAttachment('ric');
   setError('ric-error', '');
   _attachDateGuard('ric-date', 'ric-error');
@@ -1285,46 +1932,81 @@ function openRobotIssueCallModal(ev) {
     const label = device.charAt(0).toUpperCase() + device.slice(1);
     const sec = document.createElement('div');
     sec.className = 'border border-slate-200 rounded-xl p-4';
-    sec.innerHTML = `
-      <label class="flex items-center gap-2 cursor-pointer select-none">
-        <input type="checkbox" id="ric-${device}-on" class="w-4 h-4 rounded border-slate-300 accent-orange-600">
-        <span class="text-sm font-semibold text-slate-800">${label}</span>
-      </label>
-      <div id="ric-${device}-form" class="hidden mt-3 space-y-3 pl-6">
-        <div>
-          <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
-          <div class="space-y-1">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="ric-${device}-outcome" value="resolved" class="w-4 h-4 accent-orange-600">
-              <span class="text-sm text-slate-700">Resolved by call — no visit needed</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="ric-${device}-outcome" value="visit_required" class="w-4 h-4 accent-orange-600">
-              <span class="text-sm text-slate-700">Visit required</span>
-            </label>
-          </div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+    if (_ricIsBp) {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="ric-${device}-on" class="w-4 h-4 rounded border-slate-300 accent-orange-600">
+          <span class="text-sm font-semibold text-slate-800">${label}</span>
+        </label>
+        <div id="ric-${device}-form" class="hidden mt-3 pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
           <textarea id="ric-${device}-notes" rows="2"
             class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
-            placeholder="What was discussed for ${label}…"></textarea>
+            placeholder="Describe the fault on ${label}…"></textarea>
         </div>
-      </div>
-    `;
+      `;
+    } else {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="ric-${device}-on" class="w-4 h-4 rounded border-slate-300 accent-orange-600">
+          <span class="text-sm font-semibold text-slate-800">${label}</span>
+        </label>
+        <div id="ric-${device}-form" class="hidden mt-3 space-y-3 pl-6">
+          <div>
+            <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+            <div class="space-y-1">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="ric-${device}-outcome" value="resolved" class="w-4 h-4 accent-orange-600">
+                <span class="text-sm text-slate-700">Resolved by call — no visit needed</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="ric-${device}-outcome" value="visit_required" class="w-4 h-4 accent-orange-600">
+                <span class="text-sm text-slate-700">Visit required</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-red-400">*</span></label>
+            <textarea id="ric-${device}-notes" rows="2"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-200 resize-none"
+              placeholder="What was discussed for ${label}…"></textarea>
+          </div>
+        </div>
+      `;
+    }
     container.appendChild(sec);
 
     document.getElementById(`ric-${device}-on`).onchange = function () {
       document.getElementById(`ric-${device}-form`).classList.toggle('hidden', !this.checked);
       if (!this.checked) {
-        document.querySelectorAll(`input[name="ric-${device}-outcome"]`).forEach(r => r.checked = false);
+        if (!_ricIsBp) {
+          document.querySelectorAll(`input[name="ric-${device}-outcome"]`).forEach(r => r.checked = false);
+        }
         document.getElementById(`ric-${device}-notes`).value = '';
       }
       _ricUpdateNotesLabel();
     };
   }
 
+  // In normal mode only: pre-check visit_required when stub was the primary training-stop reason
+  if (!_ricIsBp && ev.training_stopped) {
+    for (const device of ['pluto', 'mars']) {
+      const onCb = document.getElementById(`ric-${device}-on`);
+      if (onCb && !onCb.checked) {
+        onCb.checked = true;
+        document.getElementById(`ric-${device}-form`).classList.remove('hidden');
+        const visitRadio = document.querySelector(`input[name="ric-${device}-outcome"][value="visit_required"]`);
+        if (visitRadio) visitRadio.checked = true;
+      }
+    }
+  }
+
   _ricUpdateNotesLabel();
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates();
+  _setIssueModalDateBounds(dates.enroll_date, null, 'ric-issue-occur-date', 'ric-date');
+
   showModal('robot-issue-call-modal');
 }
 
@@ -1335,21 +2017,32 @@ function _ricUpdateNotesLabel() {
 }
 
 async function saveRobotIssueCall() {
-  const date    = document.getElementById('ric-date').value;
-  const notes   = document.getElementById('ric-notes').value.trim();
-  const saveBtn = document.getElementById('ric-save');
+  const date           = document.getElementById('ric-date').value;
+  let issueOccurDate   = document.getElementById('ric-issue-occur-date').value || null;
+  const notes          = document.getElementById('ric-notes').value.trim();
+  const saveBtn        = document.getElementById('ric-save');
+
+  // Convert dd-mm-yyyy to YYYY-MM-DD if needed
+  if (issueOccurDate && /^\d{2}-\d{2}-\d{4}$/.test(issueOccurDate)) {
+    const parts = issueOccurDate.split('-');
+    issueOccurDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
 
   if (!date) { setError('ric-error', 'Call date is required.'); return; }
 
   const devices = [];
   for (const device of ['pluto', 'mars']) {
     if (!document.getElementById(`ric-${device}-on`).checked) continue;
-    const outcome  = document.querySelector(`input[name="ric-${device}-outcome"]:checked`)?.value || '';
     const devNotes = document.getElementById(`ric-${device}-notes`).value.trim();
     const label    = device.charAt(0).toUpperCase() + device.slice(1);
-    if (!outcome)  { setError('ric-error', `Outcome is required for ${label}.`); return; }
-    if (!devNotes) { setError('ric-error', `Notes are required for ${label}.`); return; }
-    devices.push({ device, outcome, notes: devNotes });
+    if (!devNotes) { setError('ric-error', `${_ricIsBp ? 'Fault description' : 'Notes'} required for ${label}.`); return; }
+    if (_ricIsBp) {
+      devices.push({ device, notes: devNotes });
+    } else {
+      const outcome = document.querySelector(`input[name="ric-${device}-outcome"]:checked`)?.value || '';
+      if (!outcome) { setError('ric-error', `Outcome is required for ${label}.`); return; }
+      devices.push({ device, outcome, notes: devNotes });
+    }
   }
 
   if (!devices.length && !notes) {
@@ -1358,10 +2051,36 @@ async function saveRobotIssueCall() {
   }
   if (!_validateAttachment('ric', 'ric-error')) return;
 
+  // Validate dates
+  const today = new Date().toISOString().split('T')[0];
+  if (!issueOccurDate) {
+    setError('ric-error', 'Issue occurred date is required.');
+    return;
+  }
+  if (issueOccurDate > today) {
+    setError('ric-error', 'Issue occurred date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('ric-issue-occur-date').min;
+  if (minDate && issueOccurDate < minDate) {
+    setError('ric-error', `Issue occurred date must be on or after activation date (${minDate}).`);
+    return;
+  }
+  // Validate call date is after issue occurred date
+  if (date.split('T')[0] < issueOccurDate) {
+    setError('ric-error', 'Call date must be on or after issue occurred date.');
+    return;
+  }
+  if (date.split('T')[0] > today) {
+    setError('ric-error', 'Call date cannot be in the future.');
+    return;
+  }
+
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue-call`,
-    { event_id: _ricEventId, completion_date: date, notes: notes || null, devices }
+    { event_id: _ricEventId, completion_date: date, issue_occur_date: issueOccurDate,
+      notes: notes || null, devices, broken_protocol_mode: _ricIsBp }
   );
   if (!ok) { setError('ric-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1380,15 +2099,18 @@ async function saveRobotIssueCall() {
 
 let _rivEventId = null;
 let _rivDevices = []; // [{device_type, old_device_id, available}]
+let _rivIsBp    = false;
 
 async function openRobotIssueVisitModal(ev) {
   _rivEventId = ev.id;
   _rivDevices = [];
+  _rivIsBp    = !!patientData?.brokenProtocolDate;
 
   const callEvent = (_completeEventsCache || []).find(e => e.id === ev.triggered_by?.id);
   const dateStr   = callEvent?.completion_date ? ` on ${_fmtDateTime(callEvent.completion_date)}` : '';
   document.getElementById('riv-context-banner').textContent =
     `Robot issue call${dateStr}`;
+  document.getElementById('riv-bp-banner').classList.toggle('hidden', !_rivIsBp);
   document.getElementById('riv-date').value  = '';
   document.getElementById('riv-notes').value = '';
   document.getElementById('riv-device-rows').innerHTML =
@@ -1396,6 +2118,11 @@ async function openRobotIssueVisitModal(ev) {
   _resetAttachment('riv');
   setError('riv-error', '');
   _attachDateGuard('riv-date', 'riv-error');
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'riv-date');
+
   showModal('robot-issue-visit-modal');
 
   try {
@@ -1416,9 +2143,44 @@ async function openRobotIssueVisitModal(ev) {
   }
 }
 
+function _rivBpFaultChange(deviceType) {
+  const checked = document.getElementById(`riv-bp-${deviceType}-fault`)?.checked;
+  document.getElementById(`riv-bp-${deviceType}-desc-wrap`)?.classList.toggle('hidden', !checked);
+}
+
 function _buildRivDeviceRows() {
   const container = document.getElementById('riv-device-rows');
   container.innerHTML = '';
+
+  if (_rivIsBp) {
+    for (const dev of _rivDevices) {
+      const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+      const oldLabel = dev.old_device_id
+        ? `<span class="font-mono">${dev.old_device_id}</span>`
+        : '<span class="text-slate-400 italic">None assigned</span>';
+      const rowDiv = document.createElement('div');
+      rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+      rowDiv.innerHTML = `
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-semibold text-slate-800">${label}</span>
+          <span class="text-xs text-slate-500">Current: ${oldLabel}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="riv-bp-${dev.device_type}-fault" class="w-4 h-4 accent-amber-600"
+            onchange="_rivBpFaultChange('${dev.device_type}')">
+          <label for="riv-bp-${dev.device_type}-fault" class="text-sm text-slate-700 cursor-pointer">This device has a fault</label>
+        </div>
+        <div id="riv-bp-${dev.device_type}-desc-wrap" class="hidden pl-2 border-l-2 border-amber-200">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+          <textarea id="riv-bp-${dev.device_type}-desc" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
+            placeholder="Describe the fault…"></textarea>
+        </div>
+      `;
+      container.appendChild(rowDiv);
+    }
+    return;
+  }
 
   for (const dev of _rivDevices) {
     const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
@@ -1522,6 +2284,48 @@ async function saveRobotIssueVisit() {
 
   if (!date) { setError('riv-error', 'Visit date is required.'); return; }
 
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (date.split('T')[0] > today) {
+    setError('riv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('riv-date').min;
+  if (minDate && date.split('T')[0] < minDate.split('T')[0]) {
+    setError('riv-error', `Visit date must be on or after issue occurred date (${minDate.split('T')[0]}).`);
+    return;
+  }
+
+  // ── Broken-protocol mode ──────────────────────────────────────────────────
+  if (_rivIsBp) {
+    const deviceFaults = [];
+    for (const dev of _rivDevices) {
+      const hasFault = document.getElementById(`riv-bp-${dev.device_type}-fault`)?.checked;
+      if (hasFault) {
+        const desc = document.getElementById(`riv-bp-${dev.device_type}-desc`)?.value.trim() || '';
+        if (!desc) { setError('riv-error', `Please describe the fault for ${dev.device_type}.`); return; }
+        deviceFaults.push({ device: dev.device_type, notes: desc });
+      }
+    }
+    if (!_validateAttachment('riv', 'riv-error')) return;
+    saveBtn.disabled = true;
+    const { ok, data } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/robot-issue-visit`,
+      { event_id: _rivEventId, completion_date: date, notes, device_faults: deviceFaults, broken_protocol_mode: true }
+    );
+    if (!ok) { setError('riv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+    const { file, caption } = _readAttachment('riv');
+    if (file) {
+      const uploaded = await _uploadAttachment(_rivEventId, file, caption, 'riv-error');
+      if (!uploaded) { saveBtn.disabled = false; return; }
+    }
+    hideModal('robot-issue-visit-modal');
+    saveBtn.disabled = false;
+    await loadPatientEvents();
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   const deviceOutcomes = [];
   for (const dev of _rivDevices) {
     const outcome = document.querySelector(`input[name="riv-${dev.device_type}-outcome"]:checked`)?.value || '';
@@ -1575,6 +2379,17 @@ async function saveRobotIssueVisit() {
 let _aefEventId    = null;
 let _aefAeDetails  = [];   // [{id, date, training_blocked}] for each AE in stub
 
+function _trainingPermanentlyEnded() {
+  if (!patientData) return false;
+  if (patientData.trainingCompletionDate || patientData.brokenProtocolDate || patientData.discontinuationDate) return true;
+  if (patientData.activationDate) {
+    const day28End = new Date(patientData.activationDate);
+    day28End.setDate(day28End.getDate() + 28);
+    if (new Date() > day28End) return true;
+  }
+  return false;
+}
+
 function openAdverseEventFollowupModal(ev) {
   _aefEventId   = ev.id;
   const aeIds   = ev.adverse_event_ids || [];
@@ -1584,19 +2399,28 @@ function openAdverseEventFollowupModal(ev) {
     const ae = (_completeEventsCache || []).find(e => e.id === id);
     return {
       id:               id,
+      alias:            ae?.alias || '',
       date:             ae?.completion_date || '',
       training_blocked: ae?.training_blocked || false,
     };
   });
 
+  // Set modal title with aliases
+  const aliases = _aefAeDetails.map(ae => ae.alias).filter(Boolean);
+  const titleEl = document.getElementById('aef-title');
+  if (titleEl) titleEl.textContent = aliases.length
+    ? `Adverse Event Follow-up — ${aliases.join(', ')}`
+    : 'Adverse Event Follow-up';
+
   // Build context banner
   const banner = document.getElementById('aef-context-banner');
   banner.innerHTML = _aefAeDetails.length
     ? _aefAeDetails.map(ae => {
-        const dateStr = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
+        const label    = ae.alias || 'Adverse Event';
+        const dateStr  = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
         const pauseTag = ae.training_blocked
           ? ' <span class="text-red-600 font-medium">(training blocked)</span>' : '';
-        return `<div>Adverse Event${dateStr}${pauseTag}</div>`;
+        return `<div>${label}${dateStr}${pauseTag}</div>`;
       }).join('')
     : '<div class="text-slate-400">No adverse events found.</div>';
 
@@ -1604,13 +2428,13 @@ function openAdverseEventFollowupModal(ev) {
   const rowsEl = document.getElementById('aef-ae-rows');
   rowsEl.innerHTML = _aefAeDetails.map((ae, i) => {
     const dateStr = ae.date ? _fmtDateTime(ae.date) : 'Unknown date';
-    const resumeField = ae.training_blocked
+    const resumeField = (ae.training_blocked && !_trainingPermanentlyEnded())
       ? `<div id="aef-resume-wrap-${i}" class="hidden mt-2">
            <label class="block text-xs font-medium text-slate-600 mb-1">Can resume from <span class="text-red-400">*</span></label>
            <input type="date" id="aef-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
          </div>` : '';
     return `<div class="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-      <div class="text-sm font-medium text-slate-700">Adverse Event — ${dateStr}</div>
+      <div class="text-sm font-medium text-slate-700">${ae.alias || 'Adverse Event'} — ${dateStr}</div>
       <label class="flex items-center gap-2 cursor-pointer select-none">
         <input type="checkbox" id="aef-resolved-${i}" onchange="_aefToggleResume(${i})" class="w-4 h-4 rounded border-slate-300">
         <span class="text-sm text-slate-700">Resolved</span>
@@ -1622,6 +2446,7 @@ function openAdverseEventFollowupModal(ev) {
   document.getElementById('aef-date').value     = '';
   document.getElementById('aef-duration').value  = '';
   document.getElementById('aef-notes').value     = '';
+  _setupAeSchedulingToggles('aef');
   _resetAttachment('aef');
   setError('aef-error', '');
   _attachDateGuard('aef-date', 'aef-error');
@@ -1648,27 +2473,30 @@ async function saveAdverseEventFollowup() {
   if (!duration || duration <= 0) { setError('aef-error', 'Duration must be a positive number.'); return; }
   if (!notes)  { setError('aef-error', 'Notes are required.'); return; }
 
-  const resolutions = [];
+  const ae_discussions = [];
   for (let i = 0; i < _aefAeDetails.length; i++) {
     const ae       = _aefAeDetails[i];
     const resolved = document.getElementById(`aef-resolved-${i}`).checked;
     let can_resume_from = null;
-    if (resolved && ae.training_blocked) {
+    if (resolved && ae.training_blocked && !_trainingPermanentlyEnded()) {
       can_resume_from = document.getElementById(`aef-resume-${i}`)?.value || '';
       if (!can_resume_from) {
         setError('aef-error', 'Can resume from date is required for resolved training-blocked events.');
         return;
       }
     }
-    resolutions.push({ adverse_event_id: ae.id, resolved, can_resume_from });
+    ae_discussions.push({ adverse_event_id: ae.id, resolved, can_resume_from });
   }
 
+  const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aef');
+  if (schedError) { setError('aef-error', schedError); return; }
   if (!_validateAttachment('aef', 'aef-error')) return;
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/adverse-event-followup`,
-    { event_id: _aefEventId, completion_date: date, duration_minutes: duration, notes, resolutions }
+    { event_id: _aefEventId, completion_date: date, duration_minutes: duration, notes, ae_discussions,
+      scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
   );
   if (!ok) { setError('aef-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1693,13 +2521,13 @@ function _buildAeVisitRows(prefix, aeDetails) {
     const dateStr = ae.date ? _fmtDateTime(ae.date) : 'Unknown date';
     const pauseTag = ae.training_blocked
       ? ' <span class="text-xs text-red-600 font-medium">(training blocked)</span>' : '';
-    const resumeField = ae.training_blocked
+    const resumeField = (ae.training_blocked && !_trainingPermanentlyEnded())
       ? `<div id="${prefix}-resume-wrap-${i}" class="hidden mt-2">
            <label class="block text-xs font-medium text-slate-600 mb-1">Can resume from <span class="text-red-400">*</span></label>
            <input type="date" id="${prefix}-resume-${i}" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
          </div>` : '';
     return `<div class="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-      <div class="text-sm font-medium text-slate-700">Adverse Event — ${dateStr}${pauseTag}</div>
+      <div class="text-sm font-medium text-slate-700">${ae.alias || 'Adverse Event'} — ${dateStr}${pauseTag}</div>
       <div>
         <label class="block text-xs font-medium text-slate-600 mb-1">Discussion notes</label>
         <textarea id="${prefix}-disc-${i}" rows="2" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" placeholder="What was discussed for this AE…"></textarea>
@@ -1729,7 +2557,7 @@ function _collectAeDiscussions(prefix, aeDetails) {
     const notes    = document.getElementById(`${prefix}-disc-${i}`)?.value.trim() || null;
     const resolved = document.getElementById(`${prefix}-resolved-${i}`).checked;
     let can_resume_from = null;
-    if (resolved && ae.training_blocked) {
+    if (resolved && ae.training_blocked && !_trainingPermanentlyEnded()) {
       can_resume_from = document.getElementById(`${prefix}-resume-${i}`)?.value || '';
       if (!can_resume_from)
         return { discussions: null, error: 'Can resume from date is required for resolved training-blocked events.' };
@@ -1742,18 +2570,50 @@ function _collectAeDiscussions(prefix, aeDetails) {
 function _loadAeDetails(aeIds) {
   return aeIds.map(id => {
     const ae = (_completeEventsCache || []).find(e => e.id === id);
-    return { id, date: ae?.completion_date || '', training_blocked: ae?.training_blocked || false };
+    return { id, alias: ae?.alias || '', date: ae?.completion_date || '', training_blocked: ae?.training_blocked || false };
   });
+}
+
+function _setupAeSchedulingToggles(prefix) {
+  ['visit', 'clinical'].forEach(kind => {
+    const cb        = document.getElementById(`${prefix}-schedule-${kind}`);
+    const dateWrap  = document.getElementById(`${prefix}-${kind}-date-wrap`);
+    const dateInput = document.getElementById(`${prefix}-${kind}-date`);
+    if (!cb) return;
+    cb.checked = false;
+    if (dateWrap)  dateWrap.classList.add('hidden');
+    if (dateInput) dateInput.value = '';
+    cb.onchange = () => {
+      if (dateWrap) dateWrap.classList.toggle('hidden', !cb.checked);
+      if (!cb.checked && dateInput) dateInput.value = '';
+    };
+  });
+}
+
+function _collectAeScheduling(prefix) {
+  // Returns {scheduledFollowupVisit, scheduledClinicalVisit, error}
+  const visitCb      = document.getElementById(`${prefix}-schedule-visit`);
+  const clinicalCb   = document.getElementById(`${prefix}-schedule-clinical`);
+  const visitDate    = document.getElementById(`${prefix}-visit-date`)?.value    || '';
+  const clinicalDate = document.getElementById(`${prefix}-clinical-date`)?.value || '';
+  if (visitCb?.checked    && !visitDate)    return { error: 'Follow-up visit date is required.'  };
+  if (clinicalCb?.checked && !clinicalDate) return { error: 'Clinical visit date is required.'   };
+  return {
+    scheduledFollowupVisit:  visitCb?.checked    ? visitDate    : null,
+    scheduledClinicalVisit:  clinicalCb?.checked ? clinicalDate : null,
+    error: null,
+  };
 }
 
 function _buildAeContextBanner(prefix, aeDetails) {
   const el = document.getElementById(`${prefix}-context-banner`);
   el.innerHTML = aeDetails.length
     ? aeDetails.map(ae => {
+        const label    = ae.alias || 'Adverse Event';
         const dateStr  = ae.date ? ` — ${_fmtDateTime(ae.date)}` : '';
         const pauseTag = ae.training_blocked
           ? ' <span class="text-red-600 font-medium">(training blocked)</span>' : '';
-        return `<div>Adverse Event${dateStr}${pauseTag}</div>`;
+        return `<div>${label}${dateStr}${pauseTag}</div>`;
       }).join('')
     : '<div class="text-slate-400">No adverse events found.</div>';
 }
@@ -1761,17 +2621,26 @@ function _buildAeContextBanner(prefix, aeDetails) {
 function openAeFollowupVisitModal(ev) {
   _aefvEventId   = ev.id;
   _aefvAeDetails = _loadAeDetails(ev.adverse_event_ids || []);
+  const aefvAliases = _aefvAeDetails.map(ae => ae.alias).filter(Boolean);
+  const aefvTitle = document.getElementById('aefv-title');
+  if (aefvTitle) aefvTitle.textContent = aefvAliases.length
+    ? `Adverse Event Follow-up Visit — ${aefvAliases.join(', ')}`
+    : 'Adverse Event Follow-up Visit';
   _buildAeContextBanner('aefv', _aefvAeDetails);
   document.getElementById('aefv-ae-rows').innerHTML = _buildAeVisitRows('aefv', _aefvAeDetails);
   document.getElementById('aefv-start').value = '';
   document.getElementById('aefv-end').value   = '';
   document.getElementById('aefv-notes').value = '';
+<<<<<<< urlrouted-addn
+  _setupAeSchedulingToggles('aefv');
+=======
   document.getElementById('aefv-schedule-visit').checked    = false;
   document.getElementById('aefv-visit-date-wrap').classList.add('hidden');
   document.getElementById('aefv-visit-date').value          = '';
   document.getElementById('aefv-schedule-clinical').checked = false;
   document.getElementById('aefv-clinical-date-wrap').classList.add('hidden');
   document.getElementById('aefv-clinical-date').value       = '';
+>>>>>>> urlrouted
   _resetAttachment('aefv');
   setError('aefv-error', '');
   _attachSessionEndGuard('aefv-start', 'aefv-end', 'aefv-error');
@@ -1793,17 +2662,22 @@ async function saveAeFollowupVisit() {
   if (!end)   { setError('aefv-error', 'Visit end is required.'); return; }
   if (start.split('T')[0] !== end.split('T')[0]) { setError('aefv-error', 'Start and end must be on the same date.'); return; }
   if (end <= start) { setError('aefv-error', 'Visit end must be after visit start.'); return; }
-  if (!_validateAttachment('aefv', 'aefv-error')) return;
 
   const { discussions, error } = _collectAeDiscussions('aefv', _aefvAeDetails);
   if (error) { setError('aefv-error', error); return; }
 
+<<<<<<< urlrouted-addn
+  const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aefv');
+  if (schedError) { setError('aefv-error', schedError); return; }
+  if (!_validateAttachment('aefv', 'aefv-error')) return;
+=======
   const schedVisit    = document.getElementById('aefv-schedule-visit').checked;
   const schedClinical = document.getElementById('aefv-schedule-clinical').checked;
   const visitDate     = document.getElementById('aefv-visit-date').value;
   const clinicalDate  = document.getElementById('aefv-clinical-date').value;
   if (schedVisit    && !visitDate)    { setError('aefv-error', 'Target date is required for the scheduled follow-up visit.'); return; }
   if (schedClinical && !clinicalDate) { setError('aefv-error', 'Target date is required for the scheduled clinical visit.'); return; }
+>>>>>>> urlrouted
 
   saveBtn.disabled = true;
   const payload = {
@@ -1813,7 +2687,13 @@ async function saveAeFollowupVisit() {
     scheduled_clinical_visit:  schedClinical ? clinicalDate : null,
   };
   const { ok, data } = await apiPost(
+<<<<<<< urlrouted-addn
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-followup-visit`,
+    { event_id: _aefvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions,
+      scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
+=======
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-followup-visit`, payload
+>>>>>>> urlrouted
   );
   if (!ok) { setError('aefv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1836,17 +2716,26 @@ let _aecvAeDetails = [];
 function openAeClinicalVisitModal(ev) {
   _aecvEventId   = ev.id;
   _aecvAeDetails = _loadAeDetails(ev.adverse_event_ids || []);
+  const aecvAliases = _aecvAeDetails.map(ae => ae.alias).filter(Boolean);
+  const aecvTitle = document.getElementById('aecv-title');
+  if (aecvTitle) aecvTitle.textContent = aecvAliases.length
+    ? `Adverse Event Clinical Visit — ${aecvAliases.join(', ')}`
+    : 'Adverse Event Clinical Visit';
   _buildAeContextBanner('aecv', _aecvAeDetails);
   document.getElementById('aecv-ae-rows').innerHTML = _buildAeVisitRows('aecv', _aecvAeDetails);
   document.getElementById('aecv-start').value = '';
   document.getElementById('aecv-end').value   = '';
   document.getElementById('aecv-notes').value = '';
+<<<<<<< urlrouted-addn
+  _setupAeSchedulingToggles('aecv');
+=======
   document.getElementById('aecv-schedule-visit').checked    = false;
   document.getElementById('aecv-visit-date-wrap').classList.add('hidden');
   document.getElementById('aecv-visit-date').value          = '';
   document.getElementById('aecv-schedule-clinical').checked = false;
   document.getElementById('aecv-clinical-date-wrap').classList.add('hidden');
   document.getElementById('aecv-clinical-date').value       = '';
+>>>>>>> urlrouted
   _resetAttachment('aecv');
   setError('aecv-error', '');
   _attachSessionEndGuard('aecv-start', 'aecv-end', 'aecv-error');
@@ -1868,17 +2757,22 @@ async function saveAeClinicalVisit() {
   if (!end)   { setError('aecv-error', 'Visit end is required.'); return; }
   if (start.split('T')[0] !== end.split('T')[0]) { setError('aecv-error', 'Start and end must be on the same date.'); return; }
   if (end <= start) { setError('aecv-error', 'Visit end must be after visit start.'); return; }
-  if (!_validateAttachment('aecv', 'aecv-error')) return;
 
   const { discussions, error } = _collectAeDiscussions('aecv', _aecvAeDetails);
   if (error) { setError('aecv-error', error); return; }
 
+<<<<<<< urlrouted-addn
+  const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aecv');
+  if (schedError) { setError('aecv-error', schedError); return; }
+  if (!_validateAttachment('aecv', 'aecv-error')) return;
+=======
   const schedVisit    = document.getElementById('aecv-schedule-visit').checked;
   const schedClinical = document.getElementById('aecv-schedule-clinical').checked;
   const visitDate     = document.getElementById('aecv-visit-date').value;
   const clinicalDate  = document.getElementById('aecv-clinical-date').value;
   if (schedVisit    && !visitDate)    { setError('aecv-error', 'Target date is required for the scheduled follow-up visit.'); return; }
   if (schedClinical && !clinicalDate) { setError('aecv-error', 'Target date is required for the scheduled clinical visit.'); return; }
+>>>>>>> urlrouted
 
   saveBtn.disabled = true;
   const payload = {
@@ -1888,7 +2782,13 @@ async function saveAeClinicalVisit() {
     scheduled_clinical_visit:  schedClinical ? clinicalDate : null,
   };
   const { ok, data } = await apiPost(
+<<<<<<< urlrouted-addn
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-clinical-visit`,
+    { event_id: _aecvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions,
+      scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
+=======
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-clinical-visit`, payload
+>>>>>>> urlrouted
   );
   if (!ok) { setError('aecv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -1926,14 +2826,16 @@ async function _cancelAeVisit(prefix) {
 
 // ── Resolve Robot Issue Visit modal ───────────────────────────────────────────
 
-let _rrivEventId     = null;
-let _rrivDevices     = []; // [{device_type, old_device_id, available}] — taken-back devices
+let _rrivEventId      = null;
+let _rrivDevices      = []; // [{device_type, old_device_id, available}] — taken-back devices
 let _rrivOtherDevices = []; // [{device_type, old_device_id, available}] — still-assigned devices
+let _rrivIsBp         = false;
 
 async function openResolveRobotIssueVisitModal(ev) {
   _rrivEventId      = ev.id;
   _rrivDevices      = [];
   _rrivOtherDevices = [];
+  _rrivIsBp         = !!patientData?.brokenProtocolDate;
 
   // Find the triggering robot_issue_visit in the completed events cache
   const triggeredBy = ev.triggered_by;
@@ -1977,6 +2879,15 @@ async function openResolveRobotIssueVisitModal(ev) {
     }
   };
 
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'rriv-date');
+
+  // Toggle BP mode UI
+  document.getElementById('rriv-bp-banner').classList.toggle('hidden', !_rrivIsBp);
+  document.getElementById('rriv-normal-section').classList.toggle('hidden', _rrivIsBp);
+  document.getElementById('rriv-bp-device-rows').innerHTML = '';
+
   showModal('resolve-robot-issue-visit-modal');
 
   try {
@@ -2009,16 +2920,57 @@ async function openResolveRobotIssueVisitModal(ev) {
       }
     }
 
-    if (_rrivDevices.length === 0) {
-      document.getElementById('rriv-device-rows').innerHTML =
-        '<p class="text-sm text-slate-400 italic">No taken-back devices found.</p>';
+    if (_rrivIsBp) {
+      _buildRrivBpDeviceRows();
     } else {
-      _buildRrivDeviceRows();
+      if (_rrivDevices.length === 0) {
+        document.getElementById('rriv-device-rows').innerHTML =
+          '<p class="text-sm text-slate-400 italic">No taken-back devices found.</p>';
+      } else {
+        _buildRrivDeviceRows();
+      }
+      _buildRrivOtherDeviceSection();
     }
-    _buildRrivOtherDeviceSection();
   } catch (e) {
     document.getElementById('rriv-device-rows').innerHTML =
       '<p class="text-sm text-red-500">Failed to load device info.</p>';
+  }
+}
+
+function _rrivBpFaultChange(deviceType) {
+  const checked = document.getElementById(`rriv-bp-${deviceType}-fault`)?.checked;
+  document.getElementById(`rriv-bp-${deviceType}-desc-wrap`)?.classList.toggle('hidden', !checked);
+}
+
+function _buildRrivBpDeviceRows() {
+  const container = document.getElementById('rriv-bp-device-rows');
+  container.innerHTML = '';
+  for (const dev of _rrivDevices) {
+    const label = dev.device_type.charAt(0).toUpperCase() + dev.device_type.slice(1);
+    const oldLabel = dev.old_device_id
+      ? `<span class="font-mono">${dev.old_device_id}</span>`
+      : '<span class="text-slate-400 italic">None</span>';
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+    rowDiv.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-semibold text-slate-800">${label}</span>
+        <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-medium">Taken back</span>
+        <span class="text-xs text-slate-500">Device: ${oldLabel}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" id="rriv-bp-${dev.device_type}-fault" class="w-4 h-4 accent-amber-600"
+          onchange="_rrivBpFaultChange('${dev.device_type}')">
+        <label for="rriv-bp-${dev.device_type}-fault" class="text-sm text-slate-700 cursor-pointer">This device has a fault</label>
+      </div>
+      <div id="rriv-bp-${dev.device_type}-desc-wrap" class="hidden pl-2 border-l-2 border-amber-200">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+        <textarea id="rriv-bp-${dev.device_type}-desc" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
+          placeholder="Describe the fault…"></textarea>
+      </div>
+    `;
+    container.appendChild(rowDiv);
   }
 }
 
@@ -2206,8 +3158,55 @@ async function saveResolveRobotIssueVisit() {
   const notes      = document.getElementById('rriv-notes').value.trim();
   const saveBtn    = document.getElementById('rriv-save');
 
-  if (!date)       { setError('rriv-error', 'Visit date is required.'); return; }
+  if (!date) { setError('rriv-error', 'Visit date is required.'); return; }
+
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (date.split('T')[0] > today) {
+    setError('rriv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('rriv-date').min;
+  if (minDate && date.split('T')[0] < minDate.split('T')[0]) {
+    setError('rriv-error', `Visit date must be on or after issue occurred date (${minDate.split('T')[0]}).`);
+    return;
+  }
+
+  // ── Broken-protocol mode ──────────────────────────────────────────────────
+  if (_rrivIsBp) {
+    const deviceFaults = [];
+    for (const dev of _rrivDevices) {
+      const hasFault = document.getElementById(`rriv-bp-${dev.device_type}-fault`)?.checked;
+      if (hasFault) {
+        const desc = document.getElementById(`rriv-bp-${dev.device_type}-desc`)?.value.trim() || '';
+        if (!desc) { setError('rriv-error', `Please describe the fault for ${dev.device_type}.`); return; }
+        deviceFaults.push({ device: dev.device_type, device_id: dev.old_device_id, notes: desc });
+      }
+    }
+    if (!_validateAttachment('rriv', 'rriv-error')) return;
+    saveBtn.disabled = true;
+    const { ok, data } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/resolve-robot-issue-visit`,
+      { event_id: _rrivEventId, completion_date: date, notes, device_faults: deviceFaults, broken_protocol_mode: true }
+    );
+    if (!ok) { setError('rriv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+    const { file, caption } = _readAttachment('rriv');
+    if (file) {
+      const uploaded = await _uploadAttachment(_rrivEventId, file, caption, 'rriv-error');
+      if (!uploaded) { saveBtn.disabled = false; return; }
+    }
+    hideModal('resolve-robot-issue-visit-modal');
+    saveBtn.disabled = false;
+    await loadPatientEvents();
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   if (!resumeDate) { setError('rriv-error', 'Can resume from date is required.'); return; }
+  if (resumeDate > today) {
+    setError('rriv-error', 'Can resume from date cannot be in the future.');
+    return;
+  }
 
   const deviceReplacements = [];
   for (const dev of _rrivDevices) {
@@ -2291,12 +3290,19 @@ function completedTimeline(events) {
     const d   = raw ? new Date(raw) : null;
     const dateStr = d ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }) : '—';
     const isLast  = i === events.length - 1;
+    const isDisc  = ev.protocol_event_id === 'discontinuation';
+    const circleCls = isDisc ? 'bg-red-500 ring-red-300' : 'bg-green-500 ring-green-300';
+    const nameCls   = isDisc ? 'text-sm font-bold text-red-700 leading-tight' : 'text-sm font-medium text-slate-800 leading-tight';
+    const badge     = isDisc
+      ? `<span class="inline-flex items-center gap-1 text-xs font-semibold bg-red-100 text-red-700 border border-red-200 rounded-full px-2 py-0.5 mt-1"><i class="fas fa-ban text-[10px]"></i>Discontinued</span>`
+      : '';
     return `
       <div class="relative pl-7 ${isLast ? '' : 'pb-4'}">
-        <div class="absolute left-[3px] top-1.5 w-3 h-3 rounded-full bg-green-500 border-2 border-white ring-1 ring-green-300 z-10"></div>
+        <div class="absolute left-[3px] top-1.5 w-3 h-3 rounded-full ${circleCls} border-2 border-white ring-1 z-10"></div>
         ${isLast ? '' : '<div class="absolute left-[8px] top-4 bottom-0 w-0.5 bg-green-100"></div>'}
-        <p class="text-sm font-medium text-slate-800 leading-tight">${ev.event_name}</p>
+        <p class="${nameCls}">${ev.event_name}</p>
         <p class="text-xs text-slate-400 mt-0.5">${dateStr}</p>
+        ${badge}
       </div>`;
   }).join('');
   return `<div class="relative">${items}</div>`;
@@ -2306,7 +3312,8 @@ function completedTimeline(events) {
 const EVENT_OPENERS = {
   exp_device_install:        (ev) => openDeviceSetupModal(ev.id),
   activation:                (ev) => openActivationModal(ev.id),
-  discontinuation_reminder:  (_ev) => openDiscontinueModal(),
+  discontinuation_reminder:  (ev) => openDiscontinueModal(ev),
+  discontinuation:           (ev) => openDiscontinueModal(ev),
   adl_prescription_d01:      (ev) => openAdlPrescriptionModal(ev),
   adl_prescription_d15:      (ev) => openAdlPrescriptionModal(ev),
   vcg_prescription_d01:      (ev) => openVcgPrescriptionModal(ev),
@@ -2318,9 +3325,13 @@ const EVENT_OPENERS = {
   home_visit_d15:            (ev) => openHomeVisitModal(ev),
   followup_call_d07:         (ev) => openFollowupCallModal(ev),
   followup_call_d21:         (ev) => openFollowupCallModal(ev),
-  training_completion_d29:   (ev) => openSimpleEventModal(ev),
+  training_completion_d29:   (ev) => openD29Modal(ev),
+  adl_agwatch_timing_d01:    (ev) => openAgwatchTimingModal(ev),
+  adl_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   adl_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d01:    (ev) => openAgwatchTimingModal(ev),
+  vcg_agwatch_timing_d02:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d03:    (ev) => openAgwatchTimingModal(ev),
   vcg_agwatch_timing_d15:    (ev) => openAgwatchTimingModal(ev),
   watch_record:              (ev) => openWatchRecordModal(ev),
@@ -2331,38 +3342,81 @@ const EVENT_OPENERS = {
   adverse_event_followup_visit: (ev) => openAeFollowupVisitModal(ev),
   adverse_event_clinical_visit: (ev) => openAeClinicalVisitModal(ev),
   resolve_robot_issue_visit:    (ev) => openResolveRobotIssueVisitModal(ev),
+  other_device_issue_call:      (ev) => openOtherDeviceIssueModal(ev),
+  other_device_issue_visit:     (ev) => openOtherDeviceIssueVisitModal(ev),
+  a1_assessment:                (ev) => openA1AssessmentModal(ev),
+  a2_assessment:                (ev) => openA2AssessmentModal(ev),
+  schedule_a1_call:             (ev) => openScheduleA1CallModal(ev),
+  schedule_a2_call:             (ev) => openScheduleA2CallModal(ev),
+  device_return:                (ev) => openDeviceReturnModal(ev),
 };
 
 function patientEventRow(ev) {
   const sched = ev.scheduled_date;
+  const onHold = !!ev.on_hold;
   const isActiveWindow = !!ev.active_window;
   const isOverdue   = !isActiveWindow && ev.days <= 0;
-  const isUpcoming  = !isActiveWindow && ev.days > 0;
-  // For display date: upcoming → start, active-window or past-due → end
-  const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
-  const d = new Date((refDate || '').replace(' ', 'T'));
-  const dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
+  const isUpcoming  = !isActiveWindow && (ev.days > 0 || onHold);
   const abs = Math.abs(ev.days);
-  let whenLabel;
-  if (isActiveWindow) {
-    whenLabel = ev.days === 0 ? 'Due today' : `Due now · ${ev.days}d left`;
-  } else if (isOverdue) {
-    whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+  const _fmtD = s => new Date(s.replace(' ', 'T')).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+
+  const _ASSESSMENT_PIDS = new Set(['a1_assessment', 'a2_assessment']);
+  const isAssessment = _ASSESSMENT_PIDS.has(ev.protocol_event_id);
+
+  let dateStr, whenLabel, subLabel;
+  if (isAssessment) {
+    // Bottom-left: appointment date if scheduled, otherwise "Unscheduled"
+    dateStr = ev.appointment_date ? _fmtD(ev.appointment_date) : 'Unscheduled';
+    // Window range shown below the days counter
+    const wsStr = ev.window_start ? _fmtD(ev.window_start) : null;
+    const weStr = ev.window_end   ? _fmtD(ev.window_end)   : null;
+    subLabel = wsStr && weStr ? `(${wsStr} – ${weStr})` : null;
+    // days label uses ev.days which is window_end − today
+    if (onHold) {
+      whenLabel = 'On hold';
+    } else if (isActiveWindow) {
+      whenLabel = ev.days === 0 ? 'Due today' : `${ev.days}d left`;
+    } else if (isOverdue) {
+      whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+    } else {
+      whenLabel = ev.days === 1 ? '1d left' : `${ev.days}d left`;
+    }
   } else {
-    whenLabel = `Available from ${dateStr}`;
+    subLabel = null;
+    // For display date: upcoming/on-hold → start, active-window or past-due → end
+    const refDate = Array.isArray(sched) ? (isActiveWindow || isOverdue ? sched[1] : sched[0]) : sched;
+    const d = new Date((refDate || '').replace(' ', 'T'));
+    dateStr = d && !isNaN(d) ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
+    if (onHold) {
+      whenLabel = 'On hold';
+    } else if (isActiveWindow) {
+      whenLabel = ev.days === 0 ? 'Due today' : `Due now · ${ev.days}d left`;
+    } else if (isOverdue) {
+      whenLabel = ev.days === 0 ? 'Today' : `${abs}d overdue`;
+    } else {
+      whenLabel = `Available from ${dateStr}`;
+    }
   }
-  const urgency   = isOverdue      ? 'border-red-200 bg-red-50'
+  const urgency   = isOverdue       ? 'border-red-200 bg-red-50'
                   : isActiveWindow  ? 'border-amber-200 bg-amber-50'
-                  : ev.days <= 2   ? 'border-orange-200 bg-orange-50'
+                  : ev.days <= 2    ? 'border-orange-200 bg-orange-50'
                   : 'border-slate-100 bg-slate-50';
-  const textColor = isOverdue      ? 'text-red-600'
+  const textColor = isOverdue       ? 'text-red-600'
                   : isActiveWindow  ? 'text-amber-700'
-                  : ev.days <= 2   ? 'text-orange-600'
+                  : ev.days <= 2    ? 'text-orange-600'
                   : 'text-slate-500';
 
-  const blocked   = ev.blocked_by && ev.blocked_by.length > 0;
+  const blocked   = !onHold && ev.blocked_by && ev.blocked_by.length > 0;
   const hasOpener = !!EVENT_OPENERS[ev.protocol_event_id];
-  const clickable = hasOpener && !blocked && !isUpcoming;
+  const _DISCONTINUED_VISIBLE = new Set([
+    'adverse_event', 'adverse_event_followup',
+    'adverse_event_followup_visit', 'adverse_event_clinical_visit',
+    'a1_assessment', 'a2_assessment',
+    'schedule_a1_call', 'schedule_a2_call',
+  ]);
+  const discontinuedBlocks = _patientDiscontinued && !_DISCONTINUED_VISIBLE.has(ev.protocol_event_id);
+  // Assessment events are always clickable (cancel appointment or complete early).
+  const clickable = hasOpener && !blocked && (isAssessment || !isUpcoming) && !onHold && !discontinuedBlocks;
   const tag       = clickable ? 'a' : 'div';
   const href      = clickable ? `href="?action=${ev.id}"` : '';
   const extra     = clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : '';
@@ -2372,6 +3426,13 @@ function patientEventRow(ev) {
     : `<div class="font-medium text-slate-800 text-sm truncate">${ev.event_name}</div>`;
   const rightLabel = blocked
     ? `<span class="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">Needs: ${ev.blocked_by[0]}</span>`
+    : onHold
+    ? `<span class="text-xs font-semibold text-slate-600 bg-white border border-slate-300 rounded-full px-2 py-0.5 whitespace-nowrap flex-shrink-0">On hold</span>`
+    : isAssessment && subLabel
+    ? `<div class="flex flex-col items-end gap-0.5 flex-shrink-0">
+         <span class="text-xs font-semibold ${textColor} whitespace-nowrap">${whenLabel}</span>
+         <span class="text-xs text-slate-400 whitespace-nowrap">${subLabel}</span>
+       </div>`
     : `<span class="text-xs font-semibold ${textColor} whitespace-nowrap flex-shrink-0">${whenLabel}</span>`;
 
   return `
@@ -2380,7 +3441,9 @@ function patientEventRow(ev) {
         ${eventName}
         ${subtitle}
       </div>
-      ${rightLabel}
+      <div class="flex items-center gap-1 flex-shrink-0">
+        ${rightLabel}
+      </div>
     </${tag}>`;
 }
 
@@ -2400,45 +3463,114 @@ async function openDeviceSetupModal(ev) {
   document.getElementById('device-setup-demo').checked = false;
   document.getElementById('device-setup-notes').value = '';
   setError('device-setup-error', '');
+  document.getElementById('device-setup-sim-warning')?.classList.add('hidden');
+  window._setupSimExpiry = {};
   _resetAttachment('device-setup');
   _attachDateGuard('device-setup-date', 'device-setup-error');
 
   const plutoSel = document.getElementById('device-setup-pluto');
   const marsSel  = document.getElementById('device-setup-mars');
+  const modemSel = document.getElementById('device-setup-modem');
+  const laptopSel = document.getElementById('device-setup-laptop');
+  const simSel = document.getElementById('device-setup-sim');
+
   plutoSel.innerHTML = '<option value="">Loading…</option>';
   marsSel.innerHTML  = '<option value="">Loading…</option>';
+  modemSel.innerHTML = '<option value="">Loading…</option>';
+  laptopSel.innerHTML = '<option value="">Loading…</option>';
+  simSel.innerHTML = '<option value="">Loading…</option>';
   showModal('device-setup-modal');
 
   try {
     const res = await fetch(`/api/patients/${PATIENT_HOMER_ID}/available-devices`);
-    const { pluto, mars } = await res.json();
+    if (!res.ok) throw new Error('Failed to fetch devices');
+    const data = await res.json();
+    const { pluto, mars, modem, laptop, sims } = data;
+
     plutoSel.innerHTML = '<option value="">Select Pluto device…</option>' +
       pluto.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
     marsSel.innerHTML  = '<option value="">Select Mars device…</option>' +
       mars.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    modemSel.innerHTML = '<option value="">Select Modem device…</option>' +
+      modem.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    laptopSel.innerHTML = '<option value="">Select Laptop device…</option>' +
+      laptop.map(d => `<option value="${d.id}">${d.id} (${d.serial})</option>`).join('');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const simList = (sims || []).filter(s => {
+      if (s.removal_date) return false; // exclude retired
+      if (!s.expiryDate) return true;
+      const exp = new Date(s.expiryDate); exp.setHours(0,0,0,0);
+      return exp >= today; // exclude expired
+    });
+    window._setupSimExpiry = {};
+    simList.forEach(s => {
+      if (s.expiryDate) {
+        const exp = new Date(s.expiryDate); exp.setHours(0,0,0,0);
+        const days = Math.round((exp - today) / 86400000);
+        window._setupSimExpiry[s.id] = days;
+      }
+    });
+    simSel.innerHTML = '<option value="">Select SIM card…</option>' +
+      simList.map(s => {
+        const days = window._setupSimExpiry[s.id];
+        const warn = days !== undefined && days <= 5 ? ` ⚠ Expires in ${days}d` : '';
+        return `<option value="${s.id}">${s.phoneNumber || s.id}${warn}</option>`;
+      }).join('');
+
     if (!pluto.length) plutoSel.innerHTML = '<option value="">No devices available</option>';
     if (!mars.length)  marsSel.innerHTML  = '<option value="">No devices available</option>';
+    if (!modem.length) modemSel.innerHTML = '<option value="">No devices available</option>';
+    if (!laptop.length) laptopSel.innerHTML = '<option value="">No devices available</option>';
+    if (!simList.length) simSel.innerHTML = '<option value="">No SIM cards available</option>';
   } catch (e) {
+    console.error('Error loading devices:', e);
     setError('device-setup-error', 'Failed to load available devices.');
   }
 }
 
+function onSetupSimChange() {
+  const sel = document.getElementById('device-setup-sim');
+  const warn = document.getElementById('device-setup-sim-warning');
+  const warnText = document.getElementById('device-setup-sim-warning-text');
+  const days = window._setupSimExpiry?.[sel.value];
+  if (days !== undefined && days <= 5) {
+    warnText.textContent = days === 0
+      ? 'This SIM expires today. Recharge before assigning.'
+      : `This SIM expires in ${days} day${days === 1 ? '' : 's'}. Consider recharging first.`;
+    warn.classList.remove('hidden');
+  } else {
+    warn.classList.add('hidden');
+  }
+}
+
 async function submitDeviceSetup() {
+  // Check for date validation errors before proceeding
+  if (_hasDateValidationErrors(['device-setup-error'])) {
+    setError('device-setup-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const eventDate = document.getElementById('device-setup-date').value;
   const plutoId   = document.getElementById('device-setup-pluto').value;
   const marsId    = document.getElementById('device-setup-mars').value;
+  const modemId   = document.getElementById('device-setup-modem').value;
+  const laptopId  = document.getElementById('device-setup-laptop').value;
+  const simId     = document.getElementById('device-setup-sim').value;
   const demoDone  = document.getElementById('device-setup-demo').checked;
   const notes     = document.getElementById('device-setup-notes').value;
 
   if (!eventDate) { setError('device-setup-error', 'Please select an event date.'); return; }
   if (!plutoId)   { setError('device-setup-error', 'Please select a Pluto device.'); return; }
   if (!marsId)    { setError('device-setup-error', 'Please select a Mars device.'); return; }
+  if (!modemId)   { setError('device-setup-error', 'Please select a Modem device.'); return; }
+  if (!laptopId)  { setError('device-setup-error', 'Please select a Laptop device.'); return; }
+  if (!simId)     { setError('device-setup-error', 'Please select a SIM card.'); return; }
   if (!_validateAttachment('device-setup', 'device-setup-error')) return;
 
   setLoading('device-setup-submit', true);
   const { ok, data } = await apiPost(
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/exp_device_install`,
-    { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, demoDone, notes }
+    { event_id: _deviceSetupEventId, eventDate, plutoId, marsId, modemId, laptopId, simId, demoDone, notes }
   );
   if (!ok) { setLoading('device-setup-submit', false); setError('device-setup-error', data.error || 'Failed to complete device setup.'); return; }
 
@@ -2456,46 +3588,183 @@ async function submitDeviceSetup() {
 
 let _activationEventId = null;
 
+let _activationTrainingCompleted = null; // null = not chosen, true = yes, false = no
+let _actNoPrimaryReason          = null;
+
 function _actToggleSubform(type) {
-  const noteId  = { adverse: 'act-adverse-note', robot: 'act-robot-note', watch: 'act-watch-note' }[type];
+  const noteId = {
+    adverse: 'act-adverse-note', robot: 'act-robot-note',
+    watch: 'act-watch-note', 'other-device': 'act-other-device-note',
+  }[type];
   const checked = document.getElementById(`act-trigger-${type}`).checked;
-  document.getElementById(noteId).classList.toggle('hidden', !checked);
+  if (noteId) document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+function _actNoToggleSubform(type) {
+  const noteId = {
+    adverse: 'act-no-adverse-note', robot: 'act-no-robot-note',
+    'other-device': 'act-no-other-device-note',
+  }[type];
+  const checked = document.getElementById(`act-no-trigger-${type}`).checked;
+  if (noteId) document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+function _setActNoPrimaryReason(reason) {
+  _actNoPrimaryReason = reason;
+  const pills = {
+    adverse_event:           'act-no-reason-ae',
+    robot_issue_call:        'act-no-reason-robot',
+    other_device_issue_call: 'act-no-reason-odi',
+    other:                   'act-no-reason-other',
+  };
+  const active   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactive = ['border-slate-200', 'text-slate-600'];
+  Object.entries(pills).forEach(([r, id]) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const on = r === reason;
+    active.forEach(c => btn.classList.toggle(c, on));
+    inactive.forEach(c => btn.classList.toggle(c, !on));
+  });
+
+  const isExp = patientData?.group === 'experimental';
+  const wrapVisibility = {
+    'act-no-trigger-ae-wrap':           true,
+    'act-no-trigger-robot-wrap':        isExp,
+    'act-no-trigger-other-device-wrap': isExp,
+  };
+  const reasonToWrap = {
+    adverse_event:           'act-no-trigger-ae-wrap',
+    robot_issue_call:        'act-no-trigger-robot-wrap',
+    other_device_issue_call: 'act-no-trigger-other-device-wrap',
+  };
+  Object.entries(wrapVisibility).forEach(([wrapId, groupVisible]) => {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    const isPrimary = reasonToWrap[reason] === wrapId;
+    wrap.classList.toggle('hidden', !groupVisible || isPrimary);
+    if (isPrimary || !groupVisible) {
+      const cbId = wrapId === 'act-no-trigger-ae-wrap'    ? 'act-no-trigger-adverse'
+                 : wrapId === 'act-no-trigger-robot-wrap' ? 'act-no-trigger-robot'
+                 :                                          'act-no-trigger-other-device';
+      const cb = document.getElementById(cbId);
+      if (cb && cb.checked) { cb.checked = false; _actNoToggleSubform(cbId.replace('act-no-trigger-', '')); }
+    }
+  });
+
+  const notesLabel = document.getElementById('act-no-notes-star');
+  if (notesLabel) notesLabel.textContent = reason === 'other' ? '* — explain why training was not completed' : '';
+  setError('activation-error', '');
+}
+
+function _setActivationTrainingToggle(val) {
+  _activationTrainingCompleted = val;
+  const yesBtn = document.getElementById('act-train-yes-btn');
+  const noBtn  = document.getElementById('act-train-no-btn');
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  if (val === true) {
+    yesBtn.classList.add(...activeClass);    yesBtn.classList.remove(...inactiveClass);
+    noBtn.classList.remove(...activeClass);  noBtn.classList.add(...inactiveClass);
+  } else {
+    noBtn.classList.add(...activeClass);     noBtn.classList.remove(...inactiveClass);
+    yesBtn.classList.remove(...activeClass); yesBtn.classList.add(...inactiveClass);
+  }
+  document.getElementById('act-training-yes-section').classList.toggle('hidden', val !== true);
+  document.getElementById('act-training-no-section').classList.toggle('hidden', val !== false);
+  document.getElementById('activation-submit').textContent = val === false ? 'Log Attempt' : 'Activate Patient';
 }
 
 async function openActivationModal(evId) {
-  _activationEventId = typeof evId === 'object' ? evId.id : evId;
+  _activationEventId        = typeof evId === 'object' ? evId.id : evId;
+  _activationTrainingCompleted = null;
   document.getElementById('activation-homer-id').textContent = PATIENT_HOMER_ID;
+
+  // Reset toggle to unselected state
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  ['act-train-yes-btn', 'act-train-no-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    btn.classList.remove(...activeClass);
+    btn.classList.add(...inactiveClass);
+  });
+  document.getElementById('act-training-yes-section').classList.add('hidden');
+  document.getElementById('act-training-no-section').classList.add('hidden');
+  document.getElementById('activation-submit').textContent = 'Activate Patient';
+
+  // Reset YES section fields
   document.getElementById('activation-session-start').value = '';
   document.getElementById('activation-session-end').value   = '';
   document.getElementById('activation-notes').value         = '';
-  setError('activation-error', '');
   _resetAttachment('activation');
   _attachDateGuard('activation-session-start', 'activation-error');
   _attachSessionEndGuard('activation-session-start', 'activation-session-end', 'activation-error');
 
-  // Show VCG group row for control patients only
+  const isControl      = patientData?.group === 'control';
+  const isExperimental = patientData?.group === 'experimental';
   const vcgRow = document.getElementById('activation-vcg-group-row');
   const vcgSel = document.getElementById('activation-vcg-group');
-  const isControl = patientData?.group === 'control';
   if (vcgRow) vcgRow.classList.toggle('hidden', !isControl);
   if (vcgSel) vcgSel.value = '';
 
-  // Reset triggered section
-  ['adverse', 'robot', 'watch'].forEach(type => {
+  ['adverse', 'robot', 'watch', 'other-device'].forEach(type => {
     const cb = document.getElementById(`act-trigger-${type}`);
     if (cb) { cb.checked = false; _actToggleSubform(type); }
   });
-  document.getElementById('act-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
-  // Watch record toggle only shown once a watch is assigned (seeded at activation, but triggered_by is for post-seed)
-  // Per spec: "Watch Record toggle only shown if at least one watch is currently assigned."
-  // At activation time, no watch is assigned yet, so we hide it.
+  document.getElementById('act-trigger-robot-wrap').classList.toggle('hidden', !isExperimental);
   document.getElementById('act-trigger-watch-wrap').classList.toggle('hidden',
     !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
+  document.getElementById('act-trigger-other-device-wrap').classList.toggle('hidden', !isExperimental);
 
+  // Reset NO section fields
+  _actNoPrimaryReason = null;
+  document.getElementById('act-no-visit-date').value = '';
+  document.getElementById('act-no-notes').value      = '';
+  _attachDateGuard('act-no-visit-date', 'activation-error');
+
+  // Reset primary reason pills
+  const pillActive   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const pillInactive = ['border-slate-200', 'text-slate-600'];
+  ['act-no-reason-ae', 'act-no-reason-robot', 'act-no-reason-odi', 'act-no-reason-other'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.classList.remove(...pillActive);
+    btn.classList.add(...pillInactive);
+  });
+  document.getElementById('act-no-reason-robot').classList.toggle('hidden', !isExperimental);
+  document.getElementById('act-no-reason-odi').classList.toggle('hidden', !isExperimental);
+  const actNoNotesLabel = document.getElementById('act-no-notes-star');
+  if (actNoNotesLabel) actNoNotesLabel.textContent = '';
+
+  // Reset secondary triggers
+  ['adverse', 'robot', 'other-device'].forEach(type => {
+    const cb = document.getElementById(`act-no-trigger-${type}`);
+    if (cb) { cb.checked = false; _actNoToggleSubform(type); }
+  });
+  document.getElementById('act-no-trigger-ae-wrap').classList.remove('hidden');
+  document.getElementById('act-no-trigger-robot-wrap').classList.toggle('hidden', !isExperimental);
+  document.getElementById('act-no-trigger-other-device-wrap').classList.toggle('hidden', !isExperimental);
+
+  setError('activation-error', '');
   showModal('activation-modal');
 }
 
 async function submitActivation() {
+  if (_activationTrainingCompleted === null) {
+    setError('activation-error', 'Please indicate whether training was completed.');
+    return;
+  }
+  if (_activationTrainingCompleted === false) {
+    await _submitActivationAttempt();
+    return;
+  }
+
+  // ── YES path: full activation ────────────────────────────────────────
+  if (_hasDateValidationErrors(['activation-error'])) {
+    setError('activation-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const sessionStart = document.getElementById('activation-session-start').value;
   const sessionEnd   = document.getElementById('activation-session-end').value;
   const notes        = document.getElementById('activation-notes').value;
@@ -2521,7 +3790,6 @@ async function submitActivation() {
   }
   if (!_validateAttachment('activation', 'activation-error')) return;
 
-  // Collect triggered events
   const triggered = [];
   if (document.getElementById('act-trigger-adverse').checked)
     triggered.push({ type: 'adverse_event' });
@@ -2531,6 +3799,9 @@ async function submitActivation() {
   if (!document.getElementById('act-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('act-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (!document.getElementById('act-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('act-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
   body.triggered = triggered;
 
   setLoading('activation-submit', true);
@@ -2545,6 +3816,49 @@ async function submitActivation() {
   setLoading('activation-submit', false);
   hideModal('activation-modal');
   await loadPatient();
+  loadPatientEvents();
+}
+
+async function _submitActivationAttempt() {
+  if (_hasDateValidationErrors(['activation-error'])) {
+    setError('activation-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
+  const visitDate = document.getElementById('act-no-visit-date').value;
+  const notes     = document.getElementById('act-no-notes').value.trim();
+
+  if (!_actNoPrimaryReason) { setError('activation-error', 'Please select a reason why training was not completed.'); return; }
+  if (!visitDate) { setError('activation-error', 'Visit date is required.'); return; }
+  if (_actNoPrimaryReason === 'other' && !notes) { setError('activation-error', 'Notes are required when reason is "Other".'); return; }
+
+  // Primary reason (non-"other") auto-creates its stub with training_stopped: true
+  const triggered = [];
+  if (_actNoPrimaryReason !== 'other') {
+    triggered.push({ type: _actNoPrimaryReason, training_stopped: true });
+  }
+  // Secondary triggers (matching trigger wrap is already hidden, so no duplicates)
+  if (_actNoPrimaryReason !== 'adverse_event' &&
+      document.getElementById('act-no-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (_actNoPrimaryReason !== 'robot_issue_call' &&
+      !document.getElementById('act-no-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('act-no-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue_call' });
+  if (_actNoPrimaryReason !== 'other_device_issue_call' &&
+      !document.getElementById('act-no-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('act-no-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
+
+  setLoading('activation-submit', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/log-activation-attempt`,
+    { visitDate, notes, primaryReason: _actNoPrimaryReason, triggered }
+  );
+  if (!ok) { setLoading('activation-submit', false); setError('activation-error', data.error || 'Failed to log activation attempt.'); return; }
+
+  setLoading('activation-submit', false);
+  hideModal('activation-modal');
   loadPatientEvents();
 }
 
@@ -2905,19 +4219,31 @@ async function submitVcgPrescription() {
 let _adlTabLoaded = false;
 let _vcgTabLoaded = false;
 
-function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath, timingData) {
-  const exMap     = Object.fromEntries(exercises.map(e => [e.id, e]));
-  const timingMap = Object.fromEntries(
-    (timingData?.timings || []).map(t => [t.exercise_id, t])
+function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPath, timingDataList) {
+  const exMap = Object.fromEntries(exercises.map(e => [e.id, e]));
+
+  // Build a timing map for each timing dataset in the array
+  const timingMaps = (timingDataList || []).map(td =>
+    td ? Object.fromEntries((td.timings || []).map(t => [t.exercise_id, t])) : {}
   );
+
+  // Determine day labels based on array length (e.g., ['D01','D02','D03'] or ['D15'])
+  const dayTags = timingDataList?.length === 1 ? ['D15'] : ['D01', 'D02', 'D03'];
+
   const rows = (data.prescribed_exercises || []).map((pe, i) => {
     const name = exMap[pe.exercise_id]?.name || pe.exercise_id;
     const notesHtml = pe.notes
       ? `<p class="text-xs text-slate-400 mt-0.5 italic">${pe.notes}</p>` : '';
-    const t = timingMap[pe.exercise_id];
-    const timingHtml = t
-      ? `<p class="text-xs font-mono text-slate-400 mt-0.5">${t.start ? t.start.split('T')[1] : '—'} → ${t.end ? t.end.split('T')[1] : '—'}</p>`
-      : '';
+
+    // Build timing HTML for each day
+    const timingLines = timingMaps.map((tmap, idx) => {
+      const t = tmap[pe.exercise_id];
+      if (!t) return '';
+      const start = t.start ? t.start.split('T')[1].slice(0, 5) : '—';
+      const end = t.end ? t.end.split('T')[1].slice(0, 5) : '—';
+      return `<p class="text-xs font-mono text-slate-400">${dayTags[idx]}: ${start} → ${end}</p>`;
+    }).join('');
+
     return `
       <div class="flex items-start gap-3 py-2.5 border-b border-slate-100 last:border-b-0">
         <span class="w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5">${i + 1}</span>
@@ -2927,7 +4253,7 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
         </div>
         <div class="flex-shrink-0 text-right">
           <p class="text-xs font-medium text-slate-500 whitespace-nowrap">${pe.blocks} blocks × ${pe.repetitions} reps</p>
-          ${timingHtml}
+          ${timingLines}
         </div>
       </div>`;
   }).join('');
@@ -2964,22 +4290,414 @@ function _prescriptionCard(data, exercises, dayLabel, headerClass, attachmentPat
     </div>`;
 }
 
+// ── Devices Tab (activity graph) ──────────────────────────────────────────────
+
+let _devicesTabLoaded = false;
+let _devicesCharts = {};  // device → Chart instance
+
+async function loadDevicesTab() {
+  if (_devicesTabLoaded) return;
+  _devicesTabLoaded = true;
+  const container = document.getElementById('devices-tab-content');
+  if (!container) return;
+
+  // Only show graph for experimental patients
+  if (patientData?.group !== 'experimental') {
+    container.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-slate-400">
+      <i class="fas fa-mobile-alt text-3xl mb-3"></i>
+      <p class="font-medium">No robot devices for control patients</p>
+    </div>`;
+    return;
+  }
+
+  await _renderDeviceGraphs(container);
+}
+
+async function _renderDeviceGraphs(container) {
+  container.innerHTML = `<div class="flex items-center justify-center py-12 text-slate-400">
+    <i class="fas fa-spinner fa-spin mr-2"></i><span>Loading device data…</span></div>`;
+
+  try {
+    const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/activity`);
+    const data = await res.json();
+    const hasData = data.pluto || data.mars;
+
+    const syncBtn = `<button onclick="_syncActivity()"
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-700 text-white rounded-lg hover:bg-slate-800 active:scale-95 transition-all">
+      <i class="fas fa-sync-alt text-[10px]"></i> Sync from S3
+    </button>`;
+
+    if (!hasData) {
+      container.innerHTML = `
+        <div class="flex items-center justify-end mb-4">${syncBtn}</div>
+        <div class="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-2xl border border-slate-200">
+          <i class="fas fa-chart-line text-4xl mb-4 opacity-40"></i>
+          <p class="font-semibold text-slate-500">No device data available yet</p>
+          <p class="text-sm mt-1 text-slate-400">Use "Sync from S3" to download the latest data.</p>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = `<div class="flex items-center justify-end mb-1">${syncBtn}</div>`;
+
+    const DEVICE_CFG = {
+      pluto: { label: 'Pluto',  color: '#2563eb', bg: '#eff6ff', accent: '#1d4ed8', iconColor: 'text-blue-600',  badgeBg: 'bg-blue-50',  badgeBorder: 'border-blue-200',  badgeText: 'text-blue-700'  },
+      mars:  { label: 'Mars',   color: '#059669', bg: '#f0fdf4', accent: '#047857', iconColor: 'text-emerald-600', badgeBg: 'bg-emerald-50', badgeBorder: 'border-emerald-200', badgeText: 'text-emerald-700' },
+    };
+
+    for (const [deviceKey, cfg] of Object.entries(DEVICE_CFG)) {
+      const d = data[deviceKey];
+      if (!d) continue;
+
+      // Stat: days with data, total minutes, avg
+      const actualDays = d.data.filter(v => v !== null && v > 0).length;
+      const totalMins  = d.data.reduce((s, v) => s + (v || 0), 0).toFixed(1);
+      const avgMins    = actualDays ? (totalMins / actualDays).toFixed(1) : '—';
+
+      // Check if there are actual CSV date files available for this device (dates_with_data)
+      // If dates_with_data is missing, empty, or not an array, show "No data available"
+      const hasDatesWithData = Array.isArray(d.dates_with_data) && d.dates_with_data.length > 0;
+      if (!hasDatesWithData) {
+        const card = document.createElement('div');
+        card.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
+        card.innerHTML = `
+          <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-100" style="background:${cfg.bg}">
+            <div class="w-9 h-9 rounded-xl flex items-center justify-center shadow-sm" style="background:${cfg.color}">
+              <i class="fas fa-robot text-white text-sm"></i>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-slate-800">${cfg.label}</h3>
+              <p class="text-xs text-slate-500">${d.start_date} → ${d.end_date} &nbsp;·&nbsp; Training side: <strong>${d.training_side}</strong></p>
+            </div>
+          </div>
+          <div class="flex flex-col items-center justify-center py-16 text-slate-400 bg-white">
+            <i class="fas fa-inbox text-3xl mb-3 opacity-40"></i>
+            <p class="font-semibold text-slate-500">No data available</p>
+            <p class="text-sm mt-1 text-slate-400">No activity recorded for this device during this period.</p>
+          </div>`;
+        container.appendChild(card);
+        continue;
+      }
+
+      // Prescribed mechanism chips
+      const mechChips = Object.entries(d.prescribed || {}).map(([mech, mins]) =>
+        `<div class="flex flex-col items-center px-3 py-2 rounded-xl border ${cfg.badgeBorder} ${cfg.badgeBg} min-w-[56px]">
+          <span class="text-[11px] font-bold ${cfg.badgeText} tracking-wide">${mech}</span>
+          <span class="text-base font-bold ${cfg.badgeText} leading-tight">${mins}</span>
+          <span class="text-[10px] text-slate-400 -mt-0.5">min/day</span>
+        </div>`
+      ).join('');
+
+      const mismatchBanner = d.mismatch ? `
+        <!-- Mismatch warning -->
+        <div class="flex items-start gap-3 px-6 py-3 bg-orange-50 border-b border-orange-200">
+          <i class="fas fa-exclamation-triangle text-orange-500 mt-0.5 shrink-0"></i>
+          <div>
+            <p class="text-sm font-semibold text-orange-800">Config date mismatch (${d.mismatch.diff_days > 0 ? '+' : ''}${d.mismatch.diff_days} day${Math.abs(d.mismatch.diff_days) !== 1 ? 's' : ''})</p>
+            <p class="text-xs text-orange-600 mt-0.5">Config StartDate: <strong>${d.mismatch.config_start}</strong> · Activation date: <strong>${d.mismatch.activation}</strong>. The graph window may not align with actual therapy dates.</p>
+          </div>
+        </div>` : '';
+
+      const card = document.createElement('div');
+      card.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden';
+      card.innerHTML = `
+        <!-- Card header -->
+        <div class="flex items-center gap-3 px-6 py-4 border-b border-slate-100" style="background:${cfg.bg}">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center shadow-sm" style="background:${cfg.color}">
+            <i class="fas fa-robot text-white text-sm"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-slate-800">${cfg.label}</h3>
+            <p class="text-xs text-slate-500">${d.start_date} → ${d.end_date} &nbsp;·&nbsp; Training side: <strong>${d.training_side}</strong></p>
+          </div>
+          <div class="ml-auto flex items-center gap-4 text-right">
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Total</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${totalMins}<span class="text-xs font-normal text-slate-400 ml-0.5">min</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Avg/day</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${avgMins}<span class="text-xs font-normal text-slate-400 ml-0.5">min</span></p>
+            </div>
+            <div>
+              <p class="text-xs text-slate-400 leading-none">Active days</p>
+              <p class="text-lg font-bold leading-tight" style="color:${cfg.color}">${actualDays}<span class="text-xs font-normal text-slate-400 ml-0.5">/ 30</span></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Prescription row -->
+        <div class="px-6 py-4 border-b border-slate-100 bg-slate-50">
+          <div class="flex items-center gap-3 mb-3">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Prescribed Mechanisms</span>
+            <span class="text-xs text-slate-400">Daily target: <strong style="color:${cfg.color}">${d.target} min total</strong></span>
+          </div>
+          <div class="flex flex-wrap gap-2">${mechChips}</div>
+        </div>
+
+        ${mismatchBanner}
+
+        <!-- Chart -->
+        <div class="px-6 pt-5 pb-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Daily Activity</span>
+            <div class="flex items-center gap-4 text-xs text-slate-400">
+              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${cfg.color}"></span>Actual</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-0" style="border-top:2px dotted #f87171"></span>Target</span>
+              <span class="flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full border-2" style="background:${cfg.color};border-color:white;box-shadow:0 0 0 2px ${cfg.color}"></span>Hover dot for breakdown</span>
+            </div>
+          </div>
+          <div style="position:relative;height:220px">
+            <canvas id="devices-chart-${deviceKey}"></canvas>
+          </div>
+        </div>
+
+        <!-- Breakdown panel (hidden until dot clicked) -->
+        <div id="devices-detail-${deviceKey}" class="hidden border-t border-slate-100"></div>`;
+
+      container.appendChild(card);
+
+      const ctx = document.getElementById(`devices-chart-${deviceKey}`).getContext('2d');
+      if (_devicesCharts[deviceKey]) _devicesCharts[deviceKey].destroy();
+
+      // Format labels as short dates for display
+      const shortLabels = d.labels.map(lbl => {
+        const dt = new Date(lbl);
+        return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+      });
+
+      _devicesCharts[deviceKey] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: shortLabels,
+          datasets: [
+            {
+              label: 'Session (min)',
+              data: d.data,
+              borderColor: cfg.color,
+              backgroundColor: cfg.color + '22',
+              borderWidth: 2.5,
+              pointRadius: d.labels.map(lbl => d.dates_with_data.includes(lbl) ? 5 : 3),
+              pointBackgroundColor: d.labels.map(lbl =>
+                d.dates_with_data.includes(lbl) ? cfg.color : cfg.color + '88'),
+              pointHoverRadius: 7,
+              fill: true,
+              tension: 0.3,
+              spanGaps: false,
+              order: 2,
+            },
+            {
+              label: 'Target',
+              data: d.labels.map(() => d.target),
+              borderColor: '#f87171',
+              borderDash: [2, 2],
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false,
+              tension: 0,
+              order: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              padding: 10,
+              titleFont: { size: 12 },
+              bodyFont: { size: 12 },
+              callbacks: {
+                title: items => d.labels[items[0].dataIndex],
+                label: c => c.dataset.label === 'Target'
+                  ? `  Target: ${c.parsed.y} min`
+                  : `  Actual: ${c.parsed.y !== null ? c.parsed.y + ' min' : 'No session'}`,
+                afterBody: () => {
+                  // Hide the dot info comment box completely
+                  return [];
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { font: { size: 10 }, maxRotation: 45, minRotation: 0 },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              ticks: { font: { size: 11 }, stepSize: 10 },
+              title: { display: true, text: 'Minutes', font: { size: 11 }, color: '#94a3b8' },
+            },
+          },
+          onHover: (evt, elements) => {
+            if (!elements || !elements.length) {
+              // Hide detail panel when not hovering
+              const panel = document.getElementById(`devices-detail-${deviceKey}`);
+              if (panel) panel.classList.add('hidden');
+              return;
+            }
+
+            const hoveredElement = elements.find(el => el.datasetIndex === 0);
+            if (!hoveredElement) return;
+
+            const idx = hoveredElement.index;
+            if (idx === undefined || idx === null) return;
+
+            const hoveredDate = d.labels[idx];
+            const actualValue = d.data[idx];
+            const displayDate = shortLabels[idx];
+
+            // Show detail only if the date has a data file (CSV exists in Dates folder)
+            if (d.dates_with_data.includes(hoveredDate)) {
+              _loadDeviceDetail(hoveredDate, deviceKey, cfg.label, cfg.color, displayDate);
+            } else {
+              // Show "No data available" message when hovering over a point with no data
+              const panel = document.getElementById(`devices-detail-${deviceKey}`);
+              if (panel) {
+                panel.classList.remove('hidden');
+                panel.innerHTML = `
+                  <div class="px-6 py-6 flex flex-col items-center justify-center">
+                    <i class="fas fa-inbox text-2xl mb-2 text-slate-300"></i>
+                    <p class="text-sm text-slate-400 text-center">No data available for ${displayDate || hoveredDate}</p>
+                  </div>`;
+              }
+            }
+          },
+        },
+      });
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="flex items-center justify-center py-12 text-red-500 text-sm gap-2">
+      <i class="fas fa-exclamation-circle"></i> Failed to load device data.
+    </div>`;
+  }
+}
+
+async function _syncActivity() {
+  const container = document.getElementById('devices-tab-content');
+  if (!container) return;
+  container.innerHTML = `<div class="flex items-center justify-center py-10 text-slate-400">
+    <i class="fas fa-sync-alt fa-spin mr-2"></i><span>Syncing from S3…</span></div>`;
+  try {
+    const r = await fetch(`/api/patients/${PATIENT_HOMER_ID}/sync-activity`, { method: 'POST' });
+    const res = await r.json();
+    if (!r.ok || res.error) {
+      container.innerHTML = `<div class="flex flex-col items-center justify-center py-16 text-slate-400">
+        <i class="fas fa-exclamation-circle text-2xl mb-3 text-red-400"></i>
+        <p class="text-sm text-red-500">${res.error || 'Sync failed'}</p>
+        <button onclick="_renderDeviceGraphs(document.getElementById('devices-tab-content'))"
+          class="mt-4 px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200">
+          Try viewing existing data
+        </button>
+      </div>`;
+      return;
+    }
+    _devicesTabLoaded = false;
+    Object.values(_devicesCharts).forEach(c => c.destroy());
+    _devicesCharts = {};
+    await _renderDeviceGraphs(container);
+  } catch (e) {
+    container.innerHTML = `<div class="flex items-center justify-center py-10 text-red-500 text-sm">
+      <i class="fas fa-exclamation-circle mr-2"></i>Network error during sync.
+    </div>`;
+  }
+}
+
+async function _loadDeviceDetail(date, deviceKey, deviceLabel, color, displayDate) {
+  const panel = document.getElementById(`devices-detail-${deviceKey}`);
+  if (!panel) {
+    console.warn(`Panel not found: devices-detail-${deviceKey}`);
+    return;
+  }
+
+  panel.classList.remove('hidden');
+  panel.innerHTML = `<div class="flex items-center justify-center py-6 text-slate-400 text-sm">
+    <i class="fas fa-spinner fa-spin mr-2"></i>Loading…</div>`;
+
+  try {
+    // Ensure date is in YYYY-MM-DD format
+    let dateParam = date;
+    if (date && typeof date === 'string' && date.includes('T')) {
+      // Extract just the date part if it's ISO datetime
+      dateParam = date.split('T')[0];
+    }
+
+    const url = `/api/patients/${PATIENT_HOMER_ID}/activity/${dateParam}/${deviceKey}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      console.error('API error:', res.status, errorData);
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${errorData.error || 'No data available'}</p>`;
+      return;
+    }
+
+    const d = await res.json();
+    if (d.error) {
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">${d.error}</p>`;
+      return;
+    }
+
+    if (!d.mechanisms || !d.durations || !d.target) {
+      console.warn('Invalid data structure:', d);
+      panel.innerHTML = `<p class="text-sm text-slate-400 text-center py-4">Invalid data structure</p>`;
+      return;
+    }
+
+    const maxVal = Math.max(...d.durations, ...d.target, 1);
+    const bars = d.mechanisms.map((mech, i) => {
+      const used    = d.durations[i] || 0;
+      const tgt     = d.target[i]    || 0;
+      const pctUsed = maxVal > 0 ? Math.round((used / maxVal) * 100) : 0;
+      const pctTgt  = maxVal > 0 ? Math.round((tgt  / maxVal) * 100) : 0;
+      return `<div class="flex items-center gap-3">
+        <span class="w-14 text-right text-xs font-medium text-slate-600 shrink-0">${mech}</span>
+        <div class="flex-1 relative h-5 bg-slate-100 rounded-full overflow-hidden">
+          <div class="absolute inset-y-0 left-0 rounded-full" style="width:${pctUsed}%;background:${color}88"></div>
+          <div class="absolute inset-y-0 w-0.5 bg-red-400" style="left:${pctTgt}%"></div>
+        </div>
+        <span class="text-xs text-slate-500 w-28 shrink-0">${used} / ${tgt} min</span>
+      </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <div class="px-6 py-4">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-xs font-semibold text-slate-600">${deviceLabel} — ${displayDate || date}</p>
+          <span class="text-xs text-slate-400">Bar = used &nbsp;|&nbsp; <span class="text-red-400 font-bold">|</span> = target</span>
+        </div>
+        <div class="space-y-2">${bars}</div>
+      </div>`;
+  } catch (e) {
+    console.error('Failed to load device detail:', e);
+    panel.innerHTML = `<p class="text-sm text-red-400 text-center py-4">Failed to load breakdown: ${e.message}</p>`;
+  }
+}
+
 async function loadAdlTab() {
   if (_adlTabLoaded) return;
   const container = document.getElementById('adl-tab-content');
   if (!container) return;
 
   try {
-    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t01Res, t02Res, t03Res, t15Res] = await Promise.all([
       fetch('/api/exercises?type=adl'),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/adl_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d01`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d02`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d03`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/adl_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t01       = t01Res.ok ? await t01Res.json() : null;
+    const t02       = t02Res.ok ? await t02Res.json() : null;
     const t03       = t03Res.ok ? await t03Res.json() : null;
     const t15       = t15Res.ok ? await t15Res.json() : null;
 
@@ -2993,8 +4711,8 @@ async function loadAdlTab() {
       const printD1  = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d01');
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-600 text-white',  printD15?.attachment, t15);
-      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-blue-400 text-white', printD1?.attachment,  t03);
+      if (d15) html += _prescriptionCard(d15, exercises, 'Day 15 Revision',    'bg-blue-600 text-white',  printD15?.attachment, [t15]);
+      if (d1)  html += _prescriptionCard(d1,  exercises, 'Day 1 Prescription', 'bg-blue-400 text-white', printD1?.attachment,  [t01, t02, t03]);
       container.innerHTML = html;
     }
     _adlTabLoaded = true;
@@ -3012,16 +4730,20 @@ async function loadVcgTab() {
   const groupLabel = VCG_GROUP_LABELS[vcgGroup] || vcgGroup || '';
 
   try {
-    const [exRes, d1Res, d15Res, t03Res, t15Res] = await Promise.all([
+    const [exRes, d1Res, d15Res, t01Res, t02Res, t03Res, t15Res] = await Promise.all([
       fetch(`/api/exercises?type=vcg&group=${vcgGroup}`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d01`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/prescription/vcg_prescription_d15`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d01`),
+      fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d02`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d03`),
       fetch(`/api/patients/${PATIENT_HOMER_ID}/agwatch-timing/vcg_agwatch_timing_d15`),
     ]);
     const exercises = exRes.ok  ? await exRes.json()  : [];
     const d1        = d1Res.ok  ? await d1Res.json()  : null;
     const d15       = d15Res.ok ? await d15Res.json() : null;
+    const t01       = t01Res.ok ? await t01Res.json() : null;
+    const t02       = t02Res.ok ? await t02Res.json() : null;
     const t03       = t03Res.ok ? await t03Res.json() : null;
     const t15       = t15Res.ok ? await t15Res.json() : null;
 
@@ -3036,8 +4758,8 @@ async function loadVcgTab() {
       const printD15 = (_completeEventsCache || []).find(e => e.protocol_event_id === 'prescription_printout_d15');
       const suffix = groupLabel ? ` · <span class="font-normal opacity-70">${groupLabel}</span>` : '';
       let html = '';
-      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-600 text-white',  printD15?.attachment, t15);
-      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-teal-400 text-white', printD1?.attachment,  t03);
+      if (d15) html += _prescriptionCard(d15, exercises, `Day 15 Revision${suffix}`,    'bg-teal-600 text-white',  printD15?.attachment, [t15]);
+      if (d1)  html += _prescriptionCard(d1,  exercises, `Day 1 Prescription${suffix}`, 'bg-teal-400 text-white', printD1?.attachment,  [t01, t02, t03]);
       container.innerHTML = html;
     }
     _vcgTabLoaded = true;
@@ -3048,12 +4770,31 @@ async function loadVcgTab() {
 
 // ── Prescription Printout modal ────────────────────────────────────────────────
 
+const SITE_LANGUAGES = {
+  'Ranipet':  ['english', 'tamil', 'telugu'],
+  'Manipal':  ['english', 'kannada', 'hindi'],
+  'Ludhiana': ['english', 'punjabi', 'hindi'],
+};
+
+const LANGUAGE_NAMES = {
+  'english':  'English',
+  'tamil':    'தமிழ்',
+  'telugu':   'తెలుగు',
+  'kannada':  'ಕನ್ನಡ',
+  'hindi':    'हिंदी',
+  'punjabi':  'ਪੰਜਾਬੀ',
+};
+
 let _prescPrintoutEventId     = null;
 let _prescPrintoutProtocolId  = null;
+let _prescPrintoutLanguage    = 'english';
 
 function openPrescriptionPrintoutModal(ev) {
   _prescPrintoutEventId    = typeof ev === 'object' ? ev.id : ev;
   _prescPrintoutProtocolId = typeof ev === 'object' ? ev.protocol_event_id : null;
+  // After setting _prescPrintoutLanguage = 'english', disable buttons
+document.getElementById('prescription-printout-print').disabled = true;
+document.getElementById('prescription-printout-save').disabled = true;
 
   const title = _prescPrintoutProtocolId === 'prescription_printout_d15'
     ? 'Revised Therapy Prescription Printout'
@@ -3062,41 +4803,591 @@ function openPrescriptionPrintoutModal(ev) {
   document.getElementById('prescription-printout-title').textContent = title;
   document.getElementById('prescription-printout-homer-id').textContent = PATIENT_HOMER_ID;
   setError('prescription-printout-error', '');
+
+  // Create language buttons
+  const buttonsContainer = document.getElementById('presc-printout-language-buttons');
+  buttonsContainer.innerHTML = '';
+  const languages = SITE_LANGUAGES[PATIENT_PLACE] || ['english'];
+
+  languages.forEach(lang => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.language = lang;
+    btn.textContent = LANGUAGE_NAMES[lang] || lang;
+    btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                    'bg-slate-200 text-slate-700 hover:bg-slate-300';
+    btn.onclick = () => selectPrescriptionLanguage(lang);
+    buttonsContainer.appendChild(btn);
+  });
+
+  _prescPrintoutLanguage = 'english';
+
+  // Reset preview
+  document.getElementById('presc-printout-preview').innerHTML =
+    '<p class="text-slate-400 text-center py-12 text-sm">Select a language to preview the pamphlet</p>';
+
   showModal('prescription-printout-modal');
 }
 
-async function _completePrescriptionPrintout() {
-  const { ok, data } = await apiPost(
-    `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
-    { event_id: _prescPrintoutEventId, protocol_event_id: _prescPrintoutProtocolId }
-  );
-  if (!ok) {
-    setError('prescription-printout-error', data.error || 'Failed to record printout.');
-    return null;
+function selectPrescriptionLanguage(lang) {
+  _prescPrintoutLanguage = lang;
+
+  // Update button styles
+  document.querySelectorAll('#presc-printout-language-buttons button').forEach(btn => {
+    if (btn.dataset.language === lang) {
+      btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                      'bg-blue-500 text-white hover:bg-blue-600';
+    } else {
+      btn.className = 'px-6 py-2 rounded-full text-sm font-medium transition-all ' +
+                      'bg-slate-200 text-slate-700 hover:bg-slate-300';
+    }
+  });
+     // After loading pamphlet, enable buttons
+  document.getElementById('prescription-printout-print').disabled = false;
+  document.getElementById('prescription-printout-save').disabled = false;
+
+  _loadPrescriptionPamphlet();
+}
+
+async function _loadPrescriptionPamphlet() {
+  if (!_prescPrintoutLanguage) {
+    document.getElementById('presc-printout-preview').innerHTML =
+      '<p class="text-slate-400 text-center py-12 text-sm">Select a language to preview the pamphlet</p>';
+    return;
   }
-  hideModal('prescription-printout-modal');
-  loadPatientEvents();
-  return data.attachment;
+
+  const preview = document.getElementById('presc-printout-preview');
+  preview.innerHTML = '<p class="text-slate-400 text-center py-12 text-sm">Loading pamphlet...</p>';
+
+  try {
+    const res = await fetch(
+      `/api/patients/${PATIENT_HOMER_ID}/prescription-pamphlet?event_id=${_prescPrintoutEventId}&language=${_prescPrintoutLanguage}`
+    );
+    if (!res.ok) {
+      preview.innerHTML = '<p class="text-red-500 text-center py-12 text-sm">Failed to load pamphlet</p>';
+      return;
+    }
+    const html = await res.text();
+    preview.innerHTML = html;
+  } catch (e) {
+    preview.innerHTML = '<p class="text-red-500 text-center py-12 text-sm">Error loading pamphlet</p>';
+  }
 }
 
 async function savePrescriptionPrintout() {
+  if (!_prescPrintoutLanguage) {
+    setError('prescription-printout-error', 'Please select a language first');
+    return;
+  }
+
   setLoading('prescription-printout-save', true);
-  const attachment = await _completePrescriptionPrintout();
-  setLoading('prescription-printout-save', false);
-  if (attachment) {
-    const a = document.createElement('a');
-    a.href = `/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`;
-    a.download = attachment.split('/').pop();
-    a.click();
+
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+    const htmlContent = previewDiv.innerHTML;
+
+    // Send HTML to server for server-side PDF generation with Puppeteer
+    const { ok: renderOk, data: renderData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/generate-prescription-pdf`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+        html_content: htmlContent,
+        caption: `Exercise Prescription Printout (${_prescPrintoutLanguage})`
+      }
+    );
+
+    if (!renderOk) {
+      throw new Error(renderData.error || 'Failed to generate PDF');
+    }
+
+    // Success: close modal and refresh events
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to generate and save PDF');
+  } finally {
+    setLoading('prescription-printout-save', false);
   }
 }
 
-async function printPrescriptionPrintout() {
-  setLoading('prescription-printout-print', true);
-  const attachment = await _completePrescriptionPrintout();
-  setLoading('prescription-printout-print', false);
-  if (attachment) {
-    window.open(`/api/patients/${PATIENT_HOMER_ID}/attachment/${attachment}`, '_blank');
+/* OLD CLIENT-SIDE PDF CODE (DISABLED - using server-side rendering now)
+async function savePrescriptionPrintout_OLD() {
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor - DISABLED (old code below for reference)
+    let jsPDFConstructor = null;
+    if (window.jsPDF && typeof window.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF;
+    } else if (window.jspdf && typeof window.jspdf === 'function') {
+      jsPDFConstructor = window.jspdf;
+    } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF.jsPDF;
+    } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
+      jsPDFConstructor = window.jspdf.jsPDF;
+    } else if (window.jsPDF && window.jsPDF.default && typeof window.jsPDF.default === 'function') {
+      jsPDFConstructor = window.jsPDF.default;
+    } else if (window.jspdf && window.jspdf.default && typeof window.jspdf.default === 'function') {
+      jsPDFConstructor = window.jspdf.default;
+    }
+
+    if (!jsPDFConstructor) {
+      throw new Error('jsPDF library not loaded. Please refresh the page and try again.');
+    }
+
+    console.log('Capturing full preview content...');
+
+    // Temporarily remove height constraints to capture all content
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
+
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
+
+    // Capture with html2canvas
+    const canvas = await html2canvas(previewDiv, {
+      scale: 1.5,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
+    });
+
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
+
+}
+*/
+
+// ── Custom PDF Dialog Modal ────────────────────────────────────────
+
+let _pdfDialogSettings = {
+  pageSize: 'a4',
+  scale: 100,
+  margins: 10
+};
+
+function openPrescriptionPdfDialog() {
+  if (!_prescPrintoutLanguage) {
+    setError('prescription-printout-error', 'Please select a language first');
+    return;
+  }
+
+  console.log('Opening PDF dialog...');
+
+  // Reset settings to defaults
+  _pdfDialogSettings = {
+    pageSize: 'a4',
+    scale: 100,
+    margins: 10
+  };
+
+  // Update UI
+  document.getElementById('pdf-page-size').value = 'a4';
+  document.getElementById('pdf-scale').value = 100;
+  document.getElementById('pdf-scale-value').textContent = '100%';
+  document.getElementById('pdf-margins').value = 10;
+
+  // Show preview
+  updatePdfPreview();
+
+  // Setup event listeners
+  document.getElementById('pdf-page-size').addEventListener('change', (e) => {
+    _pdfDialogSettings.pageSize = e.target.value;
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-scale').addEventListener('input', (e) => {
+    _pdfDialogSettings.scale = parseInt(e.target.value);
+    document.getElementById('pdf-scale-value').textContent = _pdfDialogSettings.scale + '%';
+    updatePdfPreview();
+  });
+
+  document.getElementById('pdf-margins').addEventListener('change', (e) => {
+    _pdfDialogSettings.margins = parseInt(e.target.value) || 10;
+  });
+
+  // Show modal
+  showModal('prescription-pdf-dialog-modal');
+}
+
+function updatePdfPreview() {
+  const previewDiv = document.getElementById('presc-printout-preview');
+  const previewPane = document.getElementById('pdf-preview-pane');
+
+  if (!previewDiv) return;
+
+  // Clone preview content with current scale
+  const clone = previewDiv.cloneNode(true);
+  clone.style.transform = `scale(${_pdfDialogSettings.scale / 100})`;
+  clone.style.transformOrigin = 'top left';
+  clone.style.width = `${100 / (_pdfDialogSettings.scale / 100)}%`;
+
+  previewPane.innerHTML = '';
+  previewPane.appendChild(clone);
+}
+
+async function savePrescriptionPdfFromDialog() {
+  setLoading('prescription-pdf-save-dialog', true);
+
+  try {
+    const previewDiv = document.getElementById('presc-printout-preview');
+
+    // Get jsPDF constructor
+    let jsPDFConstructor = null;
+    if (window.jsPDF && typeof window.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF;
+    } else if (window.jsPDF && window.jsPDF.jsPDF && typeof window.jsPDF.jsPDF === 'function') {
+      jsPDFConstructor = window.jsPDF.jsPDF;
+    } else if (window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF === 'function') {
+      jsPDFConstructor = window.jspdf.jsPDF;
+    }
+
+    if (!jsPDFConstructor) {
+      throw new Error('jsPDF library not loaded. Please refresh and try again.');
+    }
+
+    console.log('Generating PDF with user settings...');
+
+    // Prepare element for capture
+    const originalMaxHeight = previewDiv.style.maxHeight;
+    const originalOverflow = previewDiv.style.overflowY;
+    const originalHeight = previewDiv.style.height;
+
+    previewDiv.style.maxHeight = 'none';
+    previewDiv.style.overflowY = 'visible';
+    previewDiv.style.height = 'auto';
+
+    // Capture with html2canvas using user's scale setting
+    const canvas = await html2canvas(previewDiv, {
+      scale: _pdfDialogSettings.scale / 100,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      windowHeight: previewDiv.scrollHeight
+    });
+
+    // Restore original styles
+    previewDiv.style.maxHeight = originalMaxHeight;
+    previewDiv.style.overflowY = originalOverflow;
+    previewDiv.style.height = originalHeight;
+
+    console.log('Canvas created, creating PDF...');
+
+    // Get page dimensions based on user settings
+    const pageSizes = {
+      a4: { width: 210, height: 297 },
+      letter: { width: 216, height: 279 },
+      a3: { width: 297, height: 420 }
+    };
+    const pageSize = pageSizes[_pdfDialogSettings.pageSize];
+    const margins = _pdfDialogSettings.margins;
+    const contentWidth = pageSize.width - (margins * 2);
+
+    // Create PDF
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDFConstructor('p', 'mm', _pdfDialogSettings.pageSize);
+
+    const imgHeight = (canvas.height * contentWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = margins;
+
+    pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+    heightLeft -= (pageSize.height - (margins * 2));
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', margins, position, contentWidth, imgHeight);
+      heightLeft -= (pageSize.height - (margins * 2));
+    }
+
+    const pdfBlob = pdf.output('blob');
+    console.log('PDF created, size:', pdfBlob.size, 'bytes');
+
+    // Mark event complete
+    console.log('Marking event as complete...');
+    const { ok: completeOk, data: completeData } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/prescription-printout`,
+      {
+        event_id: _prescPrintoutEventId,
+        protocol_event_id: _prescPrintoutProtocolId,
+        language: _prescPrintoutLanguage,
+      }
+    );
+
+    if (!completeOk) {
+      throw new Error(completeData.error || 'Failed to mark event complete');
+    }
+
+    console.log('Event marked complete, uploading PDF...');
+
+    // Upload attachment
+    const formData = new FormData();
+    formData.append('event_id', _prescPrintoutEventId);
+    formData.append('caption', `Exercise Prescription Printout (${_prescPrintoutLanguage})`);
+    formData.append('file', pdfBlob, `prescription_${_prescPrintoutLanguage}.pdf`);
+
+    const uploadRes = await fetch(`/api/patients/${PATIENT_HOMER_ID}/upload-attachment`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error('Failed to upload PDF');
+    }
+
+    console.log('PDF uploaded successfully');
+
+    // Success
+    hideModal('prescription-pdf-dialog-modal');
+    hideModal('prescription-printout-modal');
+    loadPatientEvents();
+
+  } catch (err) {
+    setError('prescription-printout-error', err.message || 'Failed to save PDF');
+  } finally {
+    setLoading('prescription-pdf-save-dialog', false);
+  }
+}
+
+async function printPrescriptionPamphlet() {
+  const previewDiv = document.getElementById('presc-printout-preview');
+  // Check if we need to save first
+    const event = _completeEventsCache?.find(e => e.id === _prescPrintoutEventId);
+    if (!event) {
+      // Event not yet complete - auto save first
+      await savePrescriptionPrintout();
+      // After save, proceed with print
+    }
+  // Check if pamphlet is loaded
+  if (!previewDiv.innerHTML || previewDiv.innerHTML.includes('Select a language') || previewDiv.innerHTML.includes('Loading')) {
+    setError('prescription-printout-error', 'Please select a language and wait for the preview to load first');
+    return;
+  }
+
+  // Create a new window for printing
+  const printWindow = window.open('', '', 'height=800,width=1000');
+
+  if (!printWindow) {
+    setError('prescription-printout-error', 'Pop-up window was blocked. Please allow pop-ups for this site.');
+    return;
+  }
+
+  // Get the HTML content from the preview
+  const htmlContent = previewDiv.innerHTML;
+
+  // Build the complete HTML document
+  const printHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Exercise Prescription Pamphlet</title>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+Devanagari:wght@400;500;600&family=Noto+Sans+Tamil:wght@400;500;600&family=Noto+Sans+Telugu:wght@400;500;600&family=Noto+Sans+Kannada:wght@400;500;600&family=Noto+Sans+Gurmukhi:wght@400;500;600&display=swap');
+
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+
+        body {
+          font-family: 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Kannada', 'Noto Sans Gurmukhi', sans-serif;
+          line-height: 1.5;
+          color: #333;
+          padding: 20px;
+        }
+
+        @media print {
+          body { padding: 0; }
+          .container { max-width: 100%; padding: 0; }
+          .exercise-card { page-break-inside: avoid; page-break-before: always; }
+          .exercise-card.first-exercise { page-break-before: auto; }
+        }
+      </style>
+    </head>
+    <body>
+      ${htmlContent}
+    </body>
+    </html>
+  `;
+
+  // Write content directly to the new window (document.write is most reliable for print windows)
+  // @ts-ignore - document.write is deprecated but necessary for reliable print window population
+  printWindow.document.write(printHtml);
+  printWindow.document.close();
+
+  // Trigger print dialog immediately after content is written
+  setTimeout(() => {
+    printWindow.focus();
+    printWindow.print();
+  }, 100);
+ 
+}
+
+// ── Training Completion D29 modal ─────────────────────────────────────────────
+
+let _d29EventId = null;
+
+function openD29Modal(ev) {
+  _d29EventId = ev.id;
+  const nowStr = new Date().toISOString().slice(0, 16);
+  const dateEl = document.getElementById('d29-date');
+  dateEl.max   = nowStr;
+  dateEl.value = '';
+  document.getElementById('d29-notes').value          = '';
+  document.getElementById('d29-feedback-file').value  = '';
+  document.getElementById('d29-feedback-notes').value = '';
+  document.getElementById('d29-audio-file').value     = '';
+  document.getElementById('d29-scan-file').value      = '';
+  document.getElementById('d29-qual-recruited').value = '';
+  document.getElementById('d29-qual-uploads').classList.add('hidden');
+  _d29UpdateFeedbackLabel();
+  _d29StyleQualBtn(null);
+  _resetAttachment('d29');
+  const errEl = document.getElementById('d29-error');
+  errEl.classList.add('hidden');
+  errEl.textContent = '';
+
+  // Attach guard first (sets max=today), then override with window bounds.
+  _attachDateGuard('d29-a1-appointment', 'd29-error');
+  const a1ApptInput = document.getElementById('d29-a1-appointment');
+  if (a1ApptInput) {
+    a1ApptInput.value = '';
+    const a1Win = _assessmentWindows['a1_assessment'];
+    if (a1Win) { a1ApptInput.min = a1Win.start; a1ApptInput.max = a1Win.end; }
+    else        { a1ApptInput.removeAttribute('min'); a1ApptInput.removeAttribute('max'); }
+  }
+
+  // Show AE discussion section only when an adverse_event_followup stub exists.
+  const hasAefStub = eventsCache.some(e => e.protocol_event_id === 'adverse_event_followup');
+  const aeSect = document.getElementById('d29-ae-section');
+  if (aeSect) aeSect.classList.toggle('hidden', !hasAefStub);
+  document.getElementById('d29-ae-discussed').value = '';
+  _d29StyleAeBtn(null);
+
+  document.getElementById('d29-feedback-file').onchange = _d29UpdateFeedbackLabel;
+  _attachDateGuard('d29-date', 'd29-error');
+  showModal('d29-modal');
+}
+
+function _d29UpdateFeedbackLabel() {
+  const hasFile = document.getElementById('d29-feedback-file').files.length > 0;
+  const lbl     = document.getElementById('d29-feedback-notes-label');
+  lbl.innerHTML = hasFile
+    ? 'Notes <span class="text-slate-400 font-normal">(optional)</span>'
+    : 'Notes <span class="text-red-500">*</span><span class="text-slate-400 font-normal"> (required — no PDF uploaded)</span>';
+}
+
+function _d29SelectQual(recruited) {
+  document.getElementById('d29-qual-recruited').value = recruited ? 'true' : 'false';
+  document.getElementById('d29-qual-uploads').classList.toggle('hidden', !recruited);
+  if (!recruited) {
+    document.getElementById('d29-audio-file').value = '';
+    document.getElementById('d29-scan-file').value  = '';
+  }
+  _d29StyleQualBtn(recruited);
+}
+
+function _d29StyleQualBtn(recruited) {
+  const yes = document.getElementById('d29-qual-yes-btn');
+  const no  = document.getElementById('d29-qual-no-btn');
+  const base     = 'flex-1 px-3 py-2 border rounded-xl text-sm font-medium transition-colors';
+  const active   = 'bg-blue-600 border-blue-600 text-white';
+  const inactive = 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100';
+  yes.className = `${base} ${recruited === true  ? active : inactive}`;
+  no.className  = `${base} ${recruited === false ? active : inactive}`;
+}
+
+function _d29SelectAeDiscussed(discussed) {
+  document.getElementById('d29-ae-discussed').value = discussed ? 'yes' : 'no';
+  _d29StyleAeBtn(discussed);
+}
+
+function _d29StyleAeBtn(discussed) {
+  const yes = document.getElementById('d29-ae-yes-btn');
+  const no  = document.getElementById('d29-ae-no-btn');
+  if (!yes || !no) return;
+  const base     = 'flex-1 px-3 py-2 border rounded-xl text-sm font-medium transition-colors';
+  const active   = 'bg-amber-600 border-amber-600 text-white';
+  const inactive = 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100';
+  yes.className = `${base} ${discussed === true  ? active : inactive}`;
+  no.className  = `${base} ${discussed === false ? active : inactive}`;
+}
+
+async function saveD29() {
+  const err = document.getElementById('d29-error');
+  const setErr = (msg) => { err.textContent = msg; err.classList.remove('hidden'); };
+  err.classList.add('hidden');
+
+  const completionDate = document.getElementById('d29-date').value;
+  if (!completionDate) return setErr('Visit date is required.');
+
+  const feedbackFile  = document.getElementById('d29-feedback-file').files[0] || null;
+  const feedbackNotes = document.getElementById('d29-feedback-notes').value.trim();
+  if (!feedbackFile && !feedbackNotes) return setErr('Feedback form: upload the PDF or provide notes.');
+
+  const qualStr = document.getElementById('d29-qual-recruited').value;
+  if (!qualStr) return setErr('Please indicate whether the patient was recruited for qualitative analysis.');
+  const qualRecruited = qualStr === 'true';
+
+  let audioFile = null;
+  let scanFile  = null;
+  if (qualRecruited) {
+    audioFile = document.getElementById('d29-audio-file').files[0] || null;
+    if (!audioFile) return setErr('Audio recording is required for qualitative analysis.');
+    scanFile = document.getElementById('d29-scan-file').files[0] || null;
+  }
+
+  const { file: genericFile, caption: genericCaption } = _readAttachment('d29');
+  if (genericFile && !genericCaption) return setErr('Please describe the attachment before saving.');
+
+  const aeSectVisible = !document.getElementById('d29-ae-section')?.classList.contains('hidden');
+  const aeDiscussed   = document.getElementById('d29-ae-discussed').value;
+  if (aeSectVisible && !aeDiscussed) return setErr('Please indicate whether any AE-related discussion happened during this visit.');
+
+  const form = new FormData();
+  form.append('event_id',              _d29EventId || '');
+  form.append('completion_date',       completionDate);
+  form.append('notes',                 document.getElementById('d29-notes').value.trim());
+  const a1Appt = (document.getElementById('d29-a1-appointment')?.value || '').trim();
+  if (a1Appt) form.append('a1_appointment_date', a1Appt);
+  form.append('feedback_form_notes',   feedbackNotes);
+  form.append('qualitative_recruited', qualStr);
+  if (feedbackFile) form.append('feedback_form_file', feedbackFile);
+  if (audioFile)    form.append('qualitative_audio_file', audioFile);
+  if (scanFile)     form.append('qualitative_scan_file', scanFile);
+  if (genericFile)  { form.append('attachment_file', genericFile); form.append('attachment_caption', genericCaption); }
+
+  const btn = document.querySelector('#d29-modal button[onclick="saveD29()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  try {
+    const res  = await fetch(`/api/patients/${PATIENT_HOMER_ID}/complete-event/training-completion`, { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) return setErr(data.error || 'Save failed.');
+    hideModal('d29-modal');
+    await loadPatientEvents();
+    if (aeDiscussed === 'yes') {
+      const aefStub = eventsCache.find(e => e.protocol_event_id === 'adverse_event_followup');
+      if (aefStub) openAdverseEventFollowupModal(aefStub);
+    }
+  } catch (e) {
+    setErr('Network error. Please try again.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   }
 }
 
@@ -3212,51 +5503,223 @@ async function saveSimpleEvent() {
 
 // ── Home Visit modal ───────────────────────────────────────────────────────────
 
-let _hvEventId         = null;
-let _hvProtocolEventId = null;
+let _hvEventId           = null;
+let _hvProtocolEventId   = null;
+let _hvTrainingCompleted = null;
+let _hvNoPrimaryReason   = null;
+
+const _HV_ACTIVATION_OFFSETS = { home_visit_d02: 1, home_visit_d03: 2 };
 
 function _hvToggleSubform(type) {
-  const noteId  = { adverse: 'hv-adverse-note', robot: 'hv-robot-note', watch: 'hv-watch-note' }[type];
+  const map = {
+    adverse:         'hv-adverse-note',
+    robot:           'hv-robot-note',
+    watch:           'hv-watch-note',
+    'other-device':  'hv-other-device-note',
+  };
+  const noteId = map[type];
+  if (!noteId) return;
   const checked = document.getElementById(`hv-trigger-${type}`).checked;
   document.getElementById(noteId).classList.toggle('hidden', !checked);
 }
 
-const _HV_ACTIVATION_OFFSETS = { home_visit_d02: 1, home_visit_d03: 2 };
+function _hvNoToggleSubform(type) {
+  const map = {
+    adverse:        'hv-no-adverse-note',
+    robot:          'hv-no-robot-note',
+    'other-device': 'hv-no-other-device-note',
+  };
+  const noteId = map[type];
+  if (!noteId) return;
+  const checked = document.getElementById(`hv-no-trigger-${type}`).checked;
+  document.getElementById(noteId).classList.toggle('hidden', !checked);
+}
+
+function _setHvNoPrimaryReason(reason) {
+  _hvNoPrimaryReason = reason;
+  const pills = {
+    adverse_event:           'hv-no-reason-ae',
+    robot_issue_call:        'hv-no-reason-robot',
+    other_device_issue_call: 'hv-no-reason-odi',
+    other:                   'hv-no-reason-other',
+  };
+  const active   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactive = ['border-slate-200', 'text-slate-600'];
+  Object.entries(pills).forEach(([r, id]) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const on = r === reason;
+    active.forEach(c => btn.classList.toggle(c, on));
+    inactive.forEach(c => btn.classList.toggle(c, !on));
+  });
+
+  const isExp = patientData?.group === 'experimental';
+  // Reset secondary trigger wraps to group-based visibility, then hide primary's wrap
+  const wrapVisibility = {
+    'hv-no-trigger-ae-wrap':           true,
+    'hv-no-trigger-robot-wrap':        isExp,
+    'hv-no-trigger-other-device-wrap': isExp,
+  };
+  const reasonToWrap = {
+    adverse_event:           'hv-no-trigger-ae-wrap',
+    robot_issue_call:        'hv-no-trigger-robot-wrap',
+    other_device_issue_call: 'hv-no-trigger-other-device-wrap',
+  };
+  Object.entries(wrapVisibility).forEach(([wrapId, groupVisible]) => {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    const isPrimary = reasonToWrap[reason] === wrapId;
+    wrap.classList.toggle('hidden', !groupVisible || isPrimary);
+    if (isPrimary || !groupVisible) {
+      // Uncheck and collapse the hidden trigger
+      const cbId = wrapId === 'hv-no-trigger-ae-wrap'    ? 'hv-no-trigger-adverse'
+                 : wrapId === 'hv-no-trigger-robot-wrap' ? 'hv-no-trigger-robot'
+                 :                                          'hv-no-trigger-other-device';
+      const cb = document.getElementById(cbId);
+      if (cb && cb.checked) { cb.checked = false; _hvNoToggleSubform(cbId.replace('hv-no-trigger-', '')); }
+    }
+  });
+
+  // Notes label: required asterisk only for 'other'
+  const notesLabel = document.getElementById('hv-no-notes-star');
+  if (notesLabel) notesLabel.textContent = reason === 'other' ? '* — explain why training was not completed' : '';
+  setError('hv-error', '');
+}
+
+function _setHvTrainingToggle(val) {
+  _hvTrainingCompleted = val;
+  const yesBtn = document.getElementById('hv-train-yes-btn');
+  const noBtn  = document.getElementById('hv-train-no-btn');
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  if (val === true) {
+    yesBtn.classList.add(...activeClass);    yesBtn.classList.remove(...inactiveClass);
+    noBtn.classList.remove(...activeClass);  noBtn.classList.add(...inactiveClass);
+  } else {
+    noBtn.classList.add(...activeClass);     noBtn.classList.remove(...inactiveClass);
+    yesBtn.classList.remove(...activeClass); yesBtn.classList.add(...inactiveClass);
+  }
+  document.getElementById('hv-yes-section').classList.toggle('hidden', val !== true);
+  document.getElementById('hv-no-section').classList.toggle('hidden',  val !== false);
+  setError('hv-error', '');
+}
 
 function openHomeVisitModal(ev) {
-  _hvEventId         = ev.id;
-  _hvProtocolEventId = ev.protocol_event_id;
+  _hvEventId           = ev.id;
+  _hvProtocolEventId   = ev.protocol_event_id;
+  _hvTrainingCompleted = null;
   document.getElementById('hv-title').textContent = ev.event_name;
-  document.getElementById('hv-notes').value       = '';
-  _resetAttachment('hv');
   setError('hv-error', '');
 
-  // Pre-fill session start for d02/d03
-  const offset = _HV_ACTIVATION_OFFSETS[ev.protocol_event_id];
-  if (offset !== undefined && patientData?.activationDate) {
-    const d = new Date(patientData.activationDate);
-    d.setDate(d.getDate() + offset);
-    document.getElementById('hv-session-start').value = d.toISOString().slice(0, 10) + 'T09:00';
-  } else {
-    document.getElementById('hv-session-start').value = '';
-  }
-  document.getElementById('hv-session-end').value = '';
+  // Reset toggle to unselected
+  const activeClass   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const inactiveClass = ['border-slate-200', 'text-slate-600'];
+  ['hv-train-yes-btn', 'hv-train-no-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.classList.remove(...activeClass);
+    btn.classList.add(...inactiveClass);
+  });
+  document.getElementById('hv-yes-section').classList.add('hidden');
+  document.getElementById('hv-no-section').classList.add('hidden');
+
+  // ── YES section setup ──
+  document.getElementById('hv-notes').value = '';
+  _resetAttachment('hv');
+
+  const offset   = _HV_ACTIVATION_OFFSETS[ev.protocol_event_id];
+  const isLocked = offset !== undefined && patientData?.activationDate;
+  // Attach guards first, then override min/max for locked dates (guards set max=now by default)
   _attachDateGuard('hv-session-start', 'hv-error');
   _attachSessionEndGuard('hv-session-start', 'hv-session-end', 'hv-error');
 
-  // Reset triggered section
-  ['adverse', 'robot', 'watch'].forEach(type => {
+  if (isLocked) {
+    const d = new Date(patientData.activationDate);
+    d.setDate(d.getDate() + offset);
+    const lockedDate = d.toISOString().slice(0, 10);
+    document.getElementById('hv-session-start').value = lockedDate + 'T09:00';
+    document.getElementById('hv-session-end').value   = lockedDate + 'T10:00';
+    document.getElementById('hv-session-start').min   = lockedDate + 'T00:00';
+    document.getElementById('hv-session-start').max   = lockedDate + 'T23:59';
+    document.getElementById('hv-session-end').min     = lockedDate + 'T00:00';
+    document.getElementById('hv-session-end').max     = lockedDate + 'T23:59';
+    document.getElementById('hv-date-lock-label').textContent = `Day ${offset + 1} (${lockedDate})`;
+    document.getElementById('hv-date-lock-note').classList.remove('hidden');
+  } else {
+    document.getElementById('hv-session-start').value = '';
+    document.getElementById('hv-session-end').value   = '';
+    document.getElementById('hv-session-start').min   = '';
+    document.getElementById('hv-session-start').max   = '';
+    document.getElementById('hv-session-end').min     = '';
+    document.getElementById('hv-session-end').max     = '';
+    document.getElementById('hv-date-lock-note').classList.add('hidden');
+  }
+
+  ['adverse', 'robot', 'watch', 'other-device'].forEach(type => {
     const cb = document.getElementById(`hv-trigger-${type}`);
     if (cb) { cb.checked = false; _hvToggleSubform(type); }
   });
-  document.getElementById('hv-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
+  const isExpHv = patientData?.group === 'experimental';
+  document.getElementById('hv-trigger-robot-wrap').classList.toggle('hidden', !isExpHv);
+  document.getElementById('hv-trigger-other-device-wrap').classList.toggle('hidden', !isExpHv);
   document.getElementById('hv-trigger-watch-wrap').classList.toggle('hidden',
     !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
+
+  // ── NO section setup ──
+  _hvNoPrimaryReason = null;
+  document.getElementById('hv-no-notes').value      = '';
+  document.getElementById('hv-no-visit-date').value = '';
+  _resetAttachment('hv-no');
+  _attachDateGuard('hv-no-visit-date', 'hv-error');
+
+  const isD0203 = ev.protocol_event_id === 'home_visit_d02' || ev.protocol_event_id === 'home_visit_d03';
+  document.getElementById('hv-no-broken-protocol-warn').classList.toggle('hidden', !isD0203);
+
+  // Reset primary reason pills
+  const isExp = patientData?.group === 'experimental';
+  const pillActive   = ['bg-blue-600', 'text-white', 'border-blue-600'];
+  const pillInactive = ['border-slate-200', 'text-slate-600'];
+  ['hv-no-reason-ae', 'hv-no-reason-robot', 'hv-no-reason-odi', 'hv-no-reason-other'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.classList.remove(...pillActive);
+    btn.classList.add(...pillInactive);
+  });
+  document.getElementById('hv-no-reason-robot').classList.toggle('hidden', !isExp);
+  document.getElementById('hv-no-reason-odi').classList.toggle('hidden', !isExp);
+  const notesLabel = document.getElementById('hv-no-notes-star');
+  if (notesLabel) notesLabel.textContent = '';
+
+  // Reset secondary triggers
+  ['adverse', 'robot', 'other-device'].forEach(type => {
+    const cb = document.getElementById(`hv-no-trigger-${type}`);
+    if (cb) { cb.checked = false; _hvNoToggleSubform(type); }
+  });
+  document.getElementById('hv-no-trigger-ae-wrap').classList.remove('hidden');
+  document.getElementById('hv-no-trigger-robot-wrap').classList.toggle('hidden', !isExp);
+  document.getElementById('hv-no-trigger-other-device-wrap').classList.toggle('hidden', !isExp);
 
   showModal('home-visit-modal');
 }
 
 async function saveHomeVisit() {
+  if (_hvTrainingCompleted === null) {
+    setError('hv-error', 'Please indicate whether training was completed.');
+    return;
+  }
+  if (_hvTrainingCompleted) {
+    await _saveHomeVisitYes();
+  } else {
+    await _saveHomeVisitNo();
+  }
+}
+
+async function _saveHomeVisitYes() {
+  if (_hasDateValidationErrors(['hv-error'])) {
+    setError('hv-error', 'Please fix the date validation errors before submitting.');
+    return;
+  }
+
   const sessionStart = document.getElementById('hv-session-start').value;
   const sessionEnd   = document.getElementById('hv-session-end').value;
   const notes        = document.getElementById('hv-notes').value.trim();
@@ -3267,7 +5730,6 @@ async function saveHomeVisit() {
   if (sessionStart >= sessionEnd) { setError('hv-error', 'Session end must be after session start.'); return; }
   if (!_validateAttachment('hv', 'hv-error')) return;
 
-  // Collect triggered events
   const triggered = [];
   if (document.getElementById('hv-trigger-adverse').checked)
     triggered.push({ type: 'adverse_event' });
@@ -3277,6 +5739,9 @@ async function saveHomeVisit() {
   if (!document.getElementById('hv-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('hv-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (!document.getElementById('hv-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
 
   saveBtn.disabled = true;
   const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/home-visit`, {
@@ -3292,6 +5757,68 @@ async function saveHomeVisit() {
   const { file, caption } = _readAttachment('hv');
   if (file) {
     const uploaded = await _uploadAttachment(_hvEventId, file, caption, 'hv-error');
+    if (!uploaded) { saveBtn.disabled = false; return; }
+  }
+
+  hideModal('home-visit-modal');
+  saveBtn.disabled = false;
+  await loadPatientEvents();
+}
+
+async function _saveHomeVisitNo() {
+  const visitDate = document.getElementById('hv-no-visit-date').value;
+  const notes     = document.getElementById('hv-no-notes').value.trim();
+  const saveBtn   = document.getElementById('hv-save');
+
+  if (!_hvNoPrimaryReason) { setError('hv-error', 'Please select a reason why training was not completed.'); return; }
+  if (!visitDate) { setError('hv-error', 'Visit date is required.'); return; }
+  if (new Date(visitDate) > new Date()) { setError('hv-error', 'Visit date cannot be in the future.'); return; }
+  if (_hvNoPrimaryReason === 'other' && !notes) { setError('hv-error', 'Notes are required when reason is "Other".'); return; }
+  if (!_validateAttachment('hv-no', 'hv-error')) return;
+
+  // Build triggered list: primary reason first (with training_stopped flag), then secondary triggers
+  const triggered = [];
+  if (_hvNoPrimaryReason !== 'other') {
+    triggered.push({ type: _hvNoPrimaryReason, training_stopped: true });
+  }
+  if (_hvNoPrimaryReason !== 'adverse_event' &&
+      document.getElementById('hv-no-trigger-adverse').checked)
+    triggered.push({ type: 'adverse_event' });
+  if (_hvNoPrimaryReason !== 'robot_issue_call' &&
+      !document.getElementById('hv-no-trigger-robot-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-no-trigger-robot').checked)
+    triggered.push({ type: 'robot_issue_call' });
+  if (_hvNoPrimaryReason !== 'other_device_issue_call' &&
+      !document.getElementById('hv-no-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('hv-no-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
+
+  const isD0203 = _hvProtocolEventId === 'home_visit_d02' || _hvProtocolEventId === 'home_visit_d03';
+  let confirmedBrokenProtocol = false;
+  if (isD0203) {
+    const dayLabel = _hvProtocolEventId === 'home_visit_d02' ? 'Day 2' : 'Day 3';
+    if (!window.confirm(`Training was not completed on ${dayLabel}. This will mark the patient as BROKEN PROTOCOL. Continue?`)) return;
+    if (!window.confirm('Are you sure? This action cannot be undone. The patient will be marked as broken protocol.')) return;
+    confirmedBrokenProtocol = true;
+  }
+
+  saveBtn.disabled = true;
+  const { ok, data } = await apiPost(`/api/patients/${PATIENT_HOMER_ID}/complete-event/home-visit`, {
+    event_id:                  _hvEventId,
+    protocol_event_id:         _hvProtocolEventId,
+    training_not_done:         true,
+    primary_reason:            _hvNoPrimaryReason,
+    visit_date:                visitDate,
+    notes,
+    triggered,
+    confirmed_broken_protocol: confirmedBrokenProtocol,
+  });
+  if (!ok) { setError('hv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
+
+  const { file, caption } = _readAttachment('hv-no');
+  if (file) {
+    const uploadId = (_hvProtocolEventId === 'home_visit_d15') ? data.attempt_id : _hvEventId;
+    const uploaded = await _uploadAttachment(uploadId, file, caption, 'hv-error');
     if (!uploaded) { saveBtn.disabled = false; return; }
   }
 
@@ -3346,9 +5873,11 @@ function openFollowupCallModal(ev) {
     const cb = document.getElementById(`fc-trigger-${type}`);
     if (cb) { cb.checked = false; _fcToggleSubform(type); }
   });
-  // Robot Issue only shown for experimental patients
+  // Robot Issue and ODI only shown for experimental patients
+  const isExpFc = patientData?.group === 'experimental';
   const robotWrap = document.getElementById('fc-trigger-robot-wrap');
-  if (robotWrap) robotWrap.classList.toggle('hidden', patientData?.group !== 'experimental');
+  if (robotWrap) robotWrap.classList.toggle('hidden', !isExpFc);
+  document.getElementById('fc-trigger-other-device-wrap').classList.toggle('hidden', !isExpFc);
   // Watch Record only shown when at least one watch is currently assigned
   const watchWrap = document.getElementById('fc-trigger-watch-wrap');
   if (watchWrap) watchWrap.classList.toggle('hidden', !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
@@ -3388,6 +5917,9 @@ async function saveFollowupCall() {
   if (!document.getElementById('fc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('fc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (!document.getElementById('fc-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('fc-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
 
   const body = {
     event_id:          _followupCallEventId,
@@ -3445,7 +5977,9 @@ function openPatientCallModal() {
     const cb = document.getElementById(`pc-trigger-${type}`);
     if (cb) { cb.checked = false; _pcToggleSubform(type); }
   });
-  document.getElementById('pc-trigger-robot-wrap').classList.toggle('hidden', patientData?.group !== 'experimental');
+  const isExpPc = patientData?.group === 'experimental';
+  document.getElementById('pc-trigger-robot-wrap').classList.toggle('hidden', !isExpPc);
+  document.getElementById('pc-trigger-other-device-wrap').classList.toggle('hidden', !isExpPc);
   document.getElementById('pc-trigger-watch-wrap').classList.toggle('hidden',
     !(patientData?.agWatchRightID || patientData?.agWatchLeftID));
 
@@ -3475,6 +6009,9 @@ async function savePatientCall() {
   if (!document.getElementById('pc-trigger-watch-wrap').classList.contains('hidden') &&
       document.getElementById('pc-trigger-watch').checked)
     triggered.push({ type: 'watch_record' });
+  if (!document.getElementById('pc-trigger-other-device-wrap').classList.contains('hidden') &&
+      document.getElementById('pc-trigger-other-device').checked)
+    triggered.push({ type: 'other_device_issue_call' });
 
   const therapistInitiated = document.getElementById('pc-therapist-initiated').checked;
   const reason = document.getElementById('pc-reason').value.trim();
@@ -3498,6 +6035,26 @@ async function savePatientCall() {
 
   saveBtn.disabled = false;
   hideModal('patient-call-modal');
+
+  // Update cache and re-render immediately without re-fetching
+  const newCall = {
+    id: data.id,
+    completion_date: dateVal,
+    duration_minutes: parseInt(duration),
+    notes,
+    call_type,
+    reason: therapistInitiated ? reason : undefined,
+    attachment: data.attachment,
+    attachment_caption: data.attachment_caption,
+  };
+
+  if (!_callLogsCache) _callLogsCache = { patient_calls: [], followup_calls: [] };
+  if (!_callLogsCache.patient_calls) _callLogsCache.patient_calls = [];
+  _callLogsCache.patient_calls.push(newCall);
+
+  const container = document.getElementById('call-logs-content');
+  if (container) _renderCallLogs(container, _callLogsCache);
+
   await loadPatientEvents();
 }
 
@@ -3748,14 +6305,19 @@ async function openAgwatchTimingModal(ev) {
   errEl.textContent = '';
   errEl.classList.add('hidden');
 
-  // Pre-fill session date from scheduled_date[0], fallback to today
+  // Pre-fill session date from scheduled_date[0], fallback to today.
+  // Will be overridden below once _agwatchSessionStart is resolved from the home visit entry.
   const schedDate = Array.isArray(ev.scheduled_date) ? ev.scheduled_date[0] : ev.scheduled_date;
   const dateOnly  = schedDate ? schedDate.split('T')[0] : new Date().toISOString().split('T')[0];
   document.getElementById('agwatch-session-date').value = dateOnly;
 
-  // Load session bounds from the corresponding home visit complete entry
+  // Load session bounds from the corresponding home visit or activation complete entry
   const _AGWATCH_SESSION_SOURCE = {
+    adl_agwatch_timing_d01: 'activation',
+    adl_agwatch_timing_d02: 'home_visit_d02',
     adl_agwatch_timing_d03: 'home_visit_d03',
+    vcg_agwatch_timing_d01: 'activation',
+    vcg_agwatch_timing_d02: 'home_visit_d02',
     vcg_agwatch_timing_d03: 'home_visit_d03',
     adl_agwatch_timing_d15: 'home_visit_d15',
     vcg_agwatch_timing_d15: 'home_visit_d15',
@@ -3764,6 +6326,11 @@ async function openAgwatchTimingModal(ev) {
   const hvEntry = hvId ? (_completeEventsCache || []).find(e => e.protocol_event_id === hvId) : null;
   _agwatchSessionStart = hvEntry?.session_start || null;
   _agwatchSessionEnd   = hvEntry?.session_end   || null;
+  // Override session date with the actual home visit date so exercise timestamps
+  // and session bounds share the same date in string comparisons.
+  if (_agwatchSessionStart) {
+    document.getElementById('agwatch-session-date').value = _agwatchSessionStart.split('T')[0];
+  }
   const windowWrap = document.getElementById('agwatch-session-window-wrap');
   const windowEl   = document.getElementById('agwatch-session-window');
   if (_agwatchSessionStart && _agwatchSessionEnd) {
@@ -3915,19 +6482,28 @@ async function loadPatient() {
       return;
     }
     renderOverview(patientData);
-    // Show "Log Call" button for admin/therapist on activated patients
+    // Show "Log Call" button for admin/therapist on activated patients (but not if discontinued)
     const logCallBtn = document.getElementById('log-call-btn');
-    if (logCallBtn && patientData.activationDate &&
+    if (logCallBtn && patientData.activationDate && !patientData.discontinuationDate &&
+        !patientData.a2CompletionDate &&
         (userPrivilege === 'admin' || userPrivilege === 'therapist')) {
       logCallBtn.classList.remove('hidden');
       logCallBtn.classList.add('flex');
+    } else if (logCallBtn) {
+      logCallBtn.classList.add('hidden');
+      logCallBtn.classList.remove('flex');
     }
 
     // Show "Discontinue" button for admin when patient is not yet discontinued/completed
     const discBtn = document.getElementById('discontinue-btn');
-    if (discBtn && isAdmin && !patientData.discontinuationDate && !patientData.a2CompletionDate) {
+    const isBrokenProtocol = !!patientData.brokenProtocolDate;
+    if (discBtn && isAdmin && !patientData.discontinuationDate && !patientData.a2CompletionDate
+        && !isBrokenProtocol && !_hasDiscontinuationStub) {
       discBtn.classList.remove('hidden');
       discBtn.classList.add('flex');
+    } else if (discBtn) {
+      discBtn.classList.add('hidden');
+      discBtn.classList.remove('flex');
     }
   } catch (e) {
     console.error('Error loading patient:', e);
@@ -3947,6 +6523,18 @@ async function loadPrivilege() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
+function _startClock() {
+  function _tick() {
+    const now  = new Date();
+    const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const date = now.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' });
+    const el   = document.getElementById('patient-overdue-clock');
+    if (el) el.textContent = `${date}  ${time}`;
+  }
+  _tick();
+  setInterval(_tick, 60000);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Store submit button labels for loading state
   [
@@ -3964,6 +6552,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   _setupPrescSearchListener('adl');
   _setupPrescSearchListener('vcg');
 
+  _startClock();
   await loadPrivilege();
   await loadPatient();
   await loadPatientEvents();
@@ -3971,6 +6560,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Auto-open modal if ?action=<event_id> is in the URL, then clean up the URL
   const actionId = new URLSearchParams(window.location.search).get('action');
+
   if (actionId) {
     history.replaceState(null, '', window.location.pathname);
     const ev = eventsCache.find(e => e.id === actionId);
@@ -3980,3 +6570,615 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 });
+
+// ── Other Device Issue Modal ──────────────────────────────────────────────────
+
+function _esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+let _odiEventId         = null;
+let _odiAssigned        = []; // [{dtype, device_id, label}] assigned to patient
+let _odiTrainingStopped = false;
+let _odiIsBp            = false;
+
+async function openOtherDeviceIssueModal(ev) {
+  _odiEventId         = ev.id;
+  _odiAssigned        = [];
+  _odiTrainingStopped = !!ev.training_stopped;
+  _odiIsBp            = !!patientData?.brokenProtocolDate;
+  setError('odi-error', '');
+
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const todayDate = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  document.getElementById('odi-completion-date').value = nowStr;
+  document.getElementById('odi-completion-date').max   = nowStr;
+  document.getElementById('odi-issue-occur-date').value = '';
+  document.getElementById('odi-issue-occur-date').max   = todayDate;
+  document.getElementById('odi-notes').value = '';
+  document.getElementById('odi-device-rows').innerHTML =
+    '<p class="text-sm text-slate-400 italic">Loading devices…</p>';
+
+  const ctx = document.getElementById('odi-context');
+  if (ev.triggered_by) {
+    const triggerName = _AE_TRIGGER_NAMES[ev.triggered_by.type] || ev.triggered_by.type.replace(/_/g, ' ');
+    const triggerEv   = (_completeEventsCache || []).find(e => e.id === ev.triggered_by.id);
+    const dateStr     = triggerEv?.completion_date ? ` on ${_fmtDateTime(triggerEv.completion_date)}` : '';
+    ctx.textContent   = `Other device issue reported during ${triggerName}${dateStr}`;
+    ctx.classList.remove('hidden');
+  } else {
+    ctx.classList.add('hidden');
+  }
+  document.getElementById('odi-bp-banner').classList.toggle('hidden', !_odiIsBp);
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates();
+  _setIssueModalDateBounds(dates.enroll_date, null, 'odi-issue-occur-date', 'odi-completion-date');
+
+  showModal('other-device-issue-modal');
+
+  try {
+    const res = await fetch('/devices/api/inventory');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const inv = await res.json();
+
+    // Build flat list of devices assigned to this patient
+    (inv.modems  || []).filter(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID)
+                       .forEach(d => _odiAssigned.push({ dtype: 'modems',  device_id: d.id, label: `Modem — ${d.id}` }));
+    (inv.laptops || []).filter(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID)
+                       .forEach(d => _odiAssigned.push({ dtype: 'laptops', device_id: d.id, label: `Laptop — ${d.id}` }));
+    // SIM linked to patient's modem
+    const patientModem = (inv.modems || []).find(d => !d.removal_date && d.assigned_to?.homerID === PATIENT_HOMER_ID);
+    if (patientModem?.sim_id) {
+      const sim = (inv.sims || []).find(s => s.id === patientModem.sim_id && !s.removal_date);
+      if (sim) _odiAssigned.push({ dtype: 'sims', device_id: sim.id, label: `SIM — ${sim.phoneNumber || sim.id}` });
+    }
+
+    _odiBuildSections();
+  } catch (e) {
+    setError('odi-error', 'Failed to load device inventory: ' + e.message);
+    document.getElementById('odi-device-rows').innerHTML = '';
+  }
+}
+
+function _odiBuildSections() {
+  const container = document.getElementById('odi-device-rows');
+  container.innerHTML = '';
+
+  if (!_odiAssigned.length) {
+    container.innerHTML = '<p class="text-sm text-slate-400 italic">No modem, laptop or SIM assigned to this patient.</p>';
+    return;
+  }
+
+  _odiAssigned.forEach((dev, i) => {
+    const sec = document.createElement('div');
+    sec.className = 'border border-slate-200 rounded-xl p-4';
+    if (_odiIsBp) {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="odi-on-${i}" class="w-4 h-4 rounded border-slate-300 accent-purple-600">
+          <span class="text-sm font-semibold text-slate-800">${_esc(dev.label)}</span>
+        </label>
+        <div id="odi-form-${i}" class="hidden mt-3 pl-6">
+          <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+          <textarea id="odi-notes-${i}" rows="2"
+            class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none"
+            placeholder="Describe the fault…"></textarea>
+        </div>
+      `;
+    } else {
+      sec.innerHTML = `
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="odi-on-${i}" class="w-4 h-4 rounded border-slate-300 accent-purple-600">
+          <span class="text-sm font-semibold text-slate-800">${_esc(dev.label)}</span>
+        </label>
+        <div id="odi-form-${i}" class="hidden mt-3 space-y-3 pl-6">
+          <div>
+            <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+            <div class="space-y-1">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="odi-outcome-${i}" value="visit_required" class="w-4 h-4 accent-purple-600">
+                <span class="text-sm text-slate-700">Visit required — engineer needs to come</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="radio" name="odi-outcome-${i}" value="resolved_over_call" class="w-4 h-4 accent-purple-600">
+                <span class="text-sm text-slate-700">Resolved over call — no visit needed</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+            <textarea id="odi-notes-${i}" rows="2"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none"
+              placeholder="Device-specific notes…"></textarea>
+          </div>
+        </div>
+      `;
+    }
+    container.appendChild(sec);
+
+    document.getElementById(`odi-on-${i}`).onchange = function () {
+      document.getElementById(`odi-form-${i}`).classList.toggle('hidden', !this.checked);
+      if (!this.checked) {
+        if (!_odiIsBp) {
+          document.querySelectorAll(`input[name="odi-outcome-${i}"]`).forEach(r => r.checked = false);
+        }
+        document.getElementById(`odi-notes-${i}`).value = '';
+      }
+    };
+
+    // In normal mode only: pre-check visit_required when stub was the primary training-stop reason
+    if (!_odiIsBp && _odiTrainingStopped) {
+      document.getElementById(`odi-on-${i}`).checked = true;
+      document.getElementById(`odi-form-${i}`).classList.remove('hidden');
+      const visitRadio = document.querySelector(`input[name="odi-outcome-${i}"][value="visit_required"]`);
+      if (visitRadio) visitRadio.checked = true;
+    }
+  });
+}
+
+async function saveOtherDeviceIssueCall() {
+  const completionDate  = document.getElementById('odi-completion-date').value;
+  let issueOccurDate    = document.getElementById('odi-issue-occur-date').value;
+  const notes           = document.getElementById('odi-notes').value.trim();
+
+  // Convert dd-mm-yyyy to YYYY-MM-DD if needed
+  if (issueOccurDate && /^\d{2}-\d{2}-\d{4}$/.test(issueOccurDate)) {
+    const parts = issueOccurDate.split('-');
+    issueOccurDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+
+  if (!completionDate)  { setError('odi-error', 'Call date is required.'); return; }
+  if (!issueOccurDate)  { setError('odi-error', 'Issue first occurred date is required.'); return; }
+
+  // Validate dates
+  const today = new Date().toISOString().split('T')[0];
+  const callDateStr = completionDate.split('T')[0];
+
+  if (issueOccurDate > today) {
+    setError('odi-error', 'Issue occurred date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('odi-issue-occur-date').min;
+  if (minDate && issueOccurDate < minDate) {
+    setError('odi-error', `Issue occurred date must be on or after enrollment date (${minDate}).`);
+    return;
+  }
+  if (callDateStr > today) {
+    setError('odi-error', 'Call date cannot be in the future.');
+    return;
+  }
+  if (callDateStr < issueOccurDate) {
+    setError('odi-error', 'Call date must be on or after issue occurred date.');
+    return;
+  }
+
+  const devices = [];
+  for (let i = 0; i < _odiAssigned.length; i++) {
+    if (!document.getElementById(`odi-on-${i}`)?.checked) continue;
+    const devNotes = document.getElementById(`odi-notes-${i}`)?.value.trim();
+    const dev      = _odiAssigned[i];
+    if (!devNotes) { setError('odi-error', `Fault description required for ${dev.label}.`); return; }
+    if (_odiIsBp) {
+      devices.push({ device_type: dev.dtype, device_id: dev.device_id, notes: devNotes });
+    } else {
+      const outcome = document.querySelector(`input[name="odi-outcome-${i}"]:checked`)?.value || '';
+      if (!outcome) { setError('odi-error', `Select an outcome for ${dev.label}.`); return; }
+      devices.push({ device_type: dev.dtype, device_id: dev.device_id, outcome, notes: devNotes || null });
+    }
+  }
+
+  if (!devices.length) { setError('odi-error', 'Select at least one device with an issue.'); return; }
+
+  setLoading('odi-save', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue-call`,
+    { event_id: _odiEventId, completion_date: completionDate,
+      issue_occur_date: issueOccurDate, notes: notes || null, devices,
+      broken_protocol_mode: _odiIsBp }
+  );
+  setLoading('odi-save', false);
+  if (!ok) { setError('odi-error', data.error || 'Failed to save.'); return; }
+
+  hideModal('other-device-issue-modal');
+  loadPatientEvents();
+}
+
+// ── Other Device Issue — Engineer Visit ──────────────────────────────────────
+
+let _odivEventId   = null;
+let _odivDevices   = []; // devices that need visit (from linked call event)
+let _odivInventory = {}; // available replacement devices by type
+let _odivIsBp      = false;
+
+async function openOtherDeviceIssueVisitModal(ev) {
+  _odivEventId = ev.id;
+  _odivIsBp    = !!patientData?.brokenProtocolDate;
+  setError('odiv-error', '');
+
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  document.getElementById('odiv-completion-date').value = nowStr;
+  document.getElementById('odiv-completion-date').max   = nowStr;
+  document.getElementById('odiv-notes').value = '';
+  document.getElementById('odiv-device-rows').innerHTML =
+    '<p class="text-sm text-slate-400 italic">Loading device info…</p>';
+
+  // Context and issue_occur_date from linked call
+  const callId    = (ev.triggered_by || {}).id;
+  const callEvent = (_completeEventsCache || []).concat(
+    Object.values((eventsCache?.free || {})).flat()
+  ).find(e => e.id === callId);
+  const issueOccurDate = callEvent?.issue_occur_date || null;
+
+  const ctx = document.getElementById('odiv-context');
+  ctx.textContent = callEvent
+    ? `Following call on ${callEvent.completion_date?.slice(0, 16).replace('T', ' ') || '—'}`
+    : 'Engineer visit';
+  ctx.classList.remove('hidden');
+
+  const occRow = document.getElementById('odiv-issue-occur-row');
+  const occDiv = document.getElementById('odiv-issue-occur-date');
+  if (issueOccurDate) {
+    occDiv.textContent = issueOccurDate.slice(0, 16).replace('T', ' ');
+    occRow.classList.remove('hidden');
+  } else {
+    occRow.classList.add('hidden');
+  }
+
+  // Fetch and set date validation bounds BEFORE showing modal
+  const dates = await _fetchIssueValidationDates(ev.triggered_by?.id);
+  _setIssueModalDateBounds(null, dates.issue_occur_date, null, 'odiv-completion-date');
+
+  // Toggle BP mode UI
+  document.getElementById('odiv-bp-banner').classList.toggle('hidden', !_odivIsBp);
+  document.getElementById('odiv-normal-section').classList.toggle('hidden', _odivIsBp);
+  document.getElementById('odiv-bp-device-rows').innerHTML = '';
+
+  showModal('other-device-issue-visit-modal');
+
+  try {
+    const res = await fetch('/devices/api/inventory');
+    if (!res.ok) throw new Error();
+    const inv = await res.json();
+    _odivInventory = {
+      modems:  (inv.modems  || []).filter(d => !d.removal_date && !d.assigned_to),
+      laptops: (inv.laptops || []).filter(d => !d.removal_date && !d.assigned_to),
+      sims:    (inv.sims    || []).filter(s => !s.removal_date),
+    };
+
+    const visitDevices = (callEvent?.devices || []).filter(d => d.outcome === 'visit_required');
+    _odivDevices = visitDevices;
+
+    if (_odivIsBp) {
+      _buildOdivBpDeviceRows(visitDevices);
+      return;
+    }
+
+    const container = document.getElementById('odiv-device-rows');
+    container.innerHTML = '';
+    if (!visitDevices.length) {
+      container.innerHTML = '<p class="text-sm text-slate-400 italic">No devices flagged for visit.</p>';
+      return;
+    }
+    visitDevices.forEach((d, i) => _odivBuildRow(container, d, i));
+  } catch (e) {
+    setError('odiv-error', 'Failed to load device inventory.');
+    document.getElementById('odiv-device-rows').innerHTML = '';
+  }
+}
+
+function _odivBpFaultChange(idx) {
+  const checked = document.getElementById(`odiv-bp-fault-${idx}`)?.checked;
+  document.getElementById(`odiv-bp-desc-wrap-${idx}`)?.classList.toggle('hidden', !checked);
+}
+
+function _buildOdivBpDeviceRows(devices) {
+  const container = document.getElementById('odiv-bp-device-rows');
+  container.innerHTML = '';
+  if (!devices.length) {
+    container.innerHTML = '<p class="text-sm text-slate-400 italic">No devices flagged for visit.</p>';
+    return;
+  }
+  devices.forEach((d, idx) => {
+    const dtype   = d.device_type || d.dtype;
+    const deviceId = d.device_id;
+    const label   = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+    const rowDiv  = document.createElement('div');
+    rowDiv.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+    rowDiv.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-semibold text-slate-800">${_esc(label)}</span>
+        <span class="text-xs text-slate-500">Device: <span class="font-mono">${_esc(deviceId)}</span></span>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" id="odiv-bp-fault-${idx}" class="w-4 h-4 accent-amber-600"
+          onchange="_odivBpFaultChange(${idx})">
+        <label for="odiv-bp-fault-${idx}" class="text-sm text-slate-700 cursor-pointer">This device has a fault</label>
+      </div>
+      <div id="odiv-bp-desc-wrap-${idx}" class="hidden pl-2 border-l-2 border-amber-200">
+        <label class="block text-xs font-medium text-slate-600 mb-1">Fault description <span class="text-red-400">*</span></label>
+        <textarea id="odiv-bp-desc-${idx}" rows="2"
+          class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
+          placeholder="Describe the fault…"></textarea>
+      </div>
+    `;
+    container.appendChild(rowDiv);
+  });
+}
+
+function _odivBuildRow(container, d, idx) {
+  const dtype    = d.device_type || d.dtype;
+  const deviceId = d.device_id;
+  const label    = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+  const avail    = _odivInventory[dtype] || [];
+  // For SIMs, filter to only unlinked SIMs (where !modem_id)
+  const filtered = dtype === 'sims'
+                   ? avail.filter(r => !r.removal_date && !r.modem_id)
+                   : avail.filter(r => !r.removal_date && !r.assigned_to);
+  const replOpts = filtered.filter(r => r.id !== deviceId)
+                           .map(r => `<option value="${_esc(r.id)}">${_esc(r.id)}</option>`).join('');
+
+  const row = document.createElement('div');
+  row.className = 'border border-slate-200 rounded-xl p-4 space-y-3';
+  row.innerHTML = `
+    <div class="flex items-center justify-between">
+      <span class="text-sm font-semibold text-slate-800">${_esc(label)}</span>
+      <span class="text-xs text-slate-500">Current: <span class="font-mono">${_esc(deviceId)}</span></span>
+    </div>
+    <div>
+      <p class="text-xs font-medium text-slate-600 mb-2">Outcome <span class="text-red-400">*</span></p>
+      <div class="space-y-2">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="odiv-outcome-${idx}" value="repaired" class="w-4 h-4 accent-purple-600"
+            onchange="_odivOutcomeChange(${idx})">
+          <span class="text-sm text-slate-700">Repaired on site</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="odiv-outcome-${idx}" value="replaced" class="w-4 h-4 accent-purple-600"
+            onchange="_odivOutcomeChange(${idx})">
+          <span class="text-sm text-slate-700">Replaced with another device</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="odiv-outcome-${idx}" value="neither" class="w-4 h-4 accent-purple-600"
+            onchange="_odivOutcomeChange(${idx})">
+          <span class="text-sm text-slate-700">Neither — still has issue</span>
+        </label>
+      </div>
+    </div>
+    <div id="odiv-replace-section-${idx}" class="hidden space-y-2 pl-2 border-l-2 border-purple-200">
+      <label class="block text-xs font-medium text-slate-600 mb-1">Replacement Device <span class="text-red-400">*</span></label>
+      <select id="odiv-new-device-${idx}"
+              class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 bg-white">
+        <option value="">Select replacement…</option>
+        ${replOpts || '<option value="" disabled>No available devices</option>'}
+      </select>
+    </div>
+    <div class="pl-2 border-l-2 border-slate-100">
+      <label class="block text-xs font-medium text-slate-600 mb-1">Notes <span class="text-slate-400 font-normal">(optional)</span></label>
+      <textarea id="odiv-device-notes-${idx}" rows="2"
+                class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 resize-none"
+                placeholder="What was done…"></textarea>
+    </div>
+  `;
+  container.appendChild(row);
+}
+
+function _odivOutcomeChange(idx) {
+  const outcome = document.querySelector(`input[name="odiv-outcome-${idx}"]:checked`)?.value;
+  document.getElementById(`odiv-replace-section-${idx}`).classList.toggle('hidden', outcome !== 'replaced');
+}
+
+async function saveOtherDeviceIssueVisit() {
+  const completionDate = document.getElementById('odiv-completion-date').value;
+  const notes          = document.getElementById('odiv-notes').value.trim();
+
+  if (!completionDate) { setError('odiv-error', 'Visit date is required.'); return; }
+
+  // Validate visit date
+  const today = new Date().toISOString().split('T')[0];
+  if (completionDate.split('T')[0] > today) {
+    setError('odiv-error', 'Visit date cannot be in the future.');
+    return;
+  }
+  const minDate = document.getElementById('odiv-completion-date').min;
+  if (minDate && completionDate.split('T')[0] < minDate.split('T')[0]) {
+    setError('odiv-error', `Visit date must be on or after issue occurred date (${minDate.split('T')[0]}).`);
+    return;
+  }
+
+  // ── Broken-protocol mode ──────────────────────────────────────────────────
+  if (_odivIsBp) {
+    const deviceFaults = [];
+    for (let i = 0; i < _odivDevices.length; i++) {
+      const d       = _odivDevices[i];
+      const dtype   = d.device_type || d.dtype;
+      const hasFault = document.getElementById(`odiv-bp-fault-${i}`)?.checked;
+      if (hasFault) {
+        const desc = document.getElementById(`odiv-bp-desc-${i}`)?.value.trim() || '';
+        const label = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+        if (!desc) { setError('odiv-error', `Please describe the fault for ${label} ${d.device_id}.`); return; }
+        deviceFaults.push({ device_type: dtype, device_id: d.device_id, notes: desc });
+      }
+    }
+    setLoading('odiv-save', true);
+    const { ok, data } = await apiPost(
+      `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue-visit`,
+      { event_id: _odivEventId, completion_date: completionDate, notes: notes || null,
+        device_faults: deviceFaults, broken_protocol_mode: true }
+    );
+    setLoading('odiv-save', false);
+    if (!ok) { setError('odiv-error', data.error || 'Failed to save.'); return; }
+    hideModal('other-device-issue-visit-modal');
+    loadPatientEvents();
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const outcomes = [];
+  for (let i = 0; i < _odivDevices.length; i++) {
+    const d       = _odivDevices[i];
+    const outcome = document.querySelector(`input[name="odiv-outcome-${i}"]:checked`)?.value || '';
+    const newId   = document.getElementById(`odiv-new-device-${i}`)?.value || null;
+    const dNotes  = document.getElementById(`odiv-device-notes-${i}`)?.value.trim() || null;
+    const dtype   = d.device_type || d.dtype;
+    const label   = dtype === 'modems' ? 'Modem' : dtype === 'laptops' ? 'Laptop' : 'SIM';
+
+    if (!outcome) { setError('odiv-error', `Select an outcome for ${label} ${d.device_id}.`); return; }
+    if (outcome === 'replaced' && !newId) { setError('odiv-error', `Select a replacement device for ${label} ${d.device_id}.`); return; }
+
+    outcomes.push({ device_type: dtype, device_id: d.device_id, outcome, new_device_id: newId, notes: dNotes });
+  }
+
+  if (!outcomes.length) { setError('odiv-error', 'No device outcomes to record.'); return; }
+
+  setLoading('odiv-save', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/other-device-issue-visit`,
+    { event_id: _odivEventId, completion_date: completionDate, notes: notes || null, device_outcomes: outcomes }
+  );
+  setLoading('odiv-save', false);
+  if (!ok) { setError('odiv-error', data.error || 'Failed to save.'); return; }
+
+  hideModal('other-device-issue-visit-modal');
+  loadPatientEvents();
+}
+
+// ── Device Return ────────────────────────────────────────────────────────────
+
+let _drEventId  = null;
+let _drDevices  = [];
+
+async function openDeviceReturnModal(ev) {
+  _drEventId = ev.id;
+
+  document.getElementById('dr-homer-id').textContent = PATIENT_HOMER_ID;
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const dateEl = document.getElementById('dr-date');
+  dateEl.max   = nowStr;
+  dateEl.value = nowStr;
+  document.getElementById('dr-date-error').classList.add('hidden');
+  document.getElementById('dr-notes').value = '';
+  document.getElementById('dr-error').classList.add('hidden');
+  _resetAttachment('dr');
+
+  // Fetch currently assigned devices
+  const { ok, data } = await apiGet(`/api/patients/${PATIENT_HOMER_ID}/device-return-devices`);
+  if (!ok) {
+    setError('dr-error', data.error || 'Could not load assigned devices.');
+    showModal('device-return-modal');
+    return;
+  }
+  _drDevices = data.devices || [];
+  _renderDeviceReturnCards();
+
+  // Keyboard validation for date
+  _attachDateGuard(dateEl, 'dr-date-error');
+
+  showModal('device-return-modal');
+}
+
+function _renderDeviceReturnCards() {
+  const container = document.getElementById('dr-devices-container');
+  if (!_drDevices.length) {
+    container.innerHTML = '<p class="text-sm text-slate-500 italic">No devices currently assigned to this patient.</p>';
+    return;
+  }
+  container.innerHTML = _drDevices.map((d, i) => _deviceReturnCard(d, i)).join('');
+
+  // onchange is wired inline in the select element
+}
+
+function _deviceReturnCard(d, i) {
+  const today = new Date().toISOString().slice(0, 10);
+  const TYPE_LABEL = { pluto: 'Pluto', mars: 'Mars', modems: 'Modem', laptops: 'Laptop', agwatch: 'AG Watch', sims: 'SIM Card' };
+  const typeLabel  = TYPE_LABEL[d.type] || d.type;
+  const idBadge    = d.device_id;
+  const limbSuffix = d.limb ? ` (${d.limb.charAt(0).toUpperCase() + d.limb.slice(1)})` : '';
+
+  const lowBatteryOption = d.type === 'agwatch'
+    ? `<option value="low_battery">Low Battery</option>` : '';
+
+  return `
+    <div class="border border-slate-200 rounded-xl p-3">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="px-2 py-0.5 bg-slate-100 text-slate-700 text-xs rounded font-mono">${idBadge}</span>
+        <span class="text-sm font-medium text-slate-700">${typeLabel}${limbSuffix}</span>
+      </div>
+      <div class="flex gap-2 items-start">
+        <select id="dr-status-${i}" onchange="_updateDrIssueDateVisibility(${i})"
+          class="flex-shrink-0 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white">
+          <option value="working">Working</option>
+          <option value="lost">Lost</option>
+          <option value="faulty">Faulty</option>
+          ${lowBatteryOption}
+        </select>
+        <input type="date" id="dr-issue-date-${i}" max="${today}"
+          class="hidden flex-shrink-0 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <input type="text" id="dr-dev-notes-${i}"
+          class="flex-1 min-w-0 px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none" placeholder="Notes (optional)">
+      </div>
+    </div>`;
+}
+
+function _updateDrIssueDateVisibility(i) {
+  const val   = document.getElementById(`dr-status-${i}`)?.value;
+  const field = document.getElementById(`dr-issue-date-${i}`);
+  if (field) field.classList.toggle('hidden', val === 'working');
+}
+
+async function saveDeviceReturn() {
+  const completionDate = document.getElementById('dr-date').value;
+  if (!completionDate) { setError('dr-error', 'Return date/time is required.'); return; }
+  const now = new Date();
+  if (new Date(completionDate) > now) { setError('dr-error', 'Return date cannot be in the future.'); return; }
+
+  // Collect per-device data
+  const deviceEntries = [];
+  for (let i = 0; i < _drDevices.length; i++) {
+    const d         = _drDevices[i];
+    const status    = document.getElementById(`dr-status-${i}`)?.value || 'working';
+    const issueDate = document.getElementById(`dr-issue-date-${i}`)?.value || '';
+    const notes     = document.getElementById(`dr-dev-notes-${i}`)?.value.trim() || null;
+    if (status !== 'working' && !issueDate) {
+      setError('dr-error', `Please enter when the issue occurred for ${d.device_id || d.sim_id || 'device'}.`);
+      return;
+    }
+    const entry = { type: d.type, status, issue_date: issueDate || null, notes };
+    if (d.type === 'agwatch') { entry.device_id = d.device_id; entry.limb = d.limb; }
+    else if (d.type === 'sims') { entry.sim_id = d.sim_id; }
+    else { entry.device_id = d.device_id; }
+    deviceEntries.push(entry);
+  }
+
+  const notes = document.getElementById('dr-notes').value.trim() || null;
+
+  // Upload attachment first if present
+  const attachFile    = document.getElementById('dr-attachment-file')?.files[0];
+  const attachCaption = document.getElementById('dr-attachment-caption')?.value.trim() || null;
+  if (attachFile && !attachCaption) {
+    setError('dr-error', 'Please add a caption for the attachment.');
+    return;
+  }
+
+  setLoading('dr-save', true);
+  const { ok, data } = await apiPost(
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/device-return`,
+    { event_id: _drEventId, completion_date: completionDate, notes, devices: deviceEntries }
+  );
+  if (!ok) { setLoading('dr-save', false); setError('dr-error', data.error || 'Failed to save.'); return; }
+
+  if (attachFile) {
+    await _uploadAttachment(data.event_id, attachFile, attachCaption, 'dr-error');
+  }
+
+  setLoading('dr-save', false);
+  hideModal('device-return-modal');
+  loadPatientEvents();
+}
