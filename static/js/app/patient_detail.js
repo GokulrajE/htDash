@@ -6380,6 +6380,7 @@ async function loadPatient() {
     // Show "Log Call" button for admin/therapist on activated patients (but not if discontinued)
     const logCallBtn = document.getElementById('log-call-btn');
     if (logCallBtn && patientData.activationDate && !patientData.discontinuationDate &&
+        !patientData.a2CompletionDate &&
         (userPrivilege === 'admin' || userPrivilege === 'therapist')) {
       logCallBtn.classList.remove('hidden');
       logCallBtn.classList.add('flex');
