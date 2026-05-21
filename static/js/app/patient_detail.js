@@ -2631,11 +2631,24 @@ function openAeFollowupVisitModal(ev) {
   document.getElementById('aefv-start').value = '';
   document.getElementById('aefv-end').value   = '';
   document.getElementById('aefv-notes').value = '';
+<<<<<<< urlrouted-addn
   _setupAeSchedulingToggles('aefv');
+=======
+  document.getElementById('aefv-schedule-visit').checked    = false;
+  document.getElementById('aefv-visit-date-wrap').classList.add('hidden');
+  document.getElementById('aefv-visit-date').value          = '';
+  document.getElementById('aefv-schedule-clinical').checked = false;
+  document.getElementById('aefv-clinical-date-wrap').classList.add('hidden');
+  document.getElementById('aefv-clinical-date').value       = '';
+>>>>>>> urlrouted
   _resetAttachment('aefv');
   setError('aefv-error', '');
   _attachSessionEndGuard('aefv-start', 'aefv-end', 'aefv-error');
   _attachDateGuard('aefv-start', 'aefv-error');
+  document.getElementById('aefv-schedule-visit').onchange = e =>
+    document.getElementById('aefv-visit-date-wrap').classList.toggle('hidden', !e.target.checked);
+  document.getElementById('aefv-schedule-clinical').onchange = e =>
+    document.getElementById('aefv-clinical-date-wrap').classList.toggle('hidden', !e.target.checked);
   showModal('ae-followup-visit-modal');
 }
 
@@ -2653,15 +2666,34 @@ async function saveAeFollowupVisit() {
   const { discussions, error } = _collectAeDiscussions('aefv', _aefvAeDetails);
   if (error) { setError('aefv-error', error); return; }
 
+<<<<<<< urlrouted-addn
   const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aefv');
   if (schedError) { setError('aefv-error', schedError); return; }
   if (!_validateAttachment('aefv', 'aefv-error')) return;
+=======
+  const schedVisit    = document.getElementById('aefv-schedule-visit').checked;
+  const schedClinical = document.getElementById('aefv-schedule-clinical').checked;
+  const visitDate     = document.getElementById('aefv-visit-date').value;
+  const clinicalDate  = document.getElementById('aefv-clinical-date').value;
+  if (schedVisit    && !visitDate)    { setError('aefv-error', 'Target date is required for the scheduled follow-up visit.'); return; }
+  if (schedClinical && !clinicalDate) { setError('aefv-error', 'Target date is required for the scheduled clinical visit.'); return; }
+>>>>>>> urlrouted
 
   saveBtn.disabled = true;
+  const payload = {
+    event_id: _aefvEventId, visit_start: start, visit_end: end,
+    notes: notes || null, ae_discussions: discussions,
+    scheduled_followup_visit:  schedVisit    ? visitDate    : null,
+    scheduled_clinical_visit:  schedClinical ? clinicalDate : null,
+  };
   const { ok, data } = await apiPost(
+<<<<<<< urlrouted-addn
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-followup-visit`,
     { event_id: _aefvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions,
       scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
+=======
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-followup-visit`, payload
+>>>>>>> urlrouted
   );
   if (!ok) { setError('aefv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 
@@ -2694,11 +2726,24 @@ function openAeClinicalVisitModal(ev) {
   document.getElementById('aecv-start').value = '';
   document.getElementById('aecv-end').value   = '';
   document.getElementById('aecv-notes').value = '';
+<<<<<<< urlrouted-addn
   _setupAeSchedulingToggles('aecv');
+=======
+  document.getElementById('aecv-schedule-visit').checked    = false;
+  document.getElementById('aecv-visit-date-wrap').classList.add('hidden');
+  document.getElementById('aecv-visit-date').value          = '';
+  document.getElementById('aecv-schedule-clinical').checked = false;
+  document.getElementById('aecv-clinical-date-wrap').classList.add('hidden');
+  document.getElementById('aecv-clinical-date').value       = '';
+>>>>>>> urlrouted
   _resetAttachment('aecv');
   setError('aecv-error', '');
   _attachSessionEndGuard('aecv-start', 'aecv-end', 'aecv-error');
   _attachDateGuard('aecv-start', 'aecv-error');
+  document.getElementById('aecv-schedule-visit').onchange = e =>
+    document.getElementById('aecv-visit-date-wrap').classList.toggle('hidden', !e.target.checked);
+  document.getElementById('aecv-schedule-clinical').onchange = e =>
+    document.getElementById('aecv-clinical-date-wrap').classList.toggle('hidden', !e.target.checked);
   showModal('ae-clinical-visit-modal');
 }
 
@@ -2716,15 +2761,34 @@ async function saveAeClinicalVisit() {
   const { discussions, error } = _collectAeDiscussions('aecv', _aecvAeDetails);
   if (error) { setError('aecv-error', error); return; }
 
+<<<<<<< urlrouted-addn
   const { scheduledFollowupVisit, scheduledClinicalVisit, error: schedError } = _collectAeScheduling('aecv');
   if (schedError) { setError('aecv-error', schedError); return; }
   if (!_validateAttachment('aecv', 'aecv-error')) return;
+=======
+  const schedVisit    = document.getElementById('aecv-schedule-visit').checked;
+  const schedClinical = document.getElementById('aecv-schedule-clinical').checked;
+  const visitDate     = document.getElementById('aecv-visit-date').value;
+  const clinicalDate  = document.getElementById('aecv-clinical-date').value;
+  if (schedVisit    && !visitDate)    { setError('aecv-error', 'Target date is required for the scheduled follow-up visit.'); return; }
+  if (schedClinical && !clinicalDate) { setError('aecv-error', 'Target date is required for the scheduled clinical visit.'); return; }
+>>>>>>> urlrouted
 
   saveBtn.disabled = true;
+  const payload = {
+    event_id: _aecvEventId, visit_start: start, visit_end: end,
+    notes: notes || null, ae_discussions: discussions,
+    scheduled_followup_visit:  schedVisit    ? visitDate    : null,
+    scheduled_clinical_visit:  schedClinical ? clinicalDate : null,
+  };
   const { ok, data } = await apiPost(
+<<<<<<< urlrouted-addn
     `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-clinical-visit`,
     { event_id: _aecvEventId, visit_start: start, visit_end: end, notes: notes || null, ae_discussions: discussions,
       scheduled_followup_visit: scheduledFollowupVisit, scheduled_clinical_visit: scheduledClinicalVisit }
+=======
+    `/api/patients/${PATIENT_HOMER_ID}/complete-event/ae-clinical-visit`, payload
+>>>>>>> urlrouted
   );
   if (!ok) { setError('aecv-error', data.error || 'Failed to save.'); saveBtn.disabled = false; return; }
 

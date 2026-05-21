@@ -142,7 +142,7 @@ All fields are factual — status is never stored but always derived.
 - Date fields cannot exceed the current local time — no future datetimes are allowed.
 
 **Pause fields (both groups):**
-- `trainingPausedDate` — set when training is paused; `null` when not paused. Set when a robot issue visit swaps a device with no replacement available, or when an adverse event is filed with `training_blocked: true`. Cleared when all pausing causes are resolved: no `resolve_robot_issue_visit` stubs remain in `incomplete` AND no `adverse_event_followup` stubs remain in `incomplete` (meaning all adverse events have been marked resolved).
+- `trainingPausedDate` — set when training is paused; `null` when not paused. Set when a robot issue visit swaps a device with no replacement available, or when an adverse event is filed with `training_blocked: true`. Cleared when all pausing causes are resolved: no `resolve_robot_issue_visit` stubs remain in `incomplete` AND all adverse events that had `training_blocked: true` have `resolved: true` on their `free.adverse_event` record.
 - `cumulativePauseDays` — total pause days accumulated across all *closed* pause epochs. Incremented when the last outstanding pause cause is resolved, using `(max(can_resume_from across all pausing causes) − trainingPausedDate.date()).days` (exclusive end; minimum 0 — same-day resolution contributes 0 pause days). Checked against `max_cumulative_pause_days` (10 days); if exceeded, `derive_status()` returns `broken_protocol`. A patient can have multiple simultaneous pause causes (e.g. two adverse events + robot issue); `trainingPausedDate` is only cleared when all are resolved.
 - `pauseHistory` — list of all pause epochs, one entry per continuous uninterrupted pause period. An entry is appended when training is first paused (i.e. `trainingPausedDate` transitions from `null`). If training is already paused and a new cause is added, no new entry is created — the new reason is appended to the current open entry's `reasons` list. Closed when the pause clears.
 
@@ -177,7 +177,7 @@ All fields are factual — status is never stored but always derived.
   - **Server touch points:**
     1. **Pause starts** (adverse event route or robot issue visit route): if `trainingPausedDate` was `null`, append a new open entry (`end: null`, `days: null`) with the first reason. Set `trainingPausedDate`.
     2. **New cause added while already paused**: append the new reason to the last open entry's `reasons` list. Do not create a new entry.
-    3. **Pause clears** (adverse event followup route or resolve robot issue visit route): fill `end` and `days` on the last open entry. Clear `trainingPausedDate`. Increment `cumulativePauseDays`.
+    3. **Pause clears** (any AE follow-up route or resolve robot issue visit route, when all causes resolved): fill `end` and `days` on the last open entry. Clear `trainingPausedDate`. Increment `cumulativePauseDays`.
 
 **Broken protocol detection field:**
 - `brokenProtocolDate` — date when `broken_protocol` was first detected; set automatically on login. `null` until first detected. Never cleared once set.
@@ -576,7 +576,13 @@ Experimental patients also have these additional keys:
 
 All keys are initialised by `create_protocol_events()`. Routes that append to these use `setdefault` so new keys are created on demand for older records that predate the key being added.
 
-**Cancellable events:** `adverse_event_followup_visit` and `adverse_event_clinical_visit` stubs carry `cancellable: true` in `study_protocol.json`. A cancelled stub is removed from `incomplete` and appended to a top-level `cancelled` array in `protocol_events.json` with a `cancellation_reason` and `cancelled_at` timestamp. Cancelled events appear in the timeline for traceability but do not count as completions.
+**Cancellable events:** Stubs may be moved to the top-level `cancelled` array in two ways:
+- **Therapist-initiated cancellation:** `adverse_event_followup_visit` and `adverse_event_clinical_visit` stubs carry `cancellable: true` in `study_protocol.json`. The therapist can cancel these from the modal; a `cancellation_reason` (textarea, required) is prompted.
+- **System cancellation:** the server moves stubs to `cancelled[]` automatically in two situations:
+  - **All AEs resolved:** all pending `adverse_event_followup`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit` stubs are cancelled with `cancellation_reason: "Adverse event resolved"`.
+  - **Training completed:** all remaining `incomplete` stubs except `a1_assessment`, `a2_assessment`, `adverse_event_followup_visit`, and `adverse_event_clinical_visit` are cancelled with `cancellation_reason: "Training completed"`. This includes standard protocol events, `watch_record`, `robot_issue_call`, `robot_issue_visit`, `resolve_robot_issue_visit`, and `adverse_event_followup`.
+
+In all cases the stub is removed from `incomplete` and appended to `cancelled[]` with `cancelled_at` timestamp. Cancelled events appear in the timeline for traceability but do not count as completions.
 
 `robot_fault_report` entries are **not** stored in `protocol_events.json` — they live in `devices/fault_reports/<type>.json` (see device schemas below).
 
@@ -606,6 +612,8 @@ Uses a **two-phase model**. Never created standalone — always triggered by a h
   "description": "",
   "action_taken": "",
   "training_blocked": false,
+  "resolved": false,
+  "can_resume_from": null,
   "scheduled_followup_visit":    { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
   "scheduled_clinical_visit":    { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
   "attachment": null,
@@ -614,7 +622,9 @@ Uses a **two-phase model**. Never created standalone — always triggered by a h
 ```
 
 - `training_blocked`: `true` if training was blocked as a result of this adverse event. When `true`, this AE's ID is included in follow-up stubs and `trainingPausedDate` is set on the patient. When `false`, the follow-up chain still runs (for monitoring) but no pause mechanics apply for this AE.
-- `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled. If scheduled, `stub_id` points to the created stub in `incomplete`; `target_datetime` is the target date/time entered by the therapist (not strict — actual time recorded at completion).
+- `resolved`: `false` when first filed. Updated to `true` by any follow-up event (call, visit, or clinical visit) when the therapist marks this AE as resolved. This is the **authoritative** resolution state — not derived from follow-up events.
+- `can_resume_from`: `null` when unresolved or when `training_blocked: false`. Set to `"YYYY-MM-DD"` (date only) when resolved and `training_blocked: true`. Updated directly on this record at resolution time.
+- `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled. If scheduled, `stub_id` points to the created stub in `incomplete`; `target_datetime` is the target date/time entered by the therapist.
 
 **`robot_issue_call`** *(experimental only)*
 
@@ -811,18 +821,8 @@ Daily follow-up call chain seeded whenever any adverse event is filed. One stub 
   "duration_minutes": 15,
   "notes": "",
   "ae_discussions": [
-    {
-      "adverse_event_id": "<AE1_id>",
-      "notes": "",
-      "resolved": true,
-      "can_resume_from": "YYYY-MM-DD"
-    },
-    {
-      "adverse_event_id": "<AE2_id>",
-      "notes": "",
-      "resolved": false,
-      "can_resume_from": null
-    }
+    { "adverse_event_id": "<AE1_id>", "notes": "", "resolved": true,  "can_resume_from": "YYYY-MM-DD" },
+    { "adverse_event_id": "<AE2_id>", "notes": "", "resolved": false, "can_resume_from": null }
   ],
   "scheduled_followup_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
   "scheduled_clinical_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
@@ -832,11 +832,11 @@ Daily follow-up call chain seeded whenever any adverse event is filed. One stub 
 ```
 
 - `patient_initiated`: `true` if the patient called the therapist; `false` (default) if the therapist initiated the call.
-- `related_patient_call_id`: UUID of the linked `patient_call` entry (only set when `patient_initiated: true` and the therapist links it); `null` otherwise.
-- `ae_discussions`: one entry per AE in `adverse_event_ids`. `notes` records what was discussed for that specific AE. `can_resume_from` is required when `resolved: true` AND the AE had `training_blocked: true`; `null` otherwise. Date only (`YYYY-MM-DD`).
+- `related_patient_call_id`: UUID of the linked `patient_call` entry (only set when `patient_initiated: true`); `null` otherwise.
+- `ae_discussions`: one entry per AE in `adverse_event_ids`. Records what was discussed per AE. `resolved` and `can_resume_from` here are **inputs from the therapist** used to update the AE record — they are written through to `free.adverse_event[<ae_id>]` on save. `can_resume_from` is required when `resolved: true` AND the AE had `training_blocked: true`; `null` otherwise.
 - `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled from this call.
-- **Chain continuation:** after save, a new stub is seeded with `adverse_event_ids` = IDs of unresolved AEs and `scheduled_date: [today, today + 1 day]`. If all AEs are resolved, no new stub is seeded.
-- **Pause resolution:** when all AEs are resolved and no `resolve_robot_issue_visit` stubs remain, `cumulativePauseDays` is incremented by `(max(can_resume_from) − trainingPausedDate.date()).days` (minimum 0) and `trainingPausedDate` is cleared.
+- **Chain continuation:** after save, all AE records are updated with `resolved`/`can_resume_from`. A new stub is seeded with `adverse_event_ids` = IDs of still-unresolved AEs and `scheduled_date: [today, today + 1 day]`. If all AEs are resolved, no new stub is seeded and all pending AE follow-up stubs are removed from `incomplete`.
+- **Pause resolution:** when all `training_blocked: true` AEs are resolved and no `resolve_robot_issue_visit` stubs remain, `cumulativePauseDays` is incremented by `(max(can_resume_from) − trainingPausedDate.date()).days` (minimum 0) and `trainingPausedDate` is cleared.
 
 ---
 
@@ -869,12 +869,8 @@ Therapist home visit to follow up on one or more adverse events. Cancellable (`c
   "completion_date": "YYYY-MM-DDTHH:MM",
   "filed_at": "YYYY-MM-DDTHH:MM:SS",
   "ae_discussions": [
-    {
-      "adverse_event_id": "<AE1_id>",
-      "notes": "",
-      "resolved": true,
-      "can_resume_from": "YYYY-MM-DD"
-    }
+    { "adverse_event_id": "<AE1_id>", "notes": "", "resolved": true,  "can_resume_from": "YYYY-MM-DD" },
+    { "adverse_event_id": "<AE2_id>", "notes": "", "resolved": false, "can_resume_from": null }
   ],
   "scheduled_followup_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
   "scheduled_clinical_visit":  { "target_datetime": "YYYY-MM-DDTHH:MM", "stub_id": "<uuid>" },
@@ -885,9 +881,9 @@ Therapist home visit to follow up on one or more adverse events. Cancellable (`c
 ```
 
 - `session_start` / `session_end`: actual clock times of the visit (same calendar date; end must be after start). `completion_date` = `session_start`.
-- `ae_discussions`: one entry per AE in `adverse_event_ids` — same structure as `adverse_event_followup`.
-- `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled from this visit.
-- **Pause resolution:** same logic as `adverse_event_followup` — clears pause when all AEs resolved and no `resolve_robot_issue_visit` stubs remain.
+- `ae_discussions`: one entry per AE in `adverse_event_ids`. `resolved` and `can_resume_from` are inputs from the therapist — written through to `free.adverse_event[<ae_id>]` on save. Same field rules as `adverse_event_followup`.
+- `scheduled_followup_visit` / `scheduled_clinical_visit`: `null` if not scheduled. If scheduled, creates the corresponding stub in `incomplete` for unresolved AEs.
+- **Does NOT seed a follow-up call.** If all AEs are resolved: clears pause (same logic as follow-up call) and removes all pending AE follow-up stubs from `incomplete`. If AEs remain unresolved and visit stubs were scheduled, unresolved AE IDs carry into those stubs. If AEs remain unresolved and no visit stubs were scheduled, no new call stub is created — the therapist must log the next follow-up call freely when it happens.
 
 **Cancelled record** (moves from `incomplete` → top-level `cancelled` array in `protocol_events.json`):
 ```json
@@ -916,14 +912,13 @@ Same schema as `adverse_event_followup_visit` with one distinction:
 
 **AE history assembly (read-time)**
 
-When rendering the Adverse Events tab, the server assembles a per-AE history view by scanning all follow-up event types for each AE's ID:
+When rendering the Adverse Events tab, the server assembles a per-AE history view:
 
 1. Load all entries in `free.adverse_event_followup`, `free.adverse_event_followup_visit`, `free.adverse_event_clinical_visit`
 2. For each AE in `free.adverse_event`, collect all entries from step 1 that contain the AE's ID in their `adverse_event_ids`
 3. Sort collected entries chronologically by `completion_date`
-4. The AE is **resolved** if any entry's `ae_discussions` contains `{adverse_event_id: <this_id>, resolved: true}`; `can_resume_from` taken from that entry
-
-This is computed at read time — no resolution state is stored on the AE entry itself.
+4. The AE is **resolved** if `free.adverse_event[<this_id>].resolved == true` — read directly from the AE record, not derived from follow-up events
+5. `can_resume_from` is similarly read directly from the AE record
 
 ### `devices/fault_reports/<type>.json`
 
@@ -1365,24 +1360,22 @@ Each event's group, type, window, clinical purpose, dependencies, and date sourc
 
 #### Shared (both groups)
 
-| ID | Name | Type | Reference | Window | `depends_on` | `comes_after` | `date source` | Purpose |
-|----|------|------|-----------|--------|--------------|--------------|--------------|---------|
-| `adl_prescription_d01` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | — | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
-| `adl_agwatch_timing_d01` | Add ADL AG Watch Timings Day 01 | point_in_time | activation | day 1 | `activation` | `watch_record` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 1. |
-| `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | — | `= activation + 1d` | Second home visit — review training progress and address any early questions or difficulties. |
-| `adl_agwatch_timing_d02` | Add ADL AG Watch Timings Day 02 | point_in_time | activation | day 2 | `home_visit_d02` | — | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 2. |
-| `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | — | `= activation + 2d` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
-| `adl_agwatch_timing_d03` | Add ADL AG Watch Timings Day 03 | point_in_time | activation | day 3 | `home_visit_d03` | — | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 3. |
-| `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
-| `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
-| `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | — | `= home_visit_d15` | Review and revise the ADL exercise programme at the mid-point of the intervention. |
-| `adl_agwatch_timing_d15` | Add ADL AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `adl_prescription_d15` | — | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 15. |
-| `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | — | `user` | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
-| `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | — | `user` | Final home visit to close out the training period, collect devices *(exp only)*, and administer feedback questionnaire. |
-| `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |
-| `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | — | `user` | Six-month follow-up clinical outcome assessment. |
-| `watch_record` | Watch Record | chained | — | — | — | — | `user` | Track actigraph watch assignments and swaps throughout the study. First entry seeded at activation; each completion seeds the next. Can also be triggered by activation, a patient call, or a follow-up call — the existing open chain entry is claimed (stamped with `triggered_by` and `scheduled_date` set to now) rather than a new entry being created. |
-| `adverse_event` | Adverse Event | anytime | — | — | — | — | `user` | Document any adverse event experienced by the patient during the intervention. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
-| `patient_call` | Patient Call | anytime | — | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue_call` (exp only), and/or `watch_record` entries. |
-| `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | — | `user` | Document withdrawal from the study before group assignment. |
-| `discontinuation` | Discontinuation | anytime | — | — | — | — | `user` | Document withdrawal from the study after group assignment. |
+| ID | Name | Type | Reference | Window | `depends_on` | `date source` | Purpose |
+|----|------|------|-----------|--------|--------------|--------------|---------|
+| `adl_prescription_d01` | ADL Exercise Prescription | point_in_time | activation | day 1 | `activation` | `= activation` | Prescribe an individualised ADL exercise programme for the patient at the start of the intervention. |
+| `home_visit_d02` | Home Visit Day 02 | point_in_time | activation | day 2 | — | `= activation + 1d` | Second home visit — review training progress and address any early questions or difficulties. |
+| `home_visit_d03` | Home Visit Day 03 | point_in_time | activation | day 3 | — | `= activation + 2d` | Third home visit — confirm the patient is comfortable with the protocol and record exercise timings. |
+| `adl_agwatch_timing_d03` | Add ADL AG Watch Timings Day 03 | point_in_time | activation | day 3 | `home_visit_d03` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 3. |
+| `followup_call_d07` | Follow-up Phone Call Day 07 | point_in_time | activation | day 7 | — | `user` | First phone check-in at end of week one — assess adherence, identify issues, and screen for adverse events. |
+| `home_visit_d15` | Home Visit Day 15 | point_in_time | activation | day 15 | — | `user` | Mid-point home visit to review adherence, check devices *(exp only)*, and revise exercise programmes if needed. |
+| `adl_prescription_d15` | ADL Exercise Prescription Revision | point_in_time | activation | day 15 | `home_visit_d15` | `= home_visit_d15` | Review and revise the ADL exercise programme at the mid-point of the intervention. |
+| `adl_agwatch_timing_d15` | Add ADL AG Watch Timings Day 15 | point_in_time | activation | day 15 | `home_visit_d15`, `adl_prescription_d15` | `user` | Record actigraph watch active/inactive timing windows for ADL exercise sessions at day 15. |
+| `followup_call_d21` | Follow-up Phone Call Day 21 | point_in_time | activation | day 21 | — | `user` | Second phone check-in at end of week three — assess adherence, identify issues, and screen for adverse events. |
+| `training_completion_d29` | Training Completion Day 29 | point_in_time | activation | day 29 | — | `user` | Final home visit to close out the training period. On save: robot devices (exp only) and all watches are automatically returned — open assignment records are closed (`returned_date = completion_date`), device logs are appended, and `agWatchRightID`/`agWatchLeftID` are cleared to `null` on the patient JSON. |
+| `a1_assessment` | A1 Assessment | windowed | activation | day 30–37 | — | `user` | Post-training clinical outcome assessment conducted within one week of training completion. |
+| `a2_assessment` | A2 Assessment | windowed | activation | day 180–187 | — | `user` | Six-month follow-up clinical outcome assessment. |
+| `watch_record` | Watch Record | chained | — | — | — | `user` | Track actigraph watch assignments and swaps throughout the study. First entry seeded at activation; each completion seeds the next. Can also be triggered by activation, a patient call, or a follow-up call — the existing open chain entry is claimed (stamped with `triggered_by` and `scheduled_date` set to now) rather than a new entry being created. |
+| `adverse_event` | Adverse Event | anytime | — | — | `activation` | `user` | Document any adverse event experienced by the patient during the intervention. Always triggered by a home visit or call event — never standalone. Two-phase: stub created in `incomplete` at trigger time; completed via standalone modal. May trigger a training pause. |
+| `patient_call` | Patient Call | anytime | — | — | — | `user` | Document any unscheduled contact with the patient or carer. May spawn `adverse_event`, `robot_issue_call` (exp only), and/or `watch_record` entries. |
+| `pre_discontinuation` | Pre-Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study before group assignment. |
+| `discontinuation` | Discontinuation | anytime | — | — | — | `user` | Document withdrawal from the study after group assignment. |
